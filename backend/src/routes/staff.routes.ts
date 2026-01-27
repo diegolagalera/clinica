@@ -1,0 +1,29 @@
+import { Router } from 'express';
+import * as staffController from '../controllers/staff.controller.js';
+import { authenticate, requireAdmin, requireStaff, tenantContext } from '../middleware/index.js';
+
+const router = Router();
+
+// All routes require authentication
+router.use(authenticate);
+
+// Get clinics accessible to current user
+router.get('/my-clinics', staffController.getMyClinics);
+
+// Update own profile
+router.put('/profile', requireStaff, staffController.updateMyProfile);
+
+// Routes requiring tenant context
+router.use(tenantContext);
+
+// Get staff (by clinic or organization) - any staff member can view
+router.get('/', requireStaff, staffController.getStaff);
+
+// Assign/remove workers (Admin only)
+router.post('/assign', requireAdmin, staffController.assignWorker);
+router.delete('/assign/:userId/:clinicId', requireAdmin, staffController.removeWorker);
+
+// Update staff profile (Admin only)
+router.put('/profile/:userId', requireAdmin, staffController.updateStaffProfile);
+
+export default router;

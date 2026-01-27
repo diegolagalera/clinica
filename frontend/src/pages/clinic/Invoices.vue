@@ -1,0 +1,1 @@
+<template><div class="space-y-6"><h1 class="text-2xl font-display font-bold text-surface-900">Invoices</h1><p class="text-surface-500">Esta página está en desarrollo.</p><div class="card p-8 text-center"><p class="text-surface-400">Contenido próximamente...</p></div></div></template>

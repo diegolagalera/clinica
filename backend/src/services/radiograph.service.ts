@@ -1,0 +1,343 @@
+import { eq, and, desc, sql } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { radiographs, radiographAiResults, users } from '../db/schema.js';
+import { NotFoundError, BadRequestError, ForbiddenError } from '../utils/errors.js';
+import { analyzeRadiograph, type RadiographAnalysisResult } from './openai.service.js';
+import { logger } from '../utils/logger.js';
+import type { TenantContext } from '../types/index.js';
+import fs from 'fs/promises';
+import path from 'path';
+import crypto from 'crypto';
+
+// Types
+export type RadiographType = typeof radiographs.$inferSelect;
+export type RadiographAiResultType = typeof radiographAiResults.$inferSelect;
+
+export interface CreateRadiographInput {
+    clinicId: string;
+    patientId: string;
+    uploadedById: string;
+    file: {
+        buffer: Buffer;
+        originalname: string;
+        mimetype: string;
+        size: number;
+    };
+    radiographType?: string;
+    notes?: string;
+}
+
+export interface UpdateRadiographNotesInput {
+    notes?: string;
+    annotations?: unknown;
+}
+
+// Upload directory configuration
+const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'radiographs');
+
+// Ensure upload directory exists
+const ensureUploadDir = async () => {
+    await fs.mkdir(UPLOAD_DIR, { recursive: true });
+};
+
+/**
+ * Upload and create a new radiograph
+ */
+export const createRadiograph = async (
+    input: CreateRadiographInput,
+    tenantContext: TenantContext
+): Promise<{ radiograph: RadiographType; aiResult: RadiographAiResultType }> => {
+    // Validate file type
+    const allowedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg'];
+    if (!allowedMimeTypes.includes(input.file.mimetype)) {
+        throw new BadRequestError('Solo se permiten archivos PNG o JPG');
+    }
+
+    // Validate tenant access
+    if (!tenantContext.clinicIds.includes(input.clinicId)) {
+        throw new ForbiddenError('No tiene acceso a esta clínica');
+    }
+
+    await ensureUploadDir();
+
+    // Generate unique filename
+    const fileExtension = path.extname(input.file.originalname).toLowerCase();
+    const uniqueId = crypto.randomUUID();
+    const filename = `${uniqueId}${fileExtension}`;
+    const storageKey = path.join(UPLOAD_DIR, filename);
+
+    // Save file to disk
+    await fs.writeFile(storageKey, input.file.buffer);
+
+    // Create radiograph record
+    const [radiograph] = await db
+        .insert(radiographs)
+        .values({
+            clinicId: input.clinicId,
+            patientId: input.patientId,
+            uploadedById: input.uploadedById,
+            filename,
+            originalFilename: input.file.originalname,
+            mimeType: input.file.mimetype,
+            fileSize: input.file.size,
+            storageKey,
+            radiographType: input.radiographType || 'general',
+            notes: input.notes || null,
+        })
+        .returning();
+
+    // Create AI result record with PENDING status
+    const [aiResult] = await db
+        .insert(radiographAiResults)
+        .values({
+            radiographId: radiograph!.id,
+            status: 'PENDING',
+        })
+        .returning();
+
+    // Start async AI analysis
+    processAiAnalysis(radiograph!.id, input.file.buffer, input.file.mimetype).catch((err) => {
+        logger.error('Background AI analysis failed:', err);
+    });
+
+    return { radiograph: radiograph!, aiResult: aiResult! };
+};
+
+/**
+ * Process AI analysis asynchronously
+ */
+const processAiAnalysis = async (
+    radiographId: string,
+    fileBuffer: Buffer,
+    mimeType: string
+): Promise<void> => {
+    const startTime = Date.now();
+
+    try {
+        // Update status to PROCESSING
+        await db
+            .update(radiographAiResults)
+            .set({ status: 'PROCESSING', updatedAt: new Date() })
+            .where(eq(radiographAiResults.radiographId, radiographId));
+
+        // Convert to base64
+        const base64Image = fileBuffer.toString('base64');
+
+        // Call OpenAI
+        const result = await analyzeRadiograph(base64Image, mimeType);
+
+        const processingTime = Date.now() - startTime;
+
+        // Update with results
+        await db
+            .update(radiographAiResults)
+            .set({
+                status: 'COMPLETED',
+                summary: result.summary,
+                suspiciousAreas: result.suspiciousAreas,
+                confidence: String(result.confidence),
+                rawResponse: result.rawResponse,
+                modelVersion: 'gpt-4o',
+                processingTimeMs: processingTime,
+                updatedAt: new Date(),
+            })
+            .where(eq(radiographAiResults.radiographId, radiographId));
+
+        logger.info(`AI analysis completed for radiograph ${radiographId} in ${processingTime}ms`);
+    } catch (error: any) {
+        const processingTime = Date.now() - startTime;
+
+        // Update with error
+        await db
+            .update(radiographAiResults)
+            .set({
+                status: 'FAILED',
+                errorMessage: error.message || 'Error desconocido durante el análisis',
+                processingTimeMs: processingTime,
+                updatedAt: new Date(),
+            })
+            .where(eq(radiographAiResults.radiographId, radiographId));
+
+        logger.error(`AI analysis failed for radiograph ${radiographId}:`, error);
+    }
+};
+
+/**
+ * Get radiographs for a patient
+ */
+export const getRadiographsByPatient = async (
+    patientId: string,
+    tenantContext: TenantContext
+): Promise<(RadiographType & { aiResult: RadiographAiResultType | null; uploadedBy: { firstName: string; lastName: string } | null })[]> => {
+    const results = await db.query.radiographs.findMany({
+        where: eq(radiographs.patientId, patientId),
+        orderBy: [desc(radiographs.createdAt)],
+        with: {
+            uploadedBy: {
+                columns: {
+                    firstName: true,
+                    lastName: true,
+                },
+            },
+        },
+    });
+
+    // Validate tenant access for the first result (all belong to same clinic)
+    if (results.length > 0 && !tenantContext.clinicIds.includes(results[0]!.clinicId)) {
+        throw new ForbiddenError('No tiene acceso a este paciente');
+    }
+
+    // Fetch AI results for all radiographs
+    const radiographIds = results.map(r => r.id);
+    const aiResults = radiographIds.length > 0
+        ? await db.query.radiographAiResults.findMany({
+            where: sql`${radiographAiResults.radiographId} IN (${sql.join(radiographIds.map(id => sql`${id}`), sql`, `)})`,
+        })
+        : [];
+
+    // Map AI results to radiographs
+    const aiResultMap = new Map(aiResults.map(r => [r.radiographId, r]));
+
+    return results.map(r => ({
+        ...r,
+        aiResult: aiResultMap.get(r.id) || null,
+    }));
+};
+
+/**
+ * Get radiograph by ID with AI result
+ */
+export const getRadiographById = async (
+    id: string,
+    tenantContext: TenantContext
+): Promise<RadiographType & { aiResult: RadiographAiResultType | null } | null> => {
+    const radiograph = await db.query.radiographs.findFirst({
+        where: eq(radiographs.id, id),
+    });
+
+    if (!radiograph) {
+        return null;
+    }
+
+    // Validate tenant access
+    if (!tenantContext.clinicIds.includes(radiograph.clinicId)) {
+        throw new ForbiddenError('No tiene acceso a esta radiografía');
+    }
+
+    const aiResult = await db.query.radiographAiResults.findFirst({
+        where: eq(radiographAiResults.radiographId, id),
+    });
+
+    return { ...radiograph, aiResult: aiResult || null };
+};
+
+/**
+ * Retry AI analysis for a failed radiograph
+ */
+export const retryAiAnalysis = async (
+    radiographId: string,
+    tenantContext: TenantContext
+): Promise<RadiographAiResultType> => {
+    const radiograph = await getRadiographById(radiographId, tenantContext);
+    if (!radiograph) {
+        throw new NotFoundError('Radiografía no encontrada');
+    }
+
+    const currentResult = radiograph.aiResult;
+    if (!currentResult) {
+        throw new BadRequestError('No existe un resultado de análisis previo');
+    }
+
+    if (currentResult.status === 'PROCESSING') {
+        throw new BadRequestError('El análisis ya está en proceso');
+    }
+
+    // Reset to PENDING
+    const [updatedResult] = await db
+        .update(radiographAiResults)
+        .set({
+            status: 'PENDING',
+            errorMessage: null,
+            updatedAt: new Date(),
+        })
+        .where(eq(radiographAiResults.radiographId, radiographId))
+        .returning();
+
+    // Read file and start analysis
+    const fileBuffer = await fs.readFile(radiograph.storageKey);
+    processAiAnalysis(radiographId, fileBuffer, radiograph.mimeType).catch((err) => {
+        logger.error('Retry AI analysis failed:', err);
+    });
+
+    return updatedResult!;
+};
+
+/**
+ * Update worker notes for a radiograph
+ */
+export const updateRadiographNotes = async (
+    id: string,
+    input: UpdateRadiographNotesInput,
+    tenantContext: TenantContext
+): Promise<RadiographType> => {
+    const existing = await getRadiographById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Radiografía no encontrada');
+    }
+
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
+    if (input.notes !== undefined) updateData['notes'] = input.notes;
+    if (input.annotations !== undefined) updateData['annotations'] = input.annotations;
+
+    const [updated] = await db
+        .update(radiographs)
+        .set(updateData)
+        .where(eq(radiographs.id, id))
+        .returning();
+
+    return updated!;
+};
+
+/**
+ * Delete a radiograph
+ */
+export const deleteRadiograph = async (
+    id: string,
+    tenantContext: TenantContext
+): Promise<boolean> => {
+    const existing = await getRadiographById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Radiografía no encontrada');
+    }
+
+    // Delete file from disk
+    try {
+        await fs.unlink(existing.storageKey);
+    } catch (err) {
+        logger.warn(`Failed to delete file ${existing.storageKey}:`, err);
+    }
+
+    // Delete from database (cascade will delete AI result)
+    await db.delete(radiographs).where(eq(radiographs.id, id));
+
+    return true;
+};
+
+/**
+ * Get file path for serving radiograph image
+ */
+export const getRadiographFilePath = async (
+    id: string,
+    tenantContext: TenantContext
+): Promise<{ path: string; mimeType: string; filename: string }> => {
+    const radiograph = await getRadiographById(id, tenantContext);
+    if (!radiograph) {
+        throw new NotFoundError('Radiografía no encontrada');
+    }
+
+    return {
+        path: radiograph.storageKey,
+        mimeType: radiograph.mimeType,
+        filename: radiograph.originalFilename,
+    };
+};

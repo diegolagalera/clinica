@@ -173,3 +173,134 @@ export const checkOpenAIHealth = async (): Promise<boolean> => {
         return false;
     }
 };
+
+// List of allowed categories for stock item image generation
+const ALLOWED_ITEM_CATEGORIES = [
+    'dental', 'médico', 'medico', 'quirúrgico', 'quirurgico', 'clínico', 'clinico',
+    'higiene', 'farmacéutico', 'farmaceutico', 'sanitario', 'ortodoncía', 'ortodoncia',
+    'endodoncia', 'periodoncia', 'implante', 'prótesis', 'protesis', 'radiología', 'radiologia',
+    'anestesia', 'esterilización', 'esterilizacion', 'desinfección', 'desinfeccion',
+    'instrumental', 'guantes', 'mascarilla', 'bata', 'gorro', 'jeringa', 'aguja',
+    'algodón', 'algodon', 'gasa', 'sutura', 'cemento', 'composite', 'amalgama',
+    'resina', 'fresa', 'turbina', 'pieza de mano', 'lámpara', 'lampara', 'espejo',
+    'explorador', 'sonda', 'cureta', 'fórceps', 'forceps', 'elevador', 'portaimpresiones',
+    'material de impresión', 'material de impresion', 'silicona', 'alginato',
+    'brackets', 'arco', 'ligadura', 'banda', 'separador', 'retenedor',
+    'flúor', 'fluor', 'sellador', 'barniz', 'pasta profiláctica', 'pasta profilactica',
+    'dique de goma', 'clamp', 'portaclamp', 'lima', 'obturador', 'gutapercha',
+    'blanqueamiento', 'peróxido', 'peroxido', 'lámpara de fotocurado', 'lampara de fotocurado',
+    'autoclave', 'ultrasonido', 'cavitron', 'aeropulidor',
+    'medicina', 'hospital', 'clínica', 'clinica', 'consultorio', 'laboratorio',
+    'pinza', 'pinzas', 'tijera', 'tijeras', 'bisturí', 'bisturi', 'escalpelo',
+    'vendaje', 'apósito', 'aposito', 'esparadrapo', 'cinta', 'alcohol', 'yodo',
+    'termómetro', 'termometro', 'tensiómetro', 'tensiometro', 'estetoscopio',
+    'oxímetro', 'oximetro', 'desfibrilador', 'monitor', 'camilla', 'silla',
+    'equipo', 'máquina', 'maquina', 'aparato', 'dispositivo', 'instrumento',
+];
+
+/**
+ * Validate if an item name is related to dental/medical supplies
+ */
+const isValidMedicalItem = (itemName: string): boolean => {
+    const normalizedName = itemName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    return ALLOWED_ITEM_CATEGORIES.some(category => {
+        const normalizedCategory = category.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        return normalizedName.includes(normalizedCategory) || normalizedCategory.includes(normalizedName);
+    });
+};
+
+export interface GeneratedImageResult {
+    imageUrl: string;
+    revisedPrompt: string;
+}
+
+/**
+ * Generate a stock item image using DALL-E
+ */
+export const generateStockItemImage = async (
+    itemName: string,
+    itemDescription?: string
+): Promise<GeneratedImageResult> => {
+    const startTime = Date.now();
+
+    try {
+        // Validate the item is medical/dental related
+        const isValid = isValidMedicalItem(itemName) ||
+            (itemDescription && isValidMedicalItem(itemDescription));
+
+        if (!isValid) {
+            // Use GPT to validate if it could be a medical item
+            const validationResponse = await openai.chat.completions.create({
+                model: 'gpt-4o-mini',
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'Eres un validador. Responde solo "SI" o "NO". ¿Es el siguiente item un producto/material/instrumento relacionado con clínicas dentales, medicina, sanidad, higiene médica, o equipamiento de consultorios médicos/dentales?'
+                    },
+                    {
+                        role: 'user',
+                        content: `Item: "${itemName}"${itemDescription ? ` - Descripción: "${itemDescription}"` : ''}`
+                    }
+                ],
+                max_tokens: 10,
+                temperature: 0,
+            });
+
+            const validation = validationResponse.choices[0]?.message?.content?.trim().toUpperCase();
+            if (validation !== 'SI' && validation !== 'SÍ') {
+                throw new Error('Solo se pueden generar imágenes de productos médicos, dentales o sanitarios.');
+            }
+        }
+
+        logger.info('Starting stock item image generation', { itemName });
+
+        // Build a detailed prompt for DALL-E
+        const prompt = `Fotografía profesional de producto para catálogo médico: ${itemName}${itemDescription ? `. ${itemDescription}` : ''}. 
+Estilo: Fotografía de producto sobre fondo blanco limpio, iluminación profesional de estudio, alta calidad, vista frontal clara del producto, sin texto ni logos, enfocado y nítido.
+El producto debe verse realista y profesional, como para un catálogo de suministros médicos/dentales.`;
+
+        const response = await openai.images.generate({
+            model: 'dall-e-3',
+            prompt: prompt,
+            n: 1,
+            size: '1024x1024',
+            quality: 'standard',
+            style: 'natural',
+        });
+
+        const imageUrl = response.data[0]?.url;
+        const revisedPrompt = response.data[0]?.revised_prompt || prompt;
+
+        if (!imageUrl) {
+            throw new Error('No se pudo generar la imagen');
+        }
+
+        const processingTime = Date.now() - startTime;
+        logger.info(`Stock item image generated in ${processingTime}ms`);
+
+        return {
+            imageUrl,
+            revisedPrompt,
+        };
+    } catch (error: any) {
+        const processingTime = Date.now() - startTime;
+        logger.error('DALL-E image generation failed:', {
+            error: error.message,
+            itemName,
+            processingTime,
+        });
+
+        if (error.code === 'content_policy_violation') {
+            throw new Error('El contenido de la solicitud no cumple las políticas. Intente con un nombre de producto diferente.');
+        } else if (error.code === 'insufficient_quota') {
+            throw new Error('Cuota de API de OpenAI agotada. Por favor contacte al administrador.');
+        } else if (error.code === 'invalid_api_key') {
+            throw new Error('API Key de OpenAI inválida. Por favor verifique la configuración.');
+        } else if (error.status === 429) {
+            throw new Error('Demasiadas peticiones a OpenAI. Por favor intente de nuevo en unos minutos.');
+        }
+
+        throw new Error(error.message || 'Error al generar la imagen');
+    }
+};

@@ -11,6 +11,12 @@ router.use(tenantContext);
 // List clinics (filtered by role)
 router.get('/', clinicController.listClinics);
 
+// Get current clinic settings (from tenant context)
+router.get('/current', clinicController.getCurrentClinic);
+
+// Update current clinic settings
+router.put('/current', clinicController.updateCurrentClinic);
+
 // Get clinic by ID
 router.get('/:id', clinicController.getClinic);
 

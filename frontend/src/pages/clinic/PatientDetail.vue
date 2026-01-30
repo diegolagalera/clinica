@@ -22,6 +22,8 @@ import {
   MicrophoneIcon,
   StopIcon,
   StarIcon,
+  CubeIcon,
+  MagnifyingGlassIcon,
 } from '@heroicons/vue/24/outline'
 
 interface ClinicalRecord {
@@ -129,6 +131,45 @@ const sendingRatingFor = ref<string | null>(null)
 // Workers list
 const workers = ref<User[]>([])
 const showWorkerDropdown = ref(false)
+
+// Stock management for appointments
+interface StockItem {
+  id: string
+  name: string
+  sku: string | null
+  unit: string
+  currentStock: number
+  category: string | null
+  imageUrl: string | null
+}
+
+interface StockPack {
+  id: string
+  name: string
+  category: string | null
+  itemCount: number
+}
+
+interface AppointmentStockUsage {
+  id: string
+  itemId: string
+  quantity: number
+  item: {
+    id: string
+    name: string
+    unit: string
+    imageUrl: string | null
+  }
+}
+
+const stockItems = ref<StockItem[]>([])
+const stockPacks = ref<StockPack[]>([])
+const appointmentStock = ref<AppointmentStockUsage[]>([])
+const stockItemSearch = ref('')
+const showStockItemDropdown = ref(false)
+const isLoadingStock = ref(false)
+const stockQuantity = ref(1)
+const stockImageLightbox = ref<string | null>(null)
 
 // Edit patient modal
 const showEditPatientModal = ref(false)
@@ -518,6 +559,9 @@ const openEditAppointmentModal = (apt: Appointment) => {
     workerIds: workerIds,
   }
   showAppointmentModal.value = true
+  
+  // Load stock usage if editing existing appointment
+  loadAppointmentStock(apt.id)
 }
 
 const saveAppointment = async () => {
@@ -587,6 +631,97 @@ const sendRatingRequest = async (appointmentId: string) => {
     alert(err.message || 'Error al enviar el email de valoración')
   } finally {
     sendingRatingFor.value = null
+  }
+}
+
+// Stock management functions
+const filteredStockItems = computed(() => {
+  if (!stockItemSearch.value) return stockItems.value.slice(0, 8)
+  const search = stockItemSearch.value.toLowerCase()
+  return stockItems.value
+    .filter(item => 
+      item.name.toLowerCase().includes(search) || 
+      item.sku?.toLowerCase().includes(search)
+    )
+    .slice(0, 8)
+})
+
+const loadStockItems = async () => {
+  try {
+    const response = await api.get<ApiResponse<{ data: StockItem[], total: number }>>('/stock/items?limit=500&active=true')
+    if (response.success && response.data?.data) {
+      stockItems.value = response.data.data
+    }
+  } catch (err) {
+    console.warn('Could not load stock items', err)
+  }
+}
+
+const loadStockPacks = async () => {
+  try {
+    const response = await api.get<ApiResponse<{ data: StockPack[], total: number }>>('/stock/packs?limit=100')
+    if (response.success && response.data?.data) {
+      stockPacks.value = response.data.data
+    }
+  } catch (err) {
+    console.warn('Could not load stock packs', err)
+  }
+}
+
+const loadAppointmentStock = async (appointmentId: string) => {
+  isLoadingStock.value = true
+  try {
+    const response = await api.get<ApiResponse<{ items: AppointmentStockUsage[], totalItems: number, totalCost: string }>>(`/appointments/${appointmentId}/stock`)
+    if (response.success && response.data?.items) {
+      appointmentStock.value = response.data.items
+    } else {
+      appointmentStock.value = []
+    }
+  } catch (err) {
+    console.warn('Could not load appointment stock', err)
+    appointmentStock.value = []
+  } finally {
+    isLoadingStock.value = false
+  }
+}
+
+const addStockToAppointment = async (itemId: string, quantity: number) => {
+  if (!selectedAppointment.value) return
+  try {
+    await api.post(`/appointments/${selectedAppointment.value.id}/stock`, {
+      itemId,
+      quantity,
+    })
+    stockItemSearch.value = ''
+    stockQuantity.value = 1
+    showStockItemDropdown.value = false
+    await loadAppointmentStock(selectedAppointment.value.id)
+    // Refresh stock items to show updated quantities
+    await loadStockItems()
+  } catch (err: any) {
+    alert(err.response?.data?.message || 'Error al añadir stock')
+  }
+}
+
+const applyPackToAppointment = async (packId: string) => {
+  if (!selectedAppointment.value) return
+  try {
+    await api.post(`/appointments/${selectedAppointment.value.id}/stock/pack/${packId}`)
+    await loadAppointmentStock(selectedAppointment.value.id)
+    await loadStockItems()
+  } catch (err: any) {
+    alert(err.response?.data?.message || 'Error al aplicar pack')
+  }
+}
+
+const removeStockFromAppointment = async (usageId: string) => {
+  if (!selectedAppointment.value) return
+  try {
+    await api.delete(`/appointments/${selectedAppointment.value.id}/stock/${usageId}`)
+    await loadAppointmentStock(selectedAppointment.value.id)
+    await loadStockItems()
+  } catch (err: any) {
+    alert(err.response?.data?.message || 'Error al quitar stock')
   }
 }
 
@@ -945,6 +1080,8 @@ watch(activeTab, (tab, oldTab) => {
 onMounted(() => {
   loadPatient()
   loadWorkers()
+  loadStockItems()
+  loadStockPacks()
 })
 
 // Cleanup polling on unmount
@@ -1653,7 +1790,7 @@ onUnmounted(() => {
     <Teleport to="body">
       <div v-if="showAppointmentModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-surface-900/50" @click="showAppointmentModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md animate-scale-in">
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-scale-in">
           <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
             <h2 class="text-lg font-semibold text-surface-900">{{ isEditingAppointment ? 'Editar Cita' : 'Nueva Cita' }}</h2>
             <button @click="showAppointmentModal = false" class="text-surface-400 hover:text-surface-600">
@@ -1752,6 +1889,127 @@ onUnmounted(() => {
             <div>
               <label class="label">Notas</label>
               <textarea v-model="appointmentForm.notes" rows="2" class="input" placeholder="Notas adicionales..."></textarea>
+            </div>
+            
+            <!-- Stock Usage Section (only when editing) -->
+            <div v-if="isEditingAppointment" class="border-t border-surface-200 pt-4">
+              <div class="flex items-center justify-between mb-3">
+                <label class="label flex items-center gap-2 mb-0">
+                  <CubeIcon class="w-4 h-4" />
+                  Stock Utilizado
+                </label>
+              </div>
+
+              <!-- Quick Pack Selector -->
+              <div v-if="stockPacks.length > 0" class="mb-3">
+                <select 
+                  class="input text-sm" 
+                  @change="(e: Event) => { const target = e.target as HTMLSelectElement; if (target.value) { applyPackToAppointment(target.value); target.value = ''; } }"
+                >
+                  <option value="">+ Aplicar pack rápido...</option>
+                  <option v-for="pack in stockPacks" :key="pack.id" :value="pack.id">
+                    {{ pack.name }} ({{ pack.itemCount || 0 }} items)
+                  </option>
+                </select>
+              </div>
+
+              <!-- Add Item Search -->
+              <div class="relative mb-3">
+                <div class="flex gap-2">
+                  <div class="relative flex-1">
+                    <MagnifyingGlassIcon class="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" />
+                    <input 
+                      v-model="stockItemSearch"
+                      type="text"
+                      placeholder="Buscar item..."
+                      class="input pl-8 text-sm w-full"
+                      @focus="showStockItemDropdown = true"
+                    />
+                  </div>
+                  <input 
+                    v-model.number="stockQuantity" 
+                    type="number" 
+                    min="1" 
+                    class="input w-16 text-sm text-center"
+                    placeholder="Qty"
+                  />
+                </div>
+                
+                <!-- Backdrop -->
+                <div 
+                  v-if="showStockItemDropdown" 
+                  class="fixed inset-0 z-40" 
+                  @click="showStockItemDropdown = false"
+                ></div>
+                
+                <!-- Dropdown -->
+                <div 
+                  v-if="showStockItemDropdown && filteredStockItems.length > 0" 
+                  class="absolute z-50 mt-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-48 overflow-auto"
+                  @click.stop
+                >
+                  <button
+                    v-for="item in filteredStockItems"
+                    :key="item.id"
+                    type="button"
+                    class="w-full px-3 py-2 text-left text-sm hover:bg-surface-50 flex items-center gap-3"
+                    @click="addStockToAppointment(item.id, stockQuantity)"
+                  >
+                    <div class="w-8 h-8 rounded bg-surface-100 overflow-hidden flex-shrink-0">
+                      <img 
+                        v-if="item.imageUrl" 
+                        :src="`/api/v1/stock/items/${item.id}/image`" 
+                        class="w-full h-full object-cover"
+                      />
+                      <div v-else class="w-full h-full flex items-center justify-center text-surface-400">
+                        <CubeIcon class="w-4 h-4" />
+                      </div>
+                    </div>
+                    <span class="flex-1 truncate">{{ item.name }}</span>
+                    <span class="text-xs text-surface-400 flex-shrink-0">{{ item.currentStock }} {{ item.unit }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Used Items List -->
+              <div v-if="isLoadingStock" class="text-center py-2">
+                <div class="animate-spin w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full mx-auto"></div>
+              </div>
+              <div v-else-if="appointmentStock.length > 0" class="space-y-1 max-h-32 overflow-y-auto">
+                <div 
+                  v-for="usage in appointmentStock" 
+                  :key="usage.id"
+                  class="flex items-center gap-2 py-1.5 px-2 bg-surface-50 rounded text-sm"
+                >
+                  <div 
+                    class="w-8 h-8 rounded bg-surface-200 overflow-hidden flex-shrink-0"
+                    :class="{ 'cursor-pointer hover:ring-2 hover:ring-primary-300': usage.item.imageUrl }"
+                    @click="usage.item.imageUrl ? stockImageLightbox = `/api/v1/stock/items/${usage.item.id}/image` : null"
+                  >
+                    <img 
+                      v-if="usage.item.imageUrl" 
+                      :src="`/api/v1/stock/items/${usage.item.id}/image`" 
+                      class="w-full h-full object-cover"
+                    />
+                    <div v-else class="w-full h-full flex items-center justify-center text-surface-400">
+                      <CubeIcon class="w-4 h-4" />
+                    </div>
+                  </div>
+                  <span class="flex-1 truncate">{{ usage.item.name }}</span>
+                  <span class="text-surface-500 mr-2 flex-shrink-0">{{ usage.quantity }} {{ usage.item.unit }}</span>
+                  <button 
+                    type="button"
+                    @click="removeStockFromAppointment(usage.id)"
+                    class="text-red-500 hover:bg-red-50 p-1 rounded flex-shrink-0"
+                    title="Quitar"
+                  >
+                    <XMarkIcon class="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <p v-else class="text-xs text-surface-400 text-center py-2">
+                No hay stock registrado para esta cita
+              </p>
             </div>
             
             <div class="flex gap-3 pt-4">
@@ -1860,6 +2118,25 @@ onUnmounted(() => {
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- Stock Image Lightbox -->
+    <Teleport to="body">
+      <div 
+        v-if="stockImageLightbox" 
+        class="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-4"
+        @click="stockImageLightbox = null"
+      >
+        <div class="relative max-w-2xl max-h-[80vh]">
+          <img :src="stockImageLightbox" class="max-w-full max-h-[80vh] rounded-lg shadow-2xl" />
+          <button 
+            @click="stockImageLightbox = null" 
+            class="absolute -top-3 -right-3 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center hover:bg-surface-100"
+          >
+            <XMarkIcon class="w-5 h-5" />
+          </button>
         </div>
       </div>
     </Teleport>

@@ -30,6 +30,7 @@ const ClinicCalendar = () => import('@/pages/clinic/Calendar.vue')
 const ClinicRecords = () => import('@/pages/clinic/Records.vue')
 const ClinicRadiographs = () => import('@/pages/clinic/Radiographs.vue')
 const ClinicInventory = () => import('@/pages/clinic/Inventory.vue')
+const ClinicStockPacks = () => import('@/pages/clinic/StockPacks.vue')
 const ClinicInvoices = () => import('@/pages/clinic/Invoices.vue')
 const ClinicNotifications = () => import('@/pages/clinic/Notifications.vue')
 const ClinicTemplateEditor = () => import('@/pages/clinic/TemplateEditor.vue')
@@ -98,6 +99,7 @@ const routes: RouteRecordRaw[] = [
             { path: 'records', name: 'clinic-records', component: ClinicRecords },
             { path: 'radiographs', name: 'clinic-radiographs', component: ClinicRadiographs },
             { path: 'inventory', name: 'clinic-inventory', component: ClinicInventory },
+            { path: 'stock-packs', name: 'clinic-stock-packs', component: ClinicStockPacks },
             {
                 path: 'invoices',
                 name: 'clinic-invoices',

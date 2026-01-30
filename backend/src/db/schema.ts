@@ -490,6 +490,7 @@ export const inventoryItems = pgTable(
         supplierCode: varchar('supplier_code', { length: 100 }),
         expirationDate: timestamp('expiration_date'),
         location: varchar('location', { length: 100 }),
+        imageUrl: varchar('image_url', { length: 500 }), // URL de imagen del producto
         isActive: boolean('is_active').default(true).notNull(),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -531,6 +532,86 @@ export const stockMovements = pgTable(
         clinicIdIdx: index('stock_movements_clinic_id_idx').on(table.clinicId),
         itemIdIdx: index('stock_movements_item_id_idx').on(table.itemId),
         createdAtIdx: index('stock_movements_created_at_idx').on(table.createdAt),
+    })
+);
+
+// ============================================================================
+// STOCK PACKS (Predefined material packages)
+// ============================================================================
+
+export const stockPacks = pgTable(
+    'stock_packs',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        name: varchar('name', { length: 255 }).notNull(),
+        description: text('description'),
+        category: varchar('category', { length: 100 }),
+        isActive: boolean('is_active').default(true).notNull(),
+        createdById: uuid('created_by_id').references(() => users.id),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('stock_packs_clinic_id_idx').on(table.clinicId),
+        nameIdx: index('stock_packs_name_idx').on(table.name),
+    })
+);
+
+// ============================================================================
+// STOCK PACK ITEMS (Items within a pack)
+// ============================================================================
+
+export const stockPackItems = pgTable(
+    'stock_pack_items',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        packId: uuid('pack_id')
+            .notNull()
+            .references(() => stockPacks.id, { onDelete: 'cascade' }),
+        itemId: uuid('item_id')
+            .notNull()
+            .references(() => inventoryItems.id, { onDelete: 'cascade' }),
+        quantity: integer('quantity').notNull().default(1),
+    },
+    (table) => ({
+        packIdIdx: index('stock_pack_items_pack_id_idx').on(table.packId),
+        packItemIdx: uniqueIndex('stock_pack_items_pack_item_idx').on(table.packId, table.itemId),
+    })
+);
+
+// ============================================================================
+// APPOINTMENT STOCK USAGE (Stock consumed in appointments)
+// ============================================================================
+
+export const appointmentStockUsage = pgTable(
+    'appointment_stock_usage',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        appointmentId: uuid('appointment_id')
+            .notNull()
+            .references(() => appointments.id, { onDelete: 'cascade' }),
+        itemId: uuid('item_id')
+            .notNull()
+            .references(() => inventoryItems.id, { onDelete: 'restrict' }),
+        quantity: integer('quantity').notNull(),
+        unitCost: decimal('unit_cost', { precision: 10, scale: 2 }),
+        notes: text('notes'),
+        registeredById: uuid('registered_by_id')
+            .notNull()
+            .references(() => users.id),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('appointment_stock_usage_clinic_id_idx').on(table.clinicId),
+        appointmentIdIdx: index('appointment_stock_usage_appointment_id_idx').on(table.appointmentId),
+        itemIdIdx: index('appointment_stock_usage_item_id_idx').on(table.itemId),
+        createdAtIdx: index('appointment_stock_usage_created_at_idx').on(table.createdAt),
     })
 );
 
@@ -812,6 +893,7 @@ export const appointmentsRelations = relations(appointments, ({ one, many }) => 
     }),
     clinicalRecords: many(clinicalRecords),
     appointmentWorkers: many(appointmentWorkers),
+    stockUsage: many(appointmentStockUsage),
 }));
 
 export const appointmentWorkersRelations = relations(appointmentWorkers, ({ one }) => ({
@@ -888,6 +970,8 @@ export const inventoryItemsRelations = relations(inventoryItems, ({ one, many })
         references: [clinics.id],
     }),
     movements: many(stockMovements),
+    packItems: many(stockPackItems),
+    appointmentUsage: many(appointmentStockUsage),
 }));
 
 export const stockMovementsRelations = relations(stockMovements, ({ one }) => ({
@@ -901,6 +985,48 @@ export const stockMovementsRelations = relations(stockMovements, ({ one }) => ({
     }),
     performedBy: one(users, {
         fields: [stockMovements.performedById],
+        references: [users.id],
+    }),
+}));
+
+export const stockPacksRelations = relations(stockPacks, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [stockPacks.clinicId],
+        references: [clinics.id],
+    }),
+    createdBy: one(users, {
+        fields: [stockPacks.createdById],
+        references: [users.id],
+    }),
+    items: many(stockPackItems),
+}));
+
+export const stockPackItemsRelations = relations(stockPackItems, ({ one }) => ({
+    pack: one(stockPacks, {
+        fields: [stockPackItems.packId],
+        references: [stockPacks.id],
+    }),
+    item: one(inventoryItems, {
+        fields: [stockPackItems.itemId],
+        references: [inventoryItems.id],
+    }),
+}));
+
+export const appointmentStockUsageRelations = relations(appointmentStockUsage, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [appointmentStockUsage.clinicId],
+        references: [clinics.id],
+    }),
+    appointment: one(appointments, {
+        fields: [appointmentStockUsage.appointmentId],
+        references: [appointments.id],
+    }),
+    item: one(inventoryItems, {
+        fields: [appointmentStockUsage.itemId],
+        references: [inventoryItems.id],
+    }),
+    registeredBy: one(users, {
+        fields: [appointmentStockUsage.registeredById],
         references: [users.id],
     }),
 }));

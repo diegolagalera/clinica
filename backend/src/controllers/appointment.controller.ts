@@ -1,5 +1,8 @@
 import type { Response } from 'express';
 import { z } from 'zod';
+import { eq, and, count } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { clinics, appointmentStockUsage } from '../db/schema.js';
 import * as appointmentService from '../services/appointment.service.js';
 import * as notificationService from '../services/notification.service.js';
 import * as ratingService from '../services/rating.service.js';
@@ -175,6 +178,32 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
 
     // Get current appointment to check for status changes
     const currentAppointment = await appointmentService.getAppointmentById(id!, req.tenantContext);
+
+    // Validate stock requirement when marking as COMPLETED
+    if (input.status === 'COMPLETED' && currentAppointment?.status !== 'COMPLETED') {
+        // Check if clinic requires stock on completion
+        const [clinic] = await db
+            .select({ settings: clinics.settings })
+            .from(clinics)
+            .where(eq(clinics.id, req.tenantContext.clinicId!));
+
+        const settings = clinic?.settings as { requireStockOnCompletion?: boolean } | null;
+
+        if (settings?.requireStockOnCompletion) {
+            // Check if there's any stock usage for this appointment
+            const stockUsageCount = await db
+                .select({ count: count() })
+                .from(appointmentStockUsage)
+                .where(and(
+                    eq(appointmentStockUsage.appointmentId, id!),
+                    eq(appointmentStockUsage.clinicId, req.tenantContext.clinicId!)
+                ));
+
+            if (!stockUsageCount[0]?.count || stockUsageCount[0].count === 0) {
+                throw new BadRequestError('Debe registrar el stock utilizado antes de completar la cita');
+            }
+        }
+    }
 
     const result = await appointmentService.updateAppointment(id!, input, req.tenantContext);
 

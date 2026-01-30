@@ -12,6 +12,7 @@ import odontogramRoutes from './odontogram.routes.js';
 import notificationRoutes from './notification.routes.js';
 import smsRoutes from './sms.routes.js';
 import ratingRoutes from './rating.routes.js';
+import stockRoutes from './stock.routes.js';
 
 const router = Router();
 
@@ -43,6 +44,7 @@ router.use('/odontogram', odontogramRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/sms', smsRoutes);
 router.use('/ratings', ratingRoutes);
+router.use('/stock', stockRoutes);
 
 export default router;
 

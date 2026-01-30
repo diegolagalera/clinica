@@ -77,6 +77,41 @@ export const getClinic = asyncHandler(async (req: AuthenticatedRequest, res: Res
 });
 
 /**
+ * GET /clinics/current
+ * Get current clinic from tenant context
+ */
+export const getCurrentClinic = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.tenantContext.clinicId) {
+        throw new Error('No clinic context available');
+    }
+
+    const clinic = await clinicService.getClinicById(req.tenantContext.clinicId);
+
+    res.json(success(clinic));
+});
+
+/**
+ * PUT /clinics/current
+ * Update current clinic settings
+ */
+export const updateCurrentClinic = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.tenantContext.clinicId) {
+        throw new Error('No clinic context available');
+    }
+
+    // Allow updating settings directly
+    const input = updateClinicSchema.extend({
+        settings: z.record(z.unknown()).optional(),
+    }).parse(req.body);
+
+    const result = await clinicService.updateClinic(req.tenantContext.clinicId, input as Parameters<typeof clinicService.updateClinic>[1]);
+
+    if (result.success) {
+        res.json(success(result.data, 'Clinic settings updated successfully'));
+    }
+});
+
+/**
  * GET /clinics/:id/stats
  * Get clinic statistics
  */

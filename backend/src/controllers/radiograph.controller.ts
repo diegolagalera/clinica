@@ -39,6 +39,7 @@ export const uploadRadiograph = asyncHandler(async (req: AuthenticatedRequest, r
             },
             radiographType,
             notes,
+            skipAnalysis: true, // Don't auto-analyze - user triggers manually
         },
         req.tenantContext
     );

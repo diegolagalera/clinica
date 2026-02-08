@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { api } from '@/services/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,24 +12,37 @@ const isLoading = ref(false)
 const success = ref(false)
 const error = ref('')
 
-const token = route.params.token as string
+// Get token from query param
+const token = computed(() => route.query.token as string)
 
 const handleSubmit = async () => {
   error.value = ''
   
+  if (!token.value) {
+    error.value = 'Token inválido o expirado'
+    return
+  }
+  
   if (password.value !== confirmPassword.value) {
     error.value = 'Las contraseñas no coinciden'
+    return
+  }
+  
+  if (password.value.length < 8) {
+    error.value = 'La contraseña debe tener al menos 8 caracteres'
     return
   }
 
   isLoading.value = true
 
   try {
-    // API call would go here
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await api.post('/auth/reset-password', {
+      token: token.value,
+      password: password.value,
+    })
     success.value = true
   } catch (err: any) {
-    error.value = err.message || 'Error al restablecer la contraseña'
+    error.value = err.response?.data?.message || err.message || 'Error al restablecer la contraseña'
   } finally {
     isLoading.value = false
   }

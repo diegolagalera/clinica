@@ -1,0 +1,88 @@
+"use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const appointmentController = __importStar(require("../controllers/appointment.controller.js"));
+const appointmentStockController = __importStar(require("../controllers/appointment-stock.controller.js"));
+const index_js_1 = require("../middleware/index.js");
+const router = (0, express_1.Router)();
+// All routes require authentication, staff role, and tenant context
+router.use(index_js_1.authenticate);
+router.use(index_js_1.requireStaff);
+router.use(index_js_1.tenantContext);
+// List appointments (with date range filter)
+router.get('/', appointmentController.listAppointments);
+// Get today's appointments
+router.get('/today', appointmentController.getTodayAppointments);
+// Get active appointments for current user (must be before /:id)
+router.get('/active', appointmentController.getActiveAppointments);
+// Get patient's appointments
+router.get('/patient/:patientId', appointmentController.getPatientAppointments);
+// Get worker's schedule
+router.get('/worker/:workerId/schedule', appointmentController.getWorkerSchedule);
+// Get appointment by ID
+router.get('/:id', appointmentController.getAppointment);
+// Create appointment
+router.post('/', appointmentController.createAppointment);
+// Update appointment
+router.put('/:id', appointmentController.updateAppointment);
+// Cancel appointment
+router.delete('/:id', appointmentController.cancelAppointment);
+// ============================================================================
+// ACTIVE APPOINTMENT MANAGEMENT
+// ============================================================================
+// Start an appointment
+router.post('/:id/start', appointmentController.startAppointment);
+// Pause an appointment
+router.post('/:id/pause', appointmentController.pauseAppointment);
+// Resume an appointment
+router.post('/:id/resume', appointmentController.resumeAppointment);
+// Complete an appointment
+router.post('/:id/complete', appointmentController.completeAppointment);
+// ============================================================================
+// APPOINTMENT STOCK USAGE
+// ============================================================================
+// Get stock usage for an appointment
+router.get('/:appointmentId/stock', appointmentStockController.getAppointmentStock);
+// Add stock usage to an appointment
+router.post('/:appointmentId/stock', appointmentStockController.addStockUsage);
+// Add multiple stock items to an appointment
+router.post('/:appointmentId/stock/bulk', appointmentStockController.addBulkStockUsage);
+// Apply a stock pack to an appointment
+router.post('/:appointmentId/stock/pack/:packId', appointmentStockController.applyPackToAppointment);
+// Remove stock usage (and restore inventory)
+router.delete('/:appointmentId/stock/:usageId', appointmentStockController.removeStockUsage);
+exports.default = router;
+//# sourceMappingURL=appointment.routes.js.map

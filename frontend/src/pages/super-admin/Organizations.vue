@@ -294,8 +294,9 @@ onMounted(() => {
     <Teleport to="body">
       <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-surface-900/50" @click="showModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md animate-scale-in">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[85vh] flex flex-col animate-scale-in">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 flex-shrink-0">
             <h2 class="text-lg font-semibold text-surface-900">
               {{ modalMode === 'create' ? 'Nueva Organización' : 'Editar Organización' }}
             </h2>
@@ -304,38 +305,42 @@ onMounted(() => {
             </button>
           </div>
           
-          <form @submit.prevent="saveOrganization" class="p-6 space-y-4">
-            <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
-              {{ formError }}
+          <!-- Scrollable content -->
+          <form @submit.prevent="saveOrganization" class="flex flex-col flex-1 overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-6 space-y-4">
+              <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
+                {{ formError }}
+              </div>
+              
+              <div>
+                <label class="label">Nombre *</label>
+                <input v-model="formData.name" type="text" required class="input" placeholder="Clínicas Dentales Madrid" />
+              </div>
+              
+              <div>
+                <label class="label">Slug *</label>
+                <input v-model="formData.slug" type="text" required class="input" placeholder="clinicas-madrid" />
+                <p class="text-xs text-surface-400 mt-1">Identificador único (solo letras, números y guiones)</p>
+              </div>
+              
+              <div>
+                <label class="label">Email</label>
+                <input v-model="formData.email" type="email" class="input" placeholder="info@ejemplo.com" />
+              </div>
+              
+              <div>
+                <label class="label">Teléfono</label>
+                <input v-model="formData.phone" type="tel" class="input" placeholder="+34 912 345 678" />
+              </div>
+              
+              <div>
+                <label class="label">Dirección</label>
+                <input v-model="formData.address" type="text" class="input" placeholder="Calle Mayor 123, Madrid" />
+              </div>
             </div>
             
-            <div>
-              <label class="label">Nombre *</label>
-              <input v-model="formData.name" type="text" required class="input" placeholder="Clínicas Dentales Madrid" />
-            </div>
-            
-            <div>
-              <label class="label">Slug *</label>
-              <input v-model="formData.slug" type="text" required class="input" placeholder="clinicas-madrid" />
-              <p class="text-xs text-surface-400 mt-1">Identificador único (solo letras, números y guiones)</p>
-            </div>
-            
-            <div>
-              <label class="label">Email</label>
-              <input v-model="formData.email" type="email" class="input" placeholder="info@ejemplo.com" />
-            </div>
-            
-            <div>
-              <label class="label">Teléfono</label>
-              <input v-model="formData.phone" type="tel" class="input" placeholder="+34 912 345 678" />
-            </div>
-            
-            <div>
-              <label class="label">Dirección</label>
-              <input v-model="formData.address" type="text" class="input" placeholder="Calle Mayor 123, Madrid" />
-            </div>
-            
-            <div class="flex gap-3 pt-4">
+            <!-- Footer (sticky) -->
+            <div class="flex gap-3 px-6 py-4 border-t border-surface-100 flex-shrink-0 bg-white rounded-b-2xl">
               <button type="button" @click="showModal = false" class="btn-secondary flex-1">
                 Cancelar
               </button>

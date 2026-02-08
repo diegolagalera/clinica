@@ -1,929 +1,481 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { api } from '@/services/api'
-import {
-  ArrowLeftIcon,
-  PlusIcon,
-  TrashIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
-  PhotoIcon,
-  DocumentTextIcon,
-  LinkIcon,
-  MinusIcon,
-  EyeIcon,
-  CheckIcon,
-  PaperAirplaneIcon,
-  SparklesIcon,
-  ArrowUpTrayIcon,
-} from '@heroicons/vue/24/outline'
+import { ref, onMounted } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
+import { 
+    getMarketingTemplate,
+    createMarketingTemplate,
+    updateMarketingTemplate,
+    getTemplateVariables,
+} from '../../services/marketing';
+import { toast } from '../../composables/useToast';
 
-const route = useRoute()
-const router = useRouter()
+const router = useRouter();
+const route = useRoute();
 
-// Block types
-type BlockType = 'header' | 'logo' | 'text' | 'button' | 'divider' | 'spacer'
+const templateId = ref<string | null>(route.params.id as string || null);
+const isEditMode = ref(!!templateId.value);
+const loading = ref(true);
+const saving = ref(false);
 
-interface TemplateBlock {
-  id: string
-  type: BlockType
-  content: {
-    text?: string
-    html?: string
-    url?: string
-    buttonText?: string
-    buttonUrl?: string
-    buttonColor?: string
-    backgroundColor?: string
-    textColor?: string
-    alignment?: 'left' | 'center' | 'right'
-    height?: number
-  }
-}
+// Form data
+const name = ref('');
+const subject = ref('');
+const category = ref('custom');
+const previewText = ref('');
+const designJson = ref<any>({});
+const htmlContent = ref('');
 
-interface TemplateType {
-  value: string
-  label: string
-}
+// Unlayer editor ref
+const emailEditorRef = ref<HTMLDivElement | null>(null);
+let unlayerEditor: any = null;
 
-// State
-const templateId = computed(() => route.params.id as string | undefined)
-const isEditing = computed(() => !!templateId.value)
-const isLoading = ref(false)
-const isSaving = ref(false)
-const showPreview = ref(true)
-const showTestModal = ref(false)
-const testEmail = ref('')
-const isSendingTest = ref(false)
-const testMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
+// Available variables
+const variables = ref<Record<string, string>>({});
 
-// AI Generation state
-const showAIModal = ref(false)
-const aiPrompt = ref('')
-const isGeneratingAI = ref(false)
-const aiMessage = ref<{ type: 'success' | 'error'; text: string } | null>(null)
+const categories = [
+    { value: 'birthday', label: '🎂 Cumpleaños' },
+    { value: 'promo', label: '💰 Promociones' },
+    { value: 'seasonal', label: '🗓️ Estacionales' },
+    { value: 'educational', label: '📚 Educativas' },
+    { value: 'reactivation', label: '⏰ Reactivación' },
+    { value: 'onboarding', label: '🆕 Bienvenida' },
+    { value: 'newsletter', label: '📰 Newsletter' },
+    { value: 'custom', label: '✏️ Personalizada' },
+];
 
-// Form
-const templateForm = ref({
-  type: 'APPOINTMENT_CREATED',
-  name: '',
-  subject: '',
-})
+const loadUnlayer = () => {
+    return new Promise<void>((resolve) => {
+        if ((window as any).unlayer) {
+            resolve();
+            return;
+        }
+        
+        const script = document.createElement('script');
+        script.src = 'https://editor.unlayer.com/embed.js';
+        script.onload = () => resolve();
+        document.head.appendChild(script);
+    });
+};
 
-// Blocks
-const blocks = ref<TemplateBlock[]>([])
-const selectedBlockId = ref<string | null>(null)
+const initEditor = async () => {
+    await loadUnlayer();
+    
+    if (!emailEditorRef.value) return;
 
-// Template types
-const templateTypes = ref<TemplateType[]>([])
+    (window as any).unlayer.init({
+        id: 'email-editor',
+        projectId: 1234, // Optional: your Unlayer project ID
+        displayMode: 'email',
+        appearance: {
+            theme: 'modern_light',
+            panels: {
+                tools: {
+                    dock: 'left',
+                },
+            },
+        },
+        tools: {
+            form: { enabled: false },
+        },
+        features: {
+            preview: true,
+            imageEditor: true,
+            undoRedo: true,
+        },
+        mergeTags: Object.entries(variables.value).map(([key, desc]) => ({
+            name: desc,
+            value: `{{${key}}}`,
+        })),
+    });
 
-// Available block types for sidebar
-const availableBlocks: { type: BlockType; label: string; icon: any }[] = [
-  { type: 'header', label: 'Encabezado', icon: DocumentTextIcon },
-  { type: 'logo', label: 'Logo/Imagen', icon: PhotoIcon },
-  { type: 'text', label: 'Texto', icon: DocumentTextIcon },
-  { type: 'button', label: 'Botón', icon: LinkIcon },
-  { type: 'divider', label: 'Separador', icon: MinusIcon },
-  { type: 'spacer', label: 'Espacio', icon: MinusIcon },
-]
+    unlayerEditor = (window as any).unlayer;
 
-// Variables for insertion
-const variables = [
-  { key: 'patient_name', label: 'Nombre paciente' },
-  { key: 'appointment_date', label: 'Fecha cita' },
-  { key: 'appointment_time', label: 'Hora cita' },
-  { key: 'clinic_name', label: 'Nombre clínica' },
-  { key: 'clinic_phone', label: 'Teléfono clínica' },
-  { key: 'doctor_name', label: 'Nombre doctor' },
-]
-
-// Generate unique ID
-const generateId = () => Math.random().toString(36).substring(2, 9)
-
-// Add block
-const addBlock = (type: BlockType) => {
-  const newBlock: TemplateBlock = {
-    id: generateId(),
-    type,
-    content: getDefaultContent(type),
-  }
-  blocks.value.push(newBlock)
-  selectedBlockId.value = newBlock.id
-}
-
-// Get default content for block type
-const getDefaultContent = (type: BlockType): TemplateBlock['content'] => {
-  switch (type) {
-    case 'header':
-      return {
-        text: 'Título del email',
-        backgroundColor: '#0891b2',
-        textColor: '#ffffff',
-        alignment: 'center',
-      }
-    case 'logo':
-      return {
-        url: '',
-        alignment: 'center',
-      }
-    case 'text':
-      return {
-        html: '<p>Escribe tu texto aquí...</p>',
-        alignment: 'left',
-      }
-    case 'button':
-      return {
-        buttonText: 'Confirmar Cita',
-        buttonUrl: '#',
-        buttonColor: '#0891b2',
-        alignment: 'center',
-      }
-    case 'divider':
-      return {}
-    case 'spacer':
-      return { height: 20 }
-    default:
-      return {}
-  }
-}
-
-// Remove block
-const removeBlock = (id: string) => {
-  blocks.value = blocks.value.filter(b => b.id !== id)
-  if (selectedBlockId.value === id) {
-    selectedBlockId.value = null
-  }
-}
-
-// Move block up/down
-const moveBlock = (id: string, direction: 'up' | 'down') => {
-  const index = blocks.value.findIndex(b => b.id === id)
-  if (index === -1) return
-  
-  const newIndex = direction === 'up' ? index - 1 : index + 1
-  if (newIndex < 0 || newIndex >= blocks.value.length) return
-  
-  const block = blocks.value[index]
-  blocks.value.splice(index, 1)
-  blocks.value.splice(newIndex, 0, block)
-}
-
-// Select block
-const selectBlock = (id: string) => {
-  selectedBlockId.value = selectedBlockId.value === id ? null : id
-}
-
-// Get selected block
-const selectedBlock = computed(() => {
-  return blocks.value.find(b => b.id === selectedBlockId.value)
-})
-
-// Insert variable into text
-const insertVariable = (varKey: string) => {
-  const variable = `{{${varKey}}}`
-  const blockIndex = blocks.value.findIndex(b => b.id === selectedBlockId.value)
-  if (blockIndex === -1) return
-  
-  const block = blocks.value[blockIndex]
-  if (block.type === 'text') {
-    block.content.html = (block.content.html || '') + variable
-  } else if (block.type === 'header') {
-    block.content.text = (block.content.text || '') + variable
-  }
-}
-
-// Update text block HTML content
-const updateBlockHtml = (event: Event) => {
-  const target = event.target as HTMLTextAreaElement
-  const blockIndex = blocks.value.findIndex(b => b.id === selectedBlockId.value)
-  if (blockIndex === -1) return
-  
-  blocks.value[blockIndex].content.html = target.value
-}
-
-// Handle logo image upload (converts to base64 for inline embedding)
-const logoFileInput = ref<HTMLInputElement | null>(null)
-const isUploadingLogo = ref(false)
-
-const triggerLogoUpload = () => {
-  logoFileInput.value?.click()
-}
-
-const handleLogoUpload = async (event: Event) => {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  
-  // Validate file type
-  if (!file.type.startsWith('image/')) {
-    alert('Por favor selecciona una imagen válida')
-    return
-  }
-  
-  // Validate file size (max 500KB for base64 embedding)
-  if (file.size > 500 * 1024) {
-    alert('La imagen es muy grande. El tamaño máximo es 500KB')
-    return
-  }
-  
-  isUploadingLogo.value = true
-  
-  try {
-    // Convert to base64
-    const reader = new FileReader()
-    reader.onload = () => {
-      const blockIndex = blocks.value.findIndex(b => b.id === selectedBlockId.value)
-      if (blockIndex !== -1) {
-        blocks.value[blockIndex].content.url = reader.result as string
-      }
-      isUploadingLogo.value = false
+    // Load existing design if editing
+    if (isEditMode.value && Object.keys(designJson.value).length > 0) {
+        unlayerEditor.loadDesign(designJson.value);
     }
-    reader.onerror = () => {
-      alert('Error al leer la imagen')
-      isUploadingLogo.value = false
-    }
-    reader.readAsDataURL(file)
-  } catch (err) {
-    console.error('Error uploading logo:', err)
-    isUploadingLogo.value = false
-  }
-  
-  // Clear input so the same file can be selected again
-  input.value = ''
-}
-const renderBlockHtml = (block: TemplateBlock): string => {
-  switch (block.type) {
-    case 'header':
-      return `
-        <div style="background-color: ${block.content.backgroundColor || '#0891b2'}; padding: 24px; text-align: ${block.content.alignment || 'center'};">
-          <h1 style="color: ${block.content.textColor || '#ffffff'}; margin: 0; font-size: 24px; font-weight: bold;">
-            ${block.content.text || 'Título'}
-          </h1>
-        </div>
-      `
-    case 'logo':
-      if (!block.content.url) {
-        return `
-          <div style="padding: 20px; text-align: ${block.content.alignment || 'center'}; color: #9ca3af;">
-            [Logo: Añade una URL de imagen]
-          </div>
-        `
-      }
-      return `
-        <div style="padding: 20px; text-align: ${block.content.alignment || 'center'};">
-          <img src="${block.content.url}" alt="Logo" style="max-width: 200px; max-height: 80px;" />
-        </div>
-      `
-    case 'text':
-      return `
-        <div style="padding: 16px 24px; text-align: ${block.content.alignment || 'left'};">
-          ${block.content.html || '<p>Texto...</p>'}
-        </div>
-      `
-    case 'button':
-      return `
-        <div style="padding: 16px 24px; text-align: ${block.content.alignment || 'center'};">
-          <a href="${block.content.buttonUrl || '#'}" style="display: inline-block; background-color: ${block.content.buttonColor || '#0891b2'}; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 500;">
-            ${block.content.buttonText || 'Botón'}
-          </a>
-        </div>
-      `
-    case 'divider':
-      return `
-        <div style="padding: 16px 24px;">
-          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 0;" />
-        </div>
-      `
-    case 'spacer':
-      return `<div style="height: ${block.content.height || 20}px;"></div>`
-    default:
-      return ''
-  }
-}
 
-// Full preview HTML
-const previewHtml = computed(() => {
-  if (blocks.value.length === 0) {
-    return '<div style="padding: 40px; text-align: center; color: #9ca3af;">Arrastra bloques aquí para empezar</div>'
-  }
-  
-  const blocksHtml = blocks.value.map(renderBlockHtml).join('')
-  
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
-      ${blocksHtml}
-      <div style="padding: 16px; background-color: #f9fafb; text-align: center; font-size: 12px; color: #6b7280;">
-        Este correo fue enviado por {{clinic_name}}
-      </div>
-    </div>
-  `
-})
+    unlayerEditor.addEventListener('design:updated', () => {
+        // Auto-save could be implemented here
+    });
+};
 
-// Load template types
-const loadTemplateTypes = async () => {
-  try {
-    const response = await api.get<any>('/notifications/templates/types')
-    templateTypes.value = response.data || []
-  } catch {
-    console.error('Error loading template types')
-  }
-}
-
-// Load existing template for editing
 const loadTemplate = async () => {
-  if (!templateId.value) return
-  
-  isLoading.value = true
-  try {
-    const response = await api.get<any>(`/notifications/templates/${templateId.value}`)
-    if (response.success && response.data) {
-      templateForm.value = {
-        type: response.data.type,
-        name: response.data.name,
-        subject: response.data.subject,
-      }
-      blocks.value = normalizeBlocks(response.data.blocks || [])
+    if (!templateId.value) {
+        loading.value = false;
+        return;
     }
-  } catch {
-    console.error('Error loading template')
-  } finally {
-    isLoading.value = false
-  }
-}
 
-// Normalize blocks from backend format to frontend format
-const normalizeBlocks = (backendBlocks: any[]): TemplateBlock[] => {
-  return backendBlocks.map((block, index) => ({
-    id: block.id || generateId(),
-    type: block.type,
-    content: {
-      // Text content
-      text: block.content?.text || block.text || (block.type === 'header' ? block.content : undefined),
-      html: block.content?.html || (block.type === 'text' ? block.content : undefined),
-      // Logo/image
-      url: block.content?.url || block.url,
-      // Button
-      buttonText: block.content?.buttonText || block.content,
-      buttonUrl: block.content?.buttonUrl || block.url,
-      buttonColor: block.content?.buttonColor || block.backgroundColor || '#0891b2',
-      // Styling
-      backgroundColor: block.content?.backgroundColor || block.backgroundColor,
-      textColor: block.content?.textColor || block.color,
-      alignment: block.content?.alignment || block.align || 'left',
-      height: block.content?.height || 20,
+    try {
+        const template = await getMarketingTemplate(templateId.value);
+        name.value = template.name;
+        subject.value = template.subject;
+        category.value = template.category || 'custom';
+        previewText.value = template.previewText || '';
+        designJson.value = template.designJson || {};
+        htmlContent.value = template.htmlContent || '';
+    } catch (error: any) {
+        toast.error('Error al cargar plantilla');
+        router.push('/clinic/marketing/templates');
+    } finally {
+        loading.value = false;
     }
-  }))
-}
+};
 
-// Load default template
-const loadDefaultTemplate = async () => {
-  try {
-    const response = await api.get<any>(`/notifications/templates/default/${templateForm.value.type}`)
-    if (response.success && response.data) {
-      templateForm.value.subject = response.data.subject
-      blocks.value = normalizeBlocks(response.data.blocks || [])
+const loadVariables = async () => {
+    try {
+        variables.value = await getTemplateVariables();
+    } catch (error) {
+        console.error('Error loading variables:', error);
     }
-  } catch {
-    console.error('Error loading default template')
-  }
-}
+};
 
-// Save template
-const saveTemplate = async () => {
-  if (!templateForm.value.name || !templateForm.value.subject) {
-    alert('Por favor completa el nombre y asunto')
-    return
-  }
-  
-  isSaving.value = true
-  try {
-    const payload = {
-      ...templateForm.value,
-      blocks: blocks.value,
+const exportDesign = (): Promise<{ design: any; html: string }> => {
+    return new Promise((resolve) => {
+        unlayerEditor.exportHtml((data: any) => {
+            resolve({ design: data.design, html: data.html });
+        });
+    });
+};
+
+const handleSave = async () => {
+    if (!name.value.trim()) {
+        toast.error('El nombre es requerido');
+        return;
     }
+    if (!subject.value.trim()) {
+        toast.error('El asunto es requerido');
+        return;
+    }
+
+    saving.value = true;
+
+    try {
+        const { design, html } = await exportDesign();
+
+        const templateData = {
+            name: name.value,
+            subject: subject.value,
+            category: category.value,
+            previewText: previewText.value,
+            designJson: design,
+            htmlContent: html,
+        };
+
+        if (isEditMode.value && templateId.value) {
+            await updateMarketingTemplate(templateId.value, templateData);
+            toast.success('Plantilla actualizada');
+        } else {
+            const created = await createMarketingTemplate(templateData);
+            toast.success('Plantilla creada');
+            router.push(`/clinic/marketing/templates/${created.id}/edit`);
+        }
+    } catch (error: any) {
+        toast.error('Error al guardar plantilla');
+    } finally {
+        saving.value = false;
+    }
+};
+
+const handlePreview = async () => {
+    const { html } = await exportDesign();
     
-    if (isEditing.value) {
-      await api.put(`/notifications/templates/${templateId.value}`, payload)
-    } else {
-      await api.post('/notifications/templates', payload)
+    // Open preview in new window
+    const previewWindow = window.open('', '_blank', 'width=600,height=800');
+    if (previewWindow) {
+        previewWindow.document.write(html);
+        previewWindow.document.close();
     }
-    
-    router.push('/clinic/notifications')
-  } catch (err) {
-    console.error('Error saving template', err)
-    alert('Error al guardar la plantilla')
-  } finally {
-    isSaving.value = false
-  }
-}
+};
 
-// Send test email with current template
-const sendTestEmail = async () => {
-  if (!testEmail.value) return
-  
-  isSendingTest.value = true
-  testMessage.value = null
-  
-  try {
-    // Build HTML from current blocks
-    const html = previewHtml.value
-    
-    const response = await api.post<any>('/notifications/send-test', {
-      email: testEmail.value,
-      subject: `[PRUEBA] ${templateForm.value.subject || 'Plantilla de prueba'}`,
-      html: html,
-    })
-    
-    if (response.success) {
-      testMessage.value = { type: 'success', text: '✅ Email de prueba enviado!' }
-      setTimeout(() => {
-        showTestModal.value = false
-        testMessage.value = null
-        testEmail.value = ''
-      }, 2000)
-    } else {
-      testMessage.value = { type: 'error', text: response.message || 'Error al enviar' }
-    }
-  } catch (err: any) {
-    testMessage.value = { type: 'error', text: err.message || 'Error al enviar el email' }
-  } finally {
-    isSendingTest.value = false
-  }
-}
+const insertVariable = (varKey: string) => {
+    // Copy to clipboard for user to paste
+    navigator.clipboard.writeText(`{{${varKey}}}`);
+    toast.success(`Variable copiada al portapapeles`);
+};
 
-// Generate template with AI
-const generateWithAI = async () => {
-  if (!aiPrompt.value.trim()) {
-    aiMessage.value = { type: 'error', text: 'Por favor, describe la plantilla que deseas crear.' }
-    return
-  }
-
-  isGeneratingAI.value = true
-  aiMessage.value = null
-
-  try {
-    const response = await api.post<any>('/notifications/templates/generate', {
-      prompt: aiPrompt.value
-    })
-
-    if (response.success && response.data) {
-      // Replace blocks with AI-generated ones
-      const generatedBlocks = normalizeBlocks(response.data.blocks || [])
-      blocks.value = generatedBlocks
-      
-      // Update subject if provided
-      if (response.data.subject) {
-        templateForm.value.subject = response.data.subject
-      }
-      
-      aiMessage.value = { type: 'success', text: `✨ Plantilla generada con ${generatedBlocks.length} bloques!` }
-      
-      setTimeout(() => {
-        showAIModal.value = false
-        aiMessage.value = null
-        aiPrompt.value = ''
-      }, 1500)
-    } else {
-      aiMessage.value = { type: 'error', text: response.message || 'Error al generar la plantilla' }
-    }
-  } catch (err: any) {
-    aiMessage.value = { type: 'error', text: err.message || 'Error al conectar con la IA' }
-  } finally {
-    isGeneratingAI.value = false
-  }
-}
-
-// Watch template type change to load defaults
-watch(() => templateForm.value.type, async (newType, oldType) => {
-  if (newType !== oldType && !isEditing.value && blocks.value.length === 0) {
-    await loadDefaultTemplate()
-  }
-})
+const formatVarKey = (key: string | number) => {
+    return '{{' + key + '}}';
+};
 
 onMounted(async () => {
-  await loadTemplateTypes()
-  if (isEditing.value) {
-    await loadTemplate()
-  } else {
-    await loadDefaultTemplate()
-  }
-})
+    await loadVariables();
+    await loadTemplate();
+    await initEditor();
+});
 </script>
 
 <template>
-  <div class="h-[calc(100vh-48px)] flex flex-col">
-    <!-- Header -->
-    <div class="flex items-center justify-between px-6 py-4 bg-white border-b border-surface-200">
-      <div class="flex items-center gap-4">
-        <button @click="router.push('/clinic/notifications')" class="p-2 hover:bg-surface-100 rounded-lg">
-          <ArrowLeftIcon class="w-5 h-5 text-surface-600" />
-        </button>
-        <div>
-          <h1 class="text-lg font-semibold text-surface-900">
-            {{ isEditing ? 'Editar Plantilla' : 'Nueva Plantilla' }}
-          </h1>
-          <p class="text-sm text-surface-500">Diseña tu plantilla de email</p>
+    <div class="template-editor">
+        <!-- Header -->
+        <div class="editor-header">
+            <div class="header-left">
+                <button class="back-btn" @click="router.push('/clinic/marketing/templates')">
+                    ← Volver
+                </button>
+                <h1>{{ isEditMode ? 'Editar Plantilla' : 'Nueva Plantilla' }}</h1>
+            </div>
+            <div class="header-actions">
+                <button class="btn-secondary" @click="handlePreview" :disabled="saving">
+                    👁️ Vista previa
+                </button>
+                <button class="btn-primary" @click="handleSave" :disabled="saving">
+                    {{ saving ? 'Guardando...' : '💾 Guardar' }}
+                </button>
+            </div>
         </div>
-      </div>
-      
-      <div class="flex items-center gap-3">
-        <button 
-          @click="showAIModal = true" 
-          class="btn-secondary btn-sm bg-gradient-to-r from-purple-50 to-pink-50 text-purple-700 border-purple-200 hover:from-purple-100 hover:to-pink-100"
-        >
-          <SparklesIcon class="w-4 h-4" />
-          Generar con IA
-        </button>
-        <button 
-          @click="showPreview = !showPreview" 
-          :class="['btn-secondary btn-sm', showPreview && 'bg-primary-50 text-primary-700']"
-        >
-          <EyeIcon class="w-4 h-4" />
-          Preview
-        </button>
-        <button 
-          @click="showTestModal = true" 
-          class="btn-secondary btn-sm"
-          :disabled="blocks.length === 0"
-        >
-          <PaperAirplaneIcon class="w-4 h-4" />
-          Probar
-        </button>
-        <button 
-          @click="saveTemplate" 
-          class="btn-primary"
-          :disabled="isSaving || !templateForm.name"
-        >
-          <CheckIcon class="w-4 h-4" />
-          {{ isSaving ? 'Guardando...' : 'Guardar' }}
-        </button>
-      </div>
+
+        <!-- Loading -->
+        <div v-if="loading" class="loading-state">
+            <div class="spinner"></div>
+            <p>Cargando editor...</p>
+        </div>
+
+        <div v-else class="editor-content">
+            <!-- Sidebar -->
+            <div class="editor-sidebar">
+                <div class="form-group">
+                    <label>Nombre de la plantilla *</label>
+                    <input 
+                        v-model="name" 
+                        type="text" 
+                        placeholder="Ej: Promoción de Navidad"
+                        class="form-input"
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label>Asunto del email *</label>
+                    <input 
+                        v-model="subject" 
+                        type="text" 
+                        placeholder="Ej: 🎄 ¡Feliz Navidad, {{patient_first_name}}!"
+                        class="form-input"
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label>Categoría</label>
+                    <select v-model="category" class="form-input">
+                        <option v-for="cat in categories" :key="cat.value" :value="cat.value">
+                            {{ cat.label }}
+                        </option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Texto de vista previa</label>
+                    <input 
+                        v-model="previewText" 
+                        type="text" 
+                        placeholder="Texto que aparece en la bandeja de entrada"
+                        class="form-input"
+                    />
+                </div>
+
+                <!-- Variables -->
+                <div class="variables-section">
+                    <h3>Variables disponibles</h3>
+                    <p class="variables-hint">Haz clic para copiar</p>
+                    <div class="variables-list">
+                        <button 
+                            v-for="(desc, key) in variables" 
+                            :key="key"
+                            class="variable-chip"
+                            @click="insertVariable(String(key))"
+                            :title="String(desc)"
+                        >
+                            {{ formatVarKey(key) }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Editor -->
+            <div class="email-editor-wrapper">
+                <div id="email-editor" ref="emailEditorRef"></div>
+            </div>
+        </div>
     </div>
-
-    <!-- Main content -->
-    <div class="flex-1 flex overflow-hidden">
-      <!-- Left sidebar: Block palette + Form -->
-      <div class="w-72 bg-white border-r border-surface-200 flex flex-col overflow-y-auto">
-        <!-- Template info -->
-        <div class="p-4 border-b border-surface-100 space-y-3">
-          <div>
-            <label class="label">Tipo</label>
-            <select v-model="templateForm.type" class="input text-sm" :disabled="isEditing">
-              <option v-for="t in templateTypes" :key="t.value" :value="t.value">
-                {{ t.label }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label class="label">Nombre</label>
-            <input v-model="templateForm.name" type="text" class="input text-sm" placeholder="Mi plantilla" />
-          </div>
-          <div>
-            <label class="label">Asunto</label>
-            <input v-model="templateForm.subject" type="text" class="input text-sm" placeholder="Asunto del email" />
-          </div>
-        </div>
-
-        <!-- Block palette -->
-        <div class="p-4 border-b border-surface-100">
-          <h3 class="text-xs font-semibold text-surface-500 uppercase mb-3">Añadir bloque</h3>
-          <div class="grid grid-cols-2 gap-2">
-            <button
-              v-for="block in availableBlocks"
-              :key="block.type"
-              @click="addBlock(block.type)"
-              class="flex flex-col items-center gap-1 p-3 bg-surface-50 hover:bg-surface-100 rounded-lg text-surface-600 hover:text-surface-900 transition-colors"
-            >
-              <component :is="block.icon" class="w-5 h-5" />
-              <span class="text-xs">{{ block.label }}</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Block editor (when selected) -->
-        <div v-if="selectedBlock" class="p-4 flex-1">
-          <h3 class="text-xs font-semibold text-surface-500 uppercase mb-3">Editar bloque</h3>
-          
-          <!-- Header block -->
-          <div v-if="selectedBlock.type === 'header'" class="space-y-3">
-            <div>
-              <label class="label">Texto</label>
-              <input v-model="selectedBlock.content.text" type="text" class="input text-sm" />
-            </div>
-            <div class="grid grid-cols-2 gap-2">
-              <div>
-                <label class="label">Fondo</label>
-                <input v-model="selectedBlock.content.backgroundColor" type="color" class="w-full h-9 rounded cursor-pointer" />
-              </div>
-              <div>
-                <label class="label">Texto</label>
-                <input v-model="selectedBlock.content.textColor" type="color" class="w-full h-9 rounded cursor-pointer" />
-              </div>
-            </div>
-          </div>
-
-          <!-- Logo block -->
-          <div v-if="selectedBlock.type === 'logo'" class="space-y-4">
-            <!-- Image preview -->
-            <div v-if="selectedBlock.content.url" class="relative">
-              <img 
-                :src="selectedBlock.content.url" 
-                alt="Logo preview" 
-                class="w-full max-h-32 object-contain bg-surface-100 rounded-lg border border-surface-200"
-              />
-              <button 
-                @click="selectedBlock.content.url = ''"
-                type="button"
-                class="absolute top-2 right-2 p-1 bg-red-100 hover:bg-red-200 text-red-600 rounded-full"
-                title="Eliminar imagen"
-              >
-                <TrashIcon class="w-4 h-4" />
-              </button>
-            </div>
-            
-            <!-- Upload button -->
-            <div>
-              <label class="label">Subir imagen</label>
-              <input 
-                type="file" 
-                ref="logoFileInput"
-                @change="handleLogoUpload"
-                accept="image/*"
-                class="hidden"
-              />
-              <button 
-                @click="triggerLogoUpload"
-                type="button"
-                class="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-surface-300 rounded-xl hover:border-primary-400 hover:bg-primary-50 transition-colors"
-                :disabled="isUploadingLogo"
-              >
-                <ArrowUpTrayIcon class="w-5 h-5 text-surface-400" />
-                <span class="text-sm text-surface-600">
-                  {{ isUploadingLogo ? 'Subiendo...' : 'Click para subir imagen' }}
-                </span>
-              </button>
-              <p class="text-xs text-surface-400 mt-1">Máximo 500KB. Formatos: JPG, PNG, GIF</p>
-            </div>
-            
-            <!-- Or paste URL -->
-            <div class="relative">
-              <div class="absolute inset-0 flex items-center">
-                <div class="w-full border-t border-surface-200"></div>
-              </div>
-              <div class="relative flex justify-center text-xs">
-                <span class="px-2 bg-white text-surface-400">o pega una URL</span>
-              </div>
-            </div>
-            
-            <div>
-              <input 
-                v-model="selectedBlock.content.url" 
-                type="url" 
-                class="input text-sm" 
-                placeholder="https://ejemplo.com/logo.png" 
-              />
-            </div>
-          </div>
-
-          <!-- Text block -->
-          <div v-if="selectedBlock.type === 'text'" class="space-y-3">
-            <div>
-              <label class="label">Contenido</label>
-              <textarea 
-                :value="selectedBlock.content.html" 
-                @input="updateBlockHtml($event)"
-                rows="6" 
-                class="input text-sm"
-                placeholder="Escribe tu texto aquí..."
-              ></textarea>
-              <p class="text-xs text-surface-400 mt-1">El texto aparecerá directamente en el email</p>
-            </div>
-            <div>
-              <label class="label">Insertar variable</label>
-              <div class="flex flex-wrap gap-1">
-                <button
-                  v-for="v in variables"
-                  :key="v.key"
-                  @click="insertVariable(v.key)"
-                  type="button"
-                  class="px-2 py-1 text-xs bg-primary-50 text-primary-700 rounded hover:bg-primary-100"
-                >
-                  {{ v.label }}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Button block -->
-          <div v-if="selectedBlock.type === 'button'" class="space-y-3">
-            <div>
-              <label class="label">Texto del botón</label>
-              <input v-model="selectedBlock.content.buttonText" type="text" class="input text-sm" />
-            </div>
-            <div>
-              <label class="label">URL</label>
-              <input v-model="selectedBlock.content.buttonUrl" type="url" class="input text-sm" placeholder="https://..." />
-            </div>
-            <div>
-              <label class="label">Color</label>
-              <input v-model="selectedBlock.content.buttonColor" type="color" class="w-full h-9 rounded cursor-pointer" />
-            </div>
-          </div>
-
-          <!-- Spacer block -->
-          <div v-if="selectedBlock.type === 'spacer'" class="space-y-3">
-            <div>
-              <label class="label">Altura (px)</label>
-              <input v-model.number="selectedBlock.content.height" type="number" class="input text-sm" min="10" max="100" />
-            </div>
-          </div>
-        </div>
-        <div v-else class="p-4 text-center text-surface-400 text-sm">
-          Selecciona un bloque para editarlo
-        </div>
-      </div>
-
-      <!-- Center: Canvas -->
-      <div class="flex-1 bg-surface-100 p-6 overflow-y-auto">
-        <div class="max-w-xl mx-auto">
-          <div v-if="blocks.length === 0" class="bg-white rounded-xl border-2 border-dashed border-surface-300 p-12 text-center">
-            <PlusIcon class="w-12 h-12 text-surface-300 mx-auto mb-3" />
-            <p class="text-surface-500">Añade bloques desde el panel izquierdo</p>
-          </div>
-          
-          <div v-else class="space-y-2">
-            <div
-              v-for="(block, index) in blocks"
-              :key="block.id"
-              :class="[
-                'relative group bg-white rounded-lg border-2 transition-all cursor-pointer',
-                selectedBlockId === block.id ? 'border-primary-500 shadow-lg' : 'border-transparent hover:border-surface-300'
-              ]"
-              @click="selectBlock(block.id)"
-            >
-              <!-- Block controls -->
-              <div class="absolute -top-3 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  v-if="index > 0"
-                  @click.stop="moveBlock(block.id, 'up')"
-                  class="p-1 bg-white border border-surface-200 rounded shadow-sm hover:bg-surface-50"
-                >
-                  <ChevronUpIcon class="w-4 h-4" />
-                </button>
-                <button
-                  v-if="index < blocks.length - 1"
-                  @click.stop="moveBlock(block.id, 'down')"
-                  class="p-1 bg-white border border-surface-200 rounded shadow-sm hover:bg-surface-50"
-                >
-                  <ChevronDownIcon class="w-4 h-4" />
-                </button>
-                <button
-                  @click.stop="removeBlock(block.id)"
-                  class="p-1 bg-white border border-red-200 rounded shadow-sm hover:bg-red-50 text-red-500"
-                >
-                  <TrashIcon class="w-4 h-4" />
-                </button>
-              </div>
-
-              <!-- Block preview -->
-              <div class="overflow-hidden rounded-lg" v-html="renderBlockHtml(block)"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Right: Preview -->
-      <div v-if="showPreview" class="w-96 bg-surface-50 border-l border-surface-200 flex flex-col">
-        <div class="p-4 border-b border-surface-100 bg-white">
-          <h3 class="font-medium text-surface-900">Vista previa</h3>
-          <p class="text-sm text-surface-500">{{ templateForm.subject || 'Sin asunto' }}</p>
-        </div>
-        <div class="flex-1 p-4 overflow-y-auto">
-          <div class="bg-white rounded-lg shadow-sm" v-html="previewHtml"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Test Email Modal -->
-    <Teleport to="body">
-      <div v-if="showTestModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-surface-900/50" @click="showTestModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
-            <h2 class="text-lg font-semibold text-surface-900">Enviar email de prueba</h2>
-            <button @click="showTestModal = false" class="text-surface-400 hover:text-surface-600">
-              ✕
-            </button>
-          </div>
-          <div class="p-6 space-y-4">
-            <p class="text-sm text-surface-600">
-              Se enviará un email con la plantilla actual para que puedas ver cómo se verá en el cliente de correo.
-            </p>
-            
-            <div>
-              <label class="label">Email de destino</label>
-              <input 
-                v-model="testEmail"
-                type="email"
-                class="input"
-                placeholder="tu@email.com"
-              />
-            </div>
-
-            <div 
-              v-if="testMessage" 
-              :class="[
-                'p-3 rounded-lg text-sm',
-                testMessage.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-              ]"
-            >
-              {{ testMessage.text }}
-            </div>
-
-            <div class="flex justify-end gap-3">
-              <button @click="showTestModal = false" class="btn-secondary">
-                Cancelar
-              </button>
-              <button 
-                @click="sendTestEmail"
-                class="btn-primary"
-                :disabled="!testEmail || isSendingTest"
-              >
-                <PaperAirplaneIcon class="w-4 h-4" />
-                {{ isSendingTest ? 'Enviando...' : 'Enviar prueba' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
-
-    <!-- AI Generation Modal -->
-    <Teleport to="body">
-      <div v-if="showAIModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-surface-900/50" @click="showAIModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 bg-gradient-to-r from-purple-50 to-pink-50">
-            <div class="flex items-center gap-2">
-              <SparklesIcon class="w-5 h-5 text-purple-600" />
-              <h2 class="text-lg font-semibold text-surface-900">Generar plantilla con IA</h2>
-            </div>
-            <button @click="showAIModal = false" class="text-surface-400 hover:text-surface-600">
-              ✕
-            </button>
-          </div>
-          <div class="p-6 space-y-4">
-            <p class="text-sm text-surface-600">
-              Describe la plantilla de email que deseas crear. La IA generará los bloques automáticamente.
-            </p>
-            
-            <div>
-              <label class="label">¿Qué tipo de email necesitas?</label>
-              <textarea 
-                v-model="aiPrompt"
-                rows="4"
-                class="input"
-                placeholder="Ejemplo: Un email de confirmación de cita elegante con colores azules, que incluya un título llamativo, los datos de la cita (fecha, hora, doctor), y un botón para cancelar si es necesario."
-                :disabled="isGeneratingAI"
-              ></textarea>
-            </div>
-
-            <div class="text-xs text-surface-500 space-y-1">
-              <p class="font-medium">💡 Ideas de prompts:</p>
-              <ul class="list-disc list-inside space-y-0.5">
-                <li>Email de recordatorio de cita para mañana, tono amigable</li>
-                <li>Confirmación de cita con diseño minimalista y profesional</li>
-                <li>Notificación de cancelación de cita con colores cálidos</li>
-              </ul>
-            </div>
-
-            <div 
-              v-if="aiMessage" 
-              :class="[
-                'p-3 rounded-lg text-sm',
-                aiMessage.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-              ]"
-            >
-              {{ aiMessage.text }}
-            </div>
-
-            <div class="flex justify-end gap-3">
-              <button @click="showAIModal = false" class="btn-secondary" :disabled="isGeneratingAI">
-                Cancelar
-              </button>
-              <button 
-                @click="generateWithAI"
-                class="btn-primary bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                :disabled="!aiPrompt.trim() || isGeneratingAI"
-              >
-                <SparklesIcon class="w-4 h-4" />
-                {{ isGeneratingAI ? 'Generando...' : 'Generar plantilla' }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
-  </div>
 </template>
+
+<style scoped>
+.template-editor {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--color-bg);
+}
+
+.editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    background: var(--color-bg-card);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.editor-header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.header-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.btn-primary {
+    background: var(--color-primary);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: var(--color-bg-secondary);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.editor-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+.editor-sidebar {
+    width: 320px;
+    padding: 20px;
+    background: var(--color-bg-card);
+    border-right: 1px solid var(--color-border);
+    overflow-y: auto;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text);
+    margin-bottom: 6px;
+}
+
+.form-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--color-bg);
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.variables-section {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--color-border);
+}
+
+.variables-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+}
+
+.variables-hint {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    margin: 0 0 12px 0;
+}
+
+.variables-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.variable-chip {
+    padding: 4px 10px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    font-size: 12px;
+    font-family: monospace;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.variable-chip:hover {
+    background: var(--color-primary-light);
+    border-color: var(--color-primary);
+}
+
+.email-editor-wrapper {
+    flex: 1;
+    overflow: hidden;
+}
+
+#email-editor {
+    width: 100%;
+    height: 100%;
+    min-height: 600px;
+}
+
+.loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 16px;
+}
+
+.spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+</style>

@@ -184,7 +184,7 @@ async function seed() {
         console.log('----------------------------------------');
         console.log('PATIENT:');
         console.log('  Email: paciente@email.com');
-        console.log('  Password: password123');
+        console.log('  Password:  ');
         console.log('----------------------------------------\n');
 
         process.exit(0);

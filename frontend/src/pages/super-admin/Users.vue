@@ -469,8 +469,9 @@ onMounted(async () => {
     <Teleport to="body">
       <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-surface-900/50" @click="showModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-scale-in">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 sticky top-0 bg-white">
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col animate-scale-in">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 flex-shrink-0">
             <h2 class="text-lg font-semibold text-surface-900">
               {{ modalMode === 'create' ? 'Nuevo Usuario' : 'Editar Usuario' }}
             </h2>
@@ -479,86 +480,90 @@ onMounted(async () => {
             </button>
           </div>
           
-          <form @submit.prevent="saveUser" class="p-6 space-y-4">
-            <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
-              {{ formError }}
-            </div>
-            
-            <div class="grid md:grid-cols-2 gap-4">
-              <div>
-                <label class="label">Nombre *</label>
-                <input v-model="formData.firstName" type="text" required class="input" />
+          <!-- Scrollable content -->
+          <form @submit.prevent="saveUser" class="flex flex-col flex-1 overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-6 space-y-4">
+              <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
+                {{ formError }}
               </div>
-              <div>
-                <label class="label">Apellidos *</label>
-                <input v-model="formData.lastName" type="text" required class="input" />
-              </div>
-            </div>
-            
-            <div v-if="modalMode === 'create'">
-              <label class="label">Email *</label>
-              <input v-model="formData.email" type="email" required class="input" />
-            </div>
-            
-            <div v-if="modalMode === 'create'">
-              <label class="label">Contraseña *</label>
-              <input v-model="formData.password" type="password" required minlength="8" class="input" />
-              <p class="text-xs text-surface-400 mt-1">Mínimo 8 caracteres</p>
-            </div>
-            
-            <div>
-              <label class="label">Teléfono</label>
-              <input v-model="formData.phone" type="tel" class="input" />
-            </div>
-            
-            <div>
-              <label class="label">Rol *</label>
-              <select v-model="formData.role" required class="input">
-                <option value="SUPERADMIN">Super Admin</option>
-                <option value="ADMIN">Administrador</option>
-                <option value="WORKER">Personal (Dentista, Auxiliar, etc.)</option>
-                <option value="USER">Paciente</option>
-              </select>
-            </div>
-            
-            <div v-if="needsOrganization">
-              <label class="label">Organización *</label>
-              <select v-model="formData.organizationId" :required="needsOrganization" class="input">
-                <option value="">Seleccionar...</option>
-                <option v-for="org in organizations" :key="org.id" :value="org.id">
-                  {{ org.name }}
-                </option>
-              </select>
-            </div>
-            
-            <div v-if="needsClinic">
-              <label class="label">Clínica *</label>
-              <select v-model="formData.clinicId" :required="needsClinic" class="input">
-                <option value="">Seleccionar...</option>
-                <option v-for="clinic in clinics" :key="clinic.id" :value="clinic.id">
-                  {{ clinic.name }}
-                </option>
-              </select>
-            </div>
-            
-            <!-- Staff fields -->
-            <template v-if="isWorker">
-              <div class="pt-4 border-t border-surface-100">
-                <h3 class="font-medium text-surface-900 mb-4">Datos profesionales</h3>
-                <div class="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label class="label">Nº Colegiado</label>
-                    <input v-model="formData.licenseNumber" type="text" class="input" />
-                  </div>
-                  <div>
-                    <label class="label">Especialidad</label>
-                    <input v-model="formData.specialty" type="text" class="input" placeholder="Odontología General" />
-                  </div>
+              
+              <div class="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label class="label">Nombre *</label>
+                  <input v-model="formData.firstName" type="text" required class="input" />
+                </div>
+                <div>
+                  <label class="label">Apellidos *</label>
+                  <input v-model="formData.lastName" type="text" required class="input" />
                 </div>
               </div>
-            </template>
+              
+              <div v-if="modalMode === 'create'">
+                <label class="label">Email *</label>
+                <input v-model="formData.email" type="email" required class="input" />
+              </div>
+              
+              <div v-if="modalMode === 'create'">
+                <label class="label">Contraseña *</label>
+                <input v-model="formData.password" type="password" required minlength="8" class="input" />
+                <p class="text-xs text-surface-400 mt-1">Mínimo 8 caracteres</p>
+              </div>
+              
+              <div>
+                <label class="label">Teléfono</label>
+                <input v-model="formData.phone" type="tel" class="input" />
+              </div>
+              
+              <div>
+                <label class="label">Rol *</label>
+                <select v-model="formData.role" required class="input">
+                  <option value="SUPERADMIN">Super Admin</option>
+                  <option value="ADMIN">Administrador</option>
+                  <option value="WORKER">Personal (Dentista, Auxiliar, etc.)</option>
+                  <option value="USER">Paciente</option>
+                </select>
+              </div>
+              
+              <div v-if="needsOrganization">
+                <label class="label">Organización *</label>
+                <select v-model="formData.organizationId" :required="needsOrganization" class="input">
+                  <option value="">Seleccionar...</option>
+                  <option v-for="org in organizations" :key="org.id" :value="org.id">
+                    {{ org.name }}
+                  </option>
+                </select>
+              </div>
+              
+              <div v-if="needsClinic">
+                <label class="label">Clínica *</label>
+                <select v-model="formData.clinicId" :required="needsClinic" class="input">
+                  <option value="">Seleccionar...</option>
+                  <option v-for="clinic in clinics" :key="clinic.id" :value="clinic.id">
+                    {{ clinic.name }}
+                  </option>
+                </select>
+              </div>
+              
+              <!-- Staff fields -->
+              <template v-if="isWorker">
+                <div class="pt-4 border-t border-surface-100">
+                  <h3 class="font-medium text-surface-900 mb-4">Datos profesionales</h3>
+                  <div class="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label class="label">Nº Colegiado</label>
+                      <input v-model="formData.licenseNumber" type="text" class="input" />
+                    </div>
+                    <div>
+                      <label class="label">Especialidad</label>
+                      <input v-model="formData.specialty" type="text" class="input" placeholder="Odontología General" />
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
             
-            <div class="flex gap-3 pt-4">
+            <!-- Footer (sticky) -->
+            <div class="flex gap-3 px-6 py-4 border-t border-surface-100 flex-shrink-0 bg-white rounded-b-2xl">
               <button type="button" @click="showModal = false" class="btn-secondary flex-1">
                 Cancelar
               </button>

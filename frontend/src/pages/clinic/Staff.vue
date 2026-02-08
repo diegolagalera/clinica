@@ -18,6 +18,7 @@ import {
   NoSymbolIcon,
   CheckCircleIcon,
 } from '@heroicons/vue/24/outline'
+import PhoneCountrySelect from '@/components/PhoneCountrySelect.vue'
 
 interface StaffMember extends User {
   staffProfile?: {
@@ -75,13 +76,30 @@ const confirmAction = ref<{
   action: () => Promise<void>
 } | null>(null)
 
+// Country codes list (most common for Spain market)
+const countryCodes = [
+  { code: '+34', country: 'ES', name: 'España', flag: '🇪🇸' },
+  { code: '+33', country: 'FR', name: 'Francia', flag: '🇫🇷' },
+  { code: '+351', country: 'PT', name: 'Portugal', flag: '🇵🇹' },
+  { code: '+44', country: 'GB', name: 'Reino Unido', flag: '🇬🇧' },
+  { code: '+49', country: 'DE', name: 'Alemania', flag: '🇩🇪' },
+  { code: '+39', country: 'IT', name: 'Italia', flag: '🇮🇹' },
+  { code: '+212', country: 'MA', name: 'Marruecos', flag: '🇲🇦' },
+  { code: '+52', country: 'MX', name: 'México', flag: '🇲🇽' },
+  { code: '+54', country: 'AR', name: 'Argentina', flag: '🇦🇷' },
+  { code: '+57', country: 'CO', name: 'Colombia', flag: '🇨🇴' },
+  { code: '+1', country: 'US', name: 'Estados Unidos', flag: '🇺🇸' },
+  { code: '+55', country: 'BR', name: 'Brasil', flag: '🇧🇷' },
+]
+
 // Forms
 const userForm = ref({
   email: '',
   password: '',
   firstName: '',
   lastName: '',
-  phone: '',
+  phoneCountry: '+34',
+  phoneNumber: '',
   role: 'WORKER' as 'ADMIN' | 'WORKER' | 'USER',
   clinicIds: [] as string[],
   licenseNumber: '',
@@ -160,7 +178,7 @@ const createUser = async () => {
       password: userForm.value.password,
       firstName: userForm.value.firstName,
       lastName: userForm.value.lastName,
-      phone: userForm.value.phone || undefined,
+      phone: userForm.value.phoneNumber ? `${userForm.value.phoneCountry}${userForm.value.phoneNumber}` : undefined,
       role: userForm.value.role,
       clinicIds: userForm.value.clinicIds.length > 0 ? userForm.value.clinicIds : undefined,
       licenseNumber: userForm.value.role === 'WORKER' ? userForm.value.licenseNumber || undefined : undefined,
@@ -187,7 +205,7 @@ const updateUser = async () => {
     await api.put(`/users/org/${selectedStaff.value.id}`, {
       firstName: userForm.value.firstName,
       lastName: userForm.value.lastName,
-      phone: userForm.value.phone || undefined,
+      phone: userForm.value.phoneNumber ? `${userForm.value.phoneCountry}${userForm.value.phoneNumber}` : undefined,
       role: userForm.value.role,
       clinicIds: userForm.value.clinicIds,
       licenseNumber: userForm.value.role === 'WORKER' ? userForm.value.licenseNumber || undefined : undefined,
@@ -287,12 +305,26 @@ const openEditModal = (member: StaffMember) => {
     ? clinicIdsFromWorkerClinics 
     : (member.clinicId ? [member.clinicId] : [])
   
+  // Parse phone into country code and number
+  let phoneCountry = '+34'
+  let phoneNumber = ''
+  if (member.phone) {
+    const matchedCountry = countryCodes.find(c => member.phone?.startsWith(c.code))
+    if (matchedCountry) {
+      phoneCountry = matchedCountry.code
+      phoneNumber = member.phone.slice(matchedCountry.code.length)
+    } else {
+      phoneNumber = member.phone
+    }
+  }
+  
   userForm.value = {
     email: member.email,
     password: '',
     firstName: member.firstName,
     lastName: member.lastName,
-    phone: member.phone || '',
+    phoneCountry,
+    phoneNumber,
     role: member.role as 'ADMIN' | 'WORKER' | 'USER',
     clinicIds,
     licenseNumber: member.staffProfile?.licenseNumber || '',
@@ -314,7 +346,8 @@ const resetUserForm = () => {
     password: '',
     firstName: '',
     lastName: '',
-    phone: '',
+    phoneCountry: '+34',
+    phoneNumber: '',
     role: 'WORKER',
     clinicIds: [],
     licenseNumber: '',
@@ -524,8 +557,9 @@ onMounted(async () => {
     <Teleport to="body">
       <div v-if="showCreateModal || showEditModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-surface-900/50" @click="showCreateModal = false; showEditModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg animate-scale-in max-h-[90vh] overflow-y-auto">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col animate-scale-in">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 flex-shrink-0">
             <h2 class="text-lg font-semibold text-surface-900">
               {{ showCreateModal ? 'Nuevo Usuario' : 'Editar Usuario' }}
             </h2>
@@ -534,84 +568,98 @@ onMounted(async () => {
             </button>
           </div>
           
-          <form @submit.prevent="showCreateModal ? createUser() : updateUser()" class="p-6 space-y-4">
-            <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
-              {{ formError }}
-            </div>
-            
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="label">Nombre *</label>
-                <input v-model="userForm.firstName" type="text" required class="input" />
+          <!-- Scrollable content -->
+          <form @submit.prevent="showCreateModal ? createUser() : updateUser()" class="flex flex-col flex-1 overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-6 space-y-4">
+              <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
+                {{ formError }}
               </div>
-              <div>
-                <label class="label">Apellidos *</label>
-                <input v-model="userForm.lastName" type="text" required class="input" />
+              
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="label">Nombre *</label>
+                  <input v-model="userForm.firstName" type="text" required class="input" />
+                </div>
+                <div>
+                  <label class="label">Apellidos *</label>
+                  <input v-model="userForm.lastName" type="text" required class="input" />
+                </div>
               </div>
-            </div>
-            
-            <div v-if="showCreateModal">
-              <label class="label">Email *</label>
-              <input v-model="userForm.email" type="email" required class="input" />
-            </div>
-            
-            <div v-if="showCreateModal">
-              <label class="label">Contraseña *</label>
-              <input v-model="userForm.password" type="password" required minlength="8" class="input" />
-              <p class="text-xs text-surface-400 mt-1">Mínimo 8 caracteres</p>
-            </div>
-            
-            <div>
-              <label class="label">Teléfono</label>
-              <input v-model="userForm.phone" type="tel" class="input" />
-            </div>
-            
-            <div>
-              <label class="label">Rol *</label>
-              <select v-model="userForm.role" required class="input">
-                <option value="ADMIN">Administrador</option>
-                <option value="WORKER">Trabajador</option>
-              </select>
-            </div>
-            
-            <div v-if="userForm.role === 'WORKER' || userForm.role === 'USER'">
-              <label class="label">Clínicas asignadas</label>
-              <div class="border border-surface-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-2">
-                <label 
-                  v-for="clinic in availableClinics" 
-                  :key="clinic.id"
-                  class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-50 cursor-pointer"
-                >
+              
+              <div v-if="showCreateModal">
+                <label class="label">Email *</label>
+                <input v-model="userForm.email" type="email" required class="input" />
+              </div>
+              
+              <div v-if="showCreateModal">
+                <label class="label">Contraseña *</label>
+                <input v-model="userForm.password" type="password" required minlength="8" class="input" />
+                <p class="text-xs text-surface-400 mt-1">Mínimo 8 caracteres</p>
+              </div>
+              
+              <div>
+                <label class="label">Teléfono</label>
+                <div class="flex gap-2">
+                  <PhoneCountrySelect v-model="userForm.phoneCountry" />
                   <input 
-                    type="checkbox" 
-                    :value="clinic.id"
-                    v-model="userForm.clinicIds"
-                    class="w-4 h-4 text-primary-600 border-surface-300 rounded focus:ring-primary-500"
+                    v-model="userForm.phoneNumber" 
+                    type="tel" 
+                    class="input flex-1" 
+                    placeholder="612345678"
+                    @input="userForm.phoneNumber = userForm.phoneNumber.replace(/\D/g, '')"
                   />
-                  <div class="flex items-center gap-2">
-                    <BuildingStorefrontIcon class="w-4 h-4 text-surface-400" />
-                    <span class="text-sm text-surface-700">{{ clinic.name }}</span>
-                  </div>
-                </label>
-                <p v-if="availableClinics.length === 0" class="text-sm text-surface-400 text-center py-2">
-                  No hay clínicas disponibles
-                </p>
+                </div>
+                <p class="text-xs text-surface-400 mt-1">Solo números, sin espacios</p>
               </div>
-              <p class="text-xs text-surface-400 mt-1">Selecciona una o más clínicas</p>
+              
+              <div>
+                <label class="label">Rol *</label>
+                <select v-model="userForm.role" required class="input">
+                  <option value="ADMIN">Administrador</option>
+                  <option value="WORKER">Trabajador</option>
+                </select>
+              </div>
+              
+              <div v-if="userForm.role === 'WORKER' || userForm.role === 'ADMIN'">
+                <label class="label">Clínicas asignadas</label>
+                <div class="border border-surface-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-2">
+                  <label 
+                    v-for="clinic in availableClinics" 
+                    :key="clinic.id"
+                    class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-50 cursor-pointer"
+                  >
+                    <input 
+                      type="checkbox" 
+                      :value="clinic.id"
+                      v-model="userForm.clinicIds"
+                      class="w-4 h-4 text-primary-600 border-surface-300 rounded focus:ring-primary-500"
+                    />
+                    <div class="flex items-center gap-2">
+                      <BuildingStorefrontIcon class="w-4 h-4 text-surface-400" />
+                      <span class="text-sm text-surface-700">{{ clinic.name }}</span>
+                    </div>
+                  </label>
+                  <p v-if="availableClinics.length === 0" class="text-sm text-surface-400 text-center py-2">
+                    No hay clínicas disponibles
+                  </p>
+                </div>
+                <p class="text-xs text-surface-400 mt-1">Selecciona una o más clínicas</p>
+              </div>
+              
+              <template v-if="userForm.role === 'WORKER'">
+                <div>
+                  <label class="label">Nº Colegiado</label>
+                  <input v-model="userForm.licenseNumber" type="text" class="input" />
+                </div>
+                <div>
+                  <label class="label">Especialidad</label>
+                  <input v-model="userForm.specialty" type="text" class="input" placeholder="Ej: Odontología General" />
+                </div>
+              </template>
             </div>
             
-            <template v-if="userForm.role === 'WORKER'">
-              <div>
-                <label class="label">Nº Colegiado</label>
-                <input v-model="userForm.licenseNumber" type="text" class="input" />
-              </div>
-              <div>
-                <label class="label">Especialidad</label>
-                <input v-model="userForm.specialty" type="text" class="input" placeholder="Ej: Odontología General" />
-              </div>
-            </template>
-            
-            <div class="flex gap-3 pt-4">
+            <!-- Footer (sticky) -->
+            <div class="flex gap-3 px-6 py-4 border-t border-surface-100 flex-shrink-0 bg-white rounded-b-2xl">
               <button type="button" @click="showCreateModal = false; showEditModal = false" class="btn-secondary flex-1">
                 Cancelar
               </button>

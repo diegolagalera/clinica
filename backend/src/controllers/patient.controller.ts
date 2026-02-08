@@ -30,11 +30,13 @@ export const createPatientSchema = z.object({
 export const updatePatientSchema = createPatientSchema.partial().extend({
     consentGiven: z.boolean().optional(),
     isActive: z.boolean().optional(),
+    acceptsMarketing: z.boolean().optional(),
 });
 
 /**
  * GET /patients
  * List patients for current clinic
+ * Query params: search, isActive (optional - true/false)
  */
 export const listPatients = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     if (!req.tenantContext.clinicId) {
@@ -43,11 +45,16 @@ export const listPatients = asyncHandler(async (req: AuthenticatedRequest, res: 
 
     const params = parsePaginationParams(req.query);
     const search = req.query['search'] as string | undefined;
+    const isActiveParam = req.query['isActive'] as string | undefined;
+
+    // Parse isActive: 'true' -> true, 'false' -> false, undefined -> undefined (all)
+    const isActive = isActiveParam === 'true' ? true : isActiveParam === 'false' ? false : undefined;
 
     const { data, total } = await patientService.getPatients(
         req.tenantContext.clinicId,
         params,
-        search
+        search,
+        isActive
     );
 
     res.json(success(paginated(data, total, params)));

@@ -240,7 +240,7 @@ export const processRatingRequests = async () => {
 
         logger.info('Rating request processing complete');
     } catch (error: any) {
-        logger.error(`Error in rating request processor: ${error.message}`);
+        logger.error('Error in rating request processor:', error);
     }
 };
 
@@ -252,7 +252,7 @@ export const startRatingScheduler = () => {
 
     // Run immediately on startup
     processRatingRequests().catch((err) => {
-        logger.error(`Initial rating request processing failed: ${err.message}`);
+        logger.error('Initial rating request processing failed:', err);
     });
 
     // Then run every 5 minutes

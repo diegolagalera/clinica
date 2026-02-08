@@ -112,7 +112,7 @@ export const processPendingNotifications = async (): Promise<number> => {
 
         return processedCount;
     } catch (error: any) {
-        logger.error(`Failed to process pending notifications: ${error.message}`);
+        logger.error('Failed to process pending notifications:', error);
         return processedCount;
     }
 };

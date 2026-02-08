@@ -109,6 +109,7 @@ export enum AppointmentType {
 
 export enum AppointmentStatus {
     SCHEDULED = 'SCHEDULED',
+    IN_PROGRESS = 'IN_PROGRESS',
     COMPLETED = 'COMPLETED',
     CANCELLED = 'CANCELLED',
     NO_SHOW = 'NO_SHOW',
@@ -138,6 +139,12 @@ export interface Appointment {
     endTime: string
     duration: number
     notes?: string
+    // Real time tracking fields
+    realStartTime?: string | null
+    realEndTime?: string | null
+    pausedDuration?: number | null
+    startedById?: string | null
+    // Relations
     patient?: Patient
     worker?: User  // Legacy primary worker
     appointmentWorkers?: AppointmentWorker[]  // All assigned workers

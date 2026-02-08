@@ -14,6 +14,41 @@ import {
     stockMovements
 } from '../db/schema.js';
 import { eq, and, desc, sql } from 'drizzle-orm';
+import { stockEvents } from '../websocket.js';
+
+/**
+ * Helper to emit stock:updated event with current stock list
+ */
+async function emitStockUpdate(appointmentId: string) {
+    try {
+        const usage = await db
+            .select({
+                id: appointmentStockUsage.id,
+                itemId: appointmentStockUsage.itemId,
+                quantity: appointmentStockUsage.quantity,
+                unitCost: appointmentStockUsage.unitCost,
+                notes: appointmentStockUsage.notes,
+                createdAt: appointmentStockUsage.createdAt,
+                item: {
+                    id: inventoryItems.id,
+                    name: inventoryItems.name,
+                    sku: inventoryItems.sku,
+                    category: inventoryItems.category,
+                    unit: inventoryItems.unit,
+                    imageUrl: inventoryItems.imageUrl,
+                },
+            })
+            .from(appointmentStockUsage)
+            .innerJoin(inventoryItems, eq(appointmentStockUsage.itemId, inventoryItems.id))
+            .where(eq(appointmentStockUsage.appointmentId, appointmentId))
+            .orderBy(desc(appointmentStockUsage.createdAt));
+
+        stockEvents.updated(appointmentId, usage);
+    } catch (error) {
+        // Don't fail the request if WebSocket emit fails
+        console.error('Failed to emit stock:updated event', error);
+    }
+}
 
 // Validation schemas
 export const addStockUsageSchema = z.object({
@@ -93,7 +128,7 @@ export const getAppointmentStock = asyncHandler(async (req: AuthenticatedRequest
 
 /**
  * POST /appointments/:appointmentId/stock
- * Add stock usage to an appointment
+ * Add stock usage to an appointment (unconfirmed - no stock deduction yet)
  */
 export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { appointmentId } = req.params;
@@ -130,11 +165,13 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
         throw new NotFoundError('Item not found');
     }
 
+    // Validate stock availability (but don't deduct yet)
     if (item.currentStock < input.quantity) {
         throw new BadRequestError(`Insufficient stock for ${item.name}. Available: ${item.currentStock}`);
     }
 
-    // Create stock usage record
+    // Create stock usage record as UNCONFIRMED (isConfirmed = false by default)
+    // Stock will be deducted only when appointment is completed
     const [usage] = await db.insert(appointmentStockUsage).values({
         clinicId: req.tenantContext.clinicId,
         appointmentId: appointmentId!,
@@ -143,27 +180,11 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
         unitCost: item.costPrice ?? null,
         notes: input.notes ?? null,
         registeredById: req.user!.userId,
+        // isConfirmed defaults to false - stock not deducted yet
     }).returning();
 
-    // Decrement stock
-    const newStock = item.currentStock - input.quantity;
-    await db
-        .update(inventoryItems)
-        .set({ currentStock: newStock, updatedAt: new Date() })
-        .where(eq(inventoryItems.id, input.itemId));
-
-    // Record stock movement
-    await db.insert(stockMovements).values({
-        clinicId: req.tenantContext.clinicId,
-        itemId: input.itemId,
-        type: 'OUT',
-        quantity: input.quantity,
-        previousStock: item.currentStock,
-        newStock,
-        reason: `Used in appointment ${appointmentId}`,
-        reference: appointmentId!,
-        performedById: req.user!.userId,
-    });
+    // Emit WebSocket event to users watching this appointment
+    await emitStockUpdate(appointmentId!);
 
     res.status(201).json(success({
         ...usage,
@@ -172,7 +193,7 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
             name: item.name,
             sku: item.sku,
         },
-    }, 'Stock usage recorded'));
+    }, 'Stock usage recorded (pending confirmation)'));
 });
 
 /**
@@ -217,11 +238,12 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
             throw new NotFoundError(`Item ${usage.itemId} not found`);
         }
 
+        // Validate stock availability (but don't deduct yet)
         if (item.currentStock < usage.quantity) {
             throw new BadRequestError(`Insufficient stock for ${item.name}. Available: ${item.currentStock}`);
         }
 
-        // Create stock usage record
+        // Create stock usage record as UNCONFIRMED
         const [usageRecord] = await db.insert(appointmentStockUsage).values({
             clinicId: req.tenantContext.clinicId,
             appointmentId: appointmentId!,
@@ -230,27 +252,8 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
             unitCost: item.costPrice ?? null,
             notes: usage.notes ?? null,
             registeredById: req.user!.userId,
+            // isConfirmed defaults to false
         }).returning();
-
-        // Decrement stock
-        const newStock = item.currentStock - usage.quantity;
-        await db
-            .update(inventoryItems)
-            .set({ currentStock: newStock, updatedAt: new Date() })
-            .where(eq(inventoryItems.id, usage.itemId));
-
-        // Record stock movement
-        await db.insert(stockMovements).values({
-            clinicId: req.tenantContext.clinicId,
-            itemId: usage.itemId,
-            type: 'OUT',
-            quantity: usage.quantity,
-            previousStock: item.currentStock,
-            newStock,
-            reason: `Used in appointment ${appointmentId}`,
-            reference: appointmentId!,
-            performedById: req.user!.userId,
-        });
 
         results.push({
             ...usageRecord,
@@ -258,7 +261,10 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
         });
     }
 
-    res.status(201).json(success(results, `${results.length} items added to appointment`));
+    // Emit WebSocket event to users watching this appointment
+    await emitStockUpdate(appointmentId!);
+
+    res.status(201).json(success(results, `${results.length} items added (pending confirmation)`));
 });
 
 /**
@@ -325,11 +331,13 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
             continue; // Skip inactive or missing items
         }
 
+        // Validate stock availability (but don't deduct yet)
         if (item.currentStock < packItem.quantity) {
             throw new BadRequestError(`Insufficient stock for ${item.name}. Available: ${item.currentStock}, Required: ${packItem.quantity}`);
         }
 
-        // Create stock usage record
+        // Create stock usage record as UNCONFIRMED
+        // Stock will be deducted only when appointment is completed
         const [usageRecord] = await db.insert(appointmentStockUsage).values({
             clinicId: req.tenantContext.clinicId,
             appointmentId: appointmentId!,
@@ -338,27 +346,8 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
             unitCost: item.costPrice ?? null,
             notes: `Applied from pack: ${pack.name}`,
             registeredById: req.user!.userId,
+            // isConfirmed defaults to false - stock not deducted yet
         }).returning();
-
-        // Decrement stock
-        const newStock = item.currentStock - packItem.quantity;
-        await db
-            .update(inventoryItems)
-            .set({ currentStock: newStock, updatedAt: new Date() })
-            .where(eq(inventoryItems.id, packItem.itemId));
-
-        // Record stock movement
-        await db.insert(stockMovements).values({
-            clinicId: req.tenantContext.clinicId,
-            itemId: packItem.itemId,
-            type: 'OUT',
-            quantity: packItem.quantity,
-            previousStock: item.currentStock,
-            newStock,
-            reason: `Pack "${pack.name}" applied to appointment ${appointmentId}`,
-            reference: appointmentId!,
-            performedById: req.user!.userId,
-        });
 
         results.push({
             ...usageRecord,
@@ -366,15 +355,18 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
         });
     }
 
+    // Emit WebSocket event to users watching this appointment
+    await emitStockUpdate(appointmentId!);
+
     res.status(201).json(success({
         packName: pack.name,
         items: results,
-    }, `Pack "${pack.name}" applied successfully`));
+    }, `Pack "${pack.name}" applied (pending confirmation)`));
 });
 
 /**
  * DELETE /appointments/:appointmentId/stock/:usageId
- * Remove stock usage from appointment (and restore stock)
+ * Remove stock usage from appointment (only restore stock if it was confirmed)
  */
 export const removeStockUsage = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { appointmentId, usageId } = req.params;
@@ -397,38 +389,153 @@ export const removeStockUsage = asyncHandler(async (req: AuthenticatedRequest, r
         throw new NotFoundError('Stock usage record not found');
     }
 
-    // Get current item stock
-    const [item] = await db
-        .select()
-        .from(inventoryItems)
-        .where(eq(inventoryItems.id, usage.itemId));
-
-    if (item) {
-        // Restore stock
-        const newStock = item.currentStock + usage.quantity;
-        await db
-            .update(inventoryItems)
-            .set({ currentStock: newStock, updatedAt: new Date() })
+    // Only restore stock if the usage was confirmed (already deducted)
+    if (usage.isConfirmed) {
+        const [item] = await db
+            .select()
+            .from(inventoryItems)
             .where(eq(inventoryItems.id, usage.itemId));
 
-        // Record stock movement (reversal)
-        await db.insert(stockMovements).values({
-            clinicId: req.tenantContext.clinicId,
-            itemId: usage.itemId,
-            type: 'IN',
-            quantity: usage.quantity,
-            previousStock: item.currentStock,
-            newStock,
-            reason: `Reversed usage from appointment ${appointmentId}`,
-            reference: appointmentId!,
-            performedById: req.user!.userId,
-        });
+        if (item) {
+            // Restore stock
+            const newStock = item.currentStock + usage.quantity;
+            await db
+                .update(inventoryItems)
+                .set({ currentStock: newStock, updatedAt: new Date() })
+                .where(eq(inventoryItems.id, usage.itemId));
+
+            // Record stock movement (reversal)
+            await db.insert(stockMovements).values({
+                clinicId: req.tenantContext.clinicId,
+                itemId: usage.itemId,
+                type: 'IN',
+                quantity: usage.quantity,
+                previousStock: item.currentStock,
+                newStock,
+                reason: `Reversed confirmed usage from appointment ${appointmentId}`,
+                reference: appointmentId!,
+                performedById: req.user!.userId,
+            });
+        }
     }
+    // If not confirmed, just delete the record without affecting inventory
 
     // Delete usage record
     await db
         .delete(appointmentStockUsage)
         .where(eq(appointmentStockUsage.id, usageId!));
 
-    res.json(success(null, 'Stock usage removed and inventory restored'));
+    // Emit WebSocket event to users watching this appointment
+    await emitStockUpdate(appointmentId!);
+
+    res.json(success(null, usage.isConfirmed
+        ? 'Stock usage removed and inventory restored'
+        : 'Pending stock usage removed'));
+});
+
+/**
+ * POST /appointments/:appointmentId/stock/confirm
+ * Confirm all pending stock usage for an appointment (called when completing appointment)
+ * This deducts stock and creates stock movements for all unconfirmed items
+ */
+export const confirmAppointmentStock = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { appointmentId } = req.params;
+
+    if (!req.tenantContext.clinicId) {
+        throw new BadRequestError('Clinic context required');
+    }
+
+    // Check appointment exists
+    const [appointment] = await db
+        .select()
+        .from(appointments)
+        .where(and(
+            eq(appointments.id, appointmentId!),
+            eq(appointments.clinicId, req.tenantContext.clinicId)
+        ));
+
+    if (!appointment) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    // Get all unconfirmed stock usage for this appointment
+    const pendingUsage = await db
+        .select()
+        .from(appointmentStockUsage)
+        .where(and(
+            eq(appointmentStockUsage.appointmentId, appointmentId!),
+            eq(appointmentStockUsage.isConfirmed, false)
+        ));
+
+    if (pendingUsage.length === 0) {
+        res.json(success({ confirmedCount: 0 }, 'No pending stock to confirm'));
+        return;
+    }
+
+    const now = new Date();
+    let confirmedCount = 0;
+    const errors: string[] = [];
+
+    // Process each pending usage
+    for (const usage of pendingUsage) {
+        // Get current item stock
+        const [item] = await db
+            .select()
+            .from(inventoryItems)
+            .where(eq(inventoryItems.id, usage.itemId));
+
+        if (!item) {
+            errors.push(`Item ${usage.itemId} not found`);
+            continue;
+        }
+
+        // Check if there's enough stock
+        if (item.currentStock < usage.quantity) {
+            errors.push(`Insufficient stock for ${item.name}. Available: ${item.currentStock}, Required: ${usage.quantity}`);
+            continue;
+        }
+
+        // Deduct stock
+        const newStock = item.currentStock - usage.quantity;
+        await db
+            .update(inventoryItems)
+            .set({ currentStock: newStock, updatedAt: now })
+            .where(eq(inventoryItems.id, usage.itemId));
+
+        // Create stock movement
+        await db.insert(stockMovements).values({
+            clinicId: req.tenantContext.clinicId,
+            itemId: usage.itemId,
+            type: 'OUT',
+            quantity: usage.quantity,
+            previousStock: item.currentStock,
+            newStock,
+            reason: `Confirmed usage from appointment ${appointmentId}`,
+            reference: appointmentId!,
+            performedById: req.user!.userId,
+        });
+
+        // Mark usage as confirmed
+        await db
+            .update(appointmentStockUsage)
+            .set({
+                isConfirmed: true,
+                confirmedAt: now
+            })
+            .where(eq(appointmentStockUsage.id, usage.id));
+
+        confirmedCount++;
+    }
+
+    if (errors.length > 0) {
+        res.status(207).json(success({
+            confirmedCount,
+            totalPending: pendingUsage.length,
+            errors,
+        }, `Partially confirmed: ${confirmedCount}/${pendingUsage.length} items`));
+    } else {
+        res.json(success({
+            confirmedCount,
+        }, `All ${confirmedCount} stock items confirmed and deducted from inventory`));
+    }
 });

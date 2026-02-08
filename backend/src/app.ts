@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -9,6 +10,7 @@ import { errorHandler, notFoundHandler } from './middleware/index.js';
 import routes from './routes/index.js';
 import { startReminderScheduler } from './jobs/reminder-scheduler.js';
 import { startRatingScheduler } from './jobs/rating-scheduler.js';
+import { initializeWebSocket } from './websocket.js';
 
 const app = express();
 
@@ -19,9 +21,21 @@ const app = express();
 // Helmet for security headers
 app.use(helmet());
 
-// CORS configuration
+// CORS configuration - allow multiple dev ports
+const allowedOrigins = [
+    config.frontend.url,
+    'http://localhost:5173',
+    'http://localhost:5174',
+];
 app.use(cors({
-    origin: config.frontend.url,
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps, curl, etc.)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Clinic-Id', 'X-Organization-Id'],
@@ -77,10 +91,17 @@ app.use(errorHandler);
 
 const start = async () => {
     try {
-        const server = app.listen(config.port, () => {
+        // Create HTTP server wrapping Express
+        const httpServer = createServer(app);
+
+        // Initialize WebSocket server
+        initializeWebSocket(httpServer);
+
+        httpServer.listen(config.port, () => {
             logger.info(`🚀 Server running on port ${config.port}`);
             logger.info(`📊 Environment: ${config.env}`);
             logger.info(`🔗 API: http://localhost:${config.port}/api/v1`);
+            logger.info(`🔌 WebSocket: ws://localhost:${config.port}`);
 
             // Start reminder scheduler
             startReminderScheduler();
@@ -92,7 +113,7 @@ const start = async () => {
         // Graceful shutdown
         const shutdown = async () => {
             logger.info('Shutting down gracefully...');
-            server.close(() => {
+            httpServer.close(() => {
                 logger.info('Server closed');
                 process.exit(0);
             });

@@ -45,22 +45,30 @@ export interface UpdatePatientInput {
     insuranceNumber?: string;
     consentGiven?: boolean;
     isActive?: boolean;
+    acceptsMarketing?: boolean;
 }
 
 export type PatientType = typeof patients.$inferSelect;
 
 /**
  * Get patients for a clinic with pagination and search
+ * @param isActive - Optional filter: true = only active, false = only inactive, undefined = all
  */
 export const getPatients = async (
     clinicId: string,
     params: PaginationParams,
-    search?: string
+    search?: string,
+    isActive?: boolean
 ): Promise<{ data: PatientType[]; total: number }> => {
     const { page, limit } = params;
     const offset = (page - 1) * limit;
 
     let whereClause = eq(patients.clinicId, clinicId);
+
+    // Filter by active status if specified
+    if (isActive !== undefined) {
+        whereClause = and(whereClause, eq(patients.isActive, isActive))!;
+    }
 
     if (search) {
         // Use unaccent for accent-insensitive search

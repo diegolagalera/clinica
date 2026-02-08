@@ -237,3 +237,320 @@ export const sendCustomEmail = async (
         html,
     });
 };
+
+// ==========================================
+// SYSTEM-LEVEL EMAIL (ERP Platform)
+// Uses global env vars, not clinic-specific
+// ==========================================
+
+import { config } from '../config/env.js';
+
+/**
+ * Create a transporter for system-level emails (password reset, etc.)
+ * Uses global SMTP configuration from environment variables
+ */
+export const createSystemTransporter = (): Transporter | null => {
+    const { host, port, user, pass, from } = config.email;
+
+    if (!user || !pass) {
+        logger.warn('System SMTP not configured - missing SMTP_USER or SMTP_PASS');
+        return null;
+    }
+
+    try {
+        const transporter = nodemailer.createTransport({
+            host: host || 'smtp.gmail.com',
+            port: port || 587,
+            secure: port === 465,
+            auth: {
+                user,
+                pass,
+            },
+        });
+
+        return transporter;
+    } catch (error: any) {
+        logger.error(`Failed to create system email transporter: ${error.message}`);
+        return null;
+    }
+};
+
+/**
+ * Send a system-level email (password reset, verification, etc.)
+ */
+export const sendSystemEmail = async (
+    options: EmailOptions
+): Promise<{ success: boolean; messageId?: string; error?: string }> => {
+    const transporter = createSystemTransporter();
+
+    if (!transporter) {
+        return {
+            success: false,
+            error: 'System SMTP not configured',
+        };
+    }
+
+    try {
+        const { from } = config.email;
+        const fromAddress = options.from || `"Cuspia" <${from}>`;
+
+        const result = await transporter.sendMail({
+            from: fromAddress,
+            to: options.to,
+            subject: options.subject,
+            html: options.html,
+        });
+
+        logger.info(`System email sent to ${options.to}, messageId: ${result.messageId}`);
+
+        return {
+            success: true,
+            messageId: result.messageId,
+        };
+    } catch (error: any) {
+        logger.error(`Failed to send system email: ${error.message}`);
+        return {
+            success: false,
+            error: error.message,
+        };
+    }
+};
+/**
+ * Send password reset email with embedded logo using CID
+ */
+export const sendPasswordResetEmail = async (
+    email: string,
+    resetToken: string
+): Promise<{ success: boolean; error?: string }> => {
+    const transporter = createSystemTransporter();
+
+    if (!transporter) {
+        return {
+            success: false,
+            error: 'System SMTP not configured',
+        };
+    }
+
+    const frontendUrl = config.frontend.url || 'http://localhost:5173';
+    const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+
+    // Read logo file for CID attachment
+    let logoAttachment;
+
+    try {
+        const fs = await import('fs');
+        const path = await import('path');
+        // Resolve path relative to project root
+        const projectRoot = path.resolve(process.cwd(), '..');
+        const absoluteLogoPath = path.join(projectRoot, 'frontend/src/assets/img/logo_comprimidov2.jpg');
+
+        if (fs.existsSync(absoluteLogoPath)) {
+            logoAttachment = {
+                filename: 'logo.jpg',
+                path: absoluteLogoPath,
+                cid: 'cuspia-logo'
+            };
+        }
+    } catch (e) {
+        logger.warn('Could not load logo for email');
+    }
+
+    const htmlContent = `
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px; background: #f8fafc;">
+            <div style="background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    ${logoAttachment
+            ? '<img src="cid:cuspia-logo" alt="CUSPIA" style="width: 100px; height: 100px; border-radius: 16px; object-fit: cover;" />'
+            : '<div style="display: inline-block; background: linear-gradient(135deg, #0891b2, #06b6d4); width: 80px; height: 80px; border-radius: 20px; line-height: 80px;"><span style="color: white; font-size: 32px; font-weight: bold;">C</span></div>'
+        }
+                    <h1 style="color: #0f172a; margin: 20px 0 10px; font-size: 24px;">Restablecer Contraseña</h1>
+                </div>
+                
+                <p style="color: #475569; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+                    Hemos recibido una solicitud para restablecer tu contraseña. Haz clic en el botón de abajo para crear una nueva.
+                </p>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="${resetLink}" 
+                       style="display: inline-block; background: linear-gradient(135deg, #0891b2, #06b6d4); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 16px;">
+                        Restablecer Contraseña
+                    </a>
+                </div>
+                
+                <p style="color: #94a3b8; font-size: 14px; margin-top: 30px;">
+                    Este enlace expirará en <strong>1 hora</strong>. Si no solicitaste el cambio, ignora este correo.
+                </p>
+                
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+                
+                <p style="color: #94a3b8; font-size: 12px; text-align: center;">
+                    Si el botón no funciona, copia y pega este enlace en tu navegador:<br>
+                    <a href="${resetLink}" style="color: #0891b2; word-break: break-all;">${resetLink}</a>
+                </p>
+            </div>
+            
+            <p style="color: #94a3b8; font-size: 11px; text-align: center; margin-top: 20px;">
+                © ${new Date().getFullYear()} Cuspia. Todos los derechos reservados.
+            </p>
+        </div>
+    `;
+
+    try {
+        const { from } = config.email;
+        const fromAddress = `"Cuspia" <${from}>`;
+
+        const mailOptions: any = {
+            from: fromAddress,
+            to: email,
+            subject: '🔐 Restablecer tu contraseña - Cuspia',
+            html: htmlContent,
+        };
+
+        if (logoAttachment) {
+            mailOptions.attachments = [logoAttachment];
+        }
+
+        const result = await transporter.sendMail(mailOptions);
+
+        logger.info(`Password reset email sent to ${email}, messageId: ${result.messageId}`);
+
+        return {
+            success: true,
+        };
+    } catch (error: any) {
+        logger.error(`Failed to send password reset email: ${error.message}`);
+        return {
+            success: false,
+            error: error.message,
+        };
+    }
+};
+
+// ==========================================
+// BUG REPORT EMAIL
+// ==========================================
+
+interface BugReportEmailData {
+    reportId: string;
+    title: string;
+    description: string;
+    category: string;
+    pageUrl: string;
+    userAgent: string;
+    userName: string;
+    userEmail: string;
+    clinicName: string;
+    organizationName: string;
+    createdAt: Date;
+}
+
+/**
+ * Send a bug report email to the support team
+ */
+export const sendBugReportEmail = async (data: BugReportEmailData): Promise<{ success: boolean; error?: string }> => {
+    try {
+        const transporter = createSystemTransporter();
+
+        if (!transporter) {
+            logger.warn('System email transporter not configured, skipping bug report email');
+            return { success: false, error: 'Email transporter not configured' };
+        }
+
+        const supportEmail = config.support.email;
+        const from = config.email.from || config.email.user;
+
+        const categoryLabels: Record<string, string> = {
+            'UI': '🎨 Interfaz de Usuario',
+            'FUNCTIONALITY': '⚙️ Funcionalidad',
+            'DATA': '💾 Datos',
+            'PERFORMANCE': '🚀 Rendimiento',
+            'OTHER': '📋 Otro',
+        };
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }
+        .container { max-width: 600px; margin: 20px auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); color: white; padding: 24px; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; }
+        .content { padding: 24px; }
+        .field { margin-bottom: 16px; }
+        .label { font-weight: 600; color: #374151; font-size: 12px; text-transform: uppercase; margin-bottom: 4px; }
+        .value { color: #111827; font-size: 14px; padding: 8px 12px; background: #f9fafb; border-radius: 6px; border-left: 3px solid #0284c7; }
+        .description { white-space: pre-wrap; }
+        .category-badge { display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600; background: #fef3c7; color: #92400e; }
+        .footer { padding: 16px 24px; background: #f9fafb; text-align: center; font-size: 12px; color: #6b7280; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🐛 Nuevo Reporte de Error</h1>
+        </div>
+        <div class="content">
+            <div class="field">
+                <div class="label">ID del Reporte</div>
+                <div class="value" style="font-family: monospace;">${data.reportId}</div>
+            </div>
+            <div class="field">
+                <div class="label">Categoría</div>
+                <div class="value"><span class="category-badge">${categoryLabels[data.category] || data.category}</span></div>
+            </div>
+            <div class="field">
+                <div class="label">Título</div>
+                <div class="value"><strong>${data.title}</strong></div>
+            </div>
+            <div class="field">
+                <div class="label">Descripción</div>
+                <div class="value description">${data.description}</div>
+            </div>
+            <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
+            <div class="field">
+                <div class="label">Reportado por</div>
+                <div class="value">${data.userName} (${data.userEmail})</div>
+            </div>
+            <div class="field">
+                <div class="label">Organización / Clínica</div>
+                <div class="value">${data.organizationName} / ${data.clinicName}</div>
+            </div>
+            <div class="field">
+                <div class="label">URL de la página</div>
+                <div class="value" style="word-break: break-all;">${data.pageUrl}</div>
+            </div>
+            <div class="field">
+                <div class="label">Navegador / Dispositivo</div>
+                <div class="value" style="font-size: 11px; word-break: break-all;">${data.userAgent}</div>
+            </div>
+            <div class="field">
+                <div class="label">Fecha del reporte</div>
+                <div class="value">${data.createdAt.toLocaleString('es-ES', { dateStyle: 'full', timeStyle: 'short' })}</div>
+            </div>
+        </div>
+        <div class="footer">
+            Este email fue generado automáticamente por CUSPIA ERP
+        </div>
+    </div>
+</body>
+</html>
+`;
+
+        await transporter.sendMail({
+            from: `"CUSPIA - Reporte de Error" <${from}>`,
+            to: supportEmail,
+            subject: `🐛 [Bug Report] ${data.category}: ${data.title}`,
+            html: htmlContent,
+        });
+
+        logger.info('Bug report email sent', { reportId: data.reportId, to: supportEmail });
+        return { success: true };
+    } catch (error: any) {
+        logger.error('Failed to send bug report email', { error: error.message });
+        return { success: false, error: error.message };
+    }
+};
+

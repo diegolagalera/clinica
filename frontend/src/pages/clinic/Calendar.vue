@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch, onUnmounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useActiveAppointmentsStore } from '@/stores/activeAppointments'
 import { api } from '@/services/api'
+import { useToast } from '@/composables/useToast'
 import type { Appointment, Patient, User, ApiResponse } from '@/types'
 import {
   ChevronLeftIcon,
@@ -15,8 +17,11 @@ import {
   CalendarDaysIcon,
   Squares2X2Icon,
 } from '@heroicons/vue/24/outline'
+import { PlayIcon } from '@heroicons/vue/24/solid'
 
 const authStore = useAuthStore()
+const activeAppointmentsStore = useActiveAppointmentsStore()
+const toast = useToast()
 
 // State
 const appointments = ref<Appointment[]>([])
@@ -28,24 +33,29 @@ const currentDate = ref(new Date())
 const calendarRef = ref<HTMLElement | null>(null)
 const viewMode = ref<'day' | 'week' | 'month'>('week')
 
+// Current time indicator
+const now = ref(new Date())
+let timeUpdateInterval: ReturnType<typeof setInterval> | null = null
+
 // Workers state
 const workers = ref<User[]>([])
 const selectedWorkerIds = ref<Set<string>>(new Set())
 const showWorkerPanel = ref(true)
 
-// Worker color palette
-const WORKER_COLORS = [
-  { bg: 'bg-blue-500', text: 'text-blue-500', light: 'bg-blue-100' },
-  { bg: 'bg-emerald-500', text: 'text-emerald-500', light: 'bg-emerald-100' },
-  { bg: 'bg-purple-500', text: 'text-purple-500', light: 'bg-purple-100' },
-  { bg: 'bg-orange-500', text: 'text-orange-500', light: 'bg-orange-100' },
-  { bg: 'bg-pink-500', text: 'text-pink-500', light: 'bg-pink-100' },
-  { bg: 'bg-cyan-500', text: 'text-cyan-500', light: 'bg-cyan-100' },
-  { bg: 'bg-amber-500', text: 'text-amber-500', light: 'bg-amber-100' },
-  { bg: 'bg-indigo-500', text: 'text-indigo-500', light: 'bg-indigo-100' },
-  { bg: 'bg-rose-500', text: 'text-rose-500', light: 'bg-rose-100' },
-  { bg: 'bg-teal-500', text: 'text-teal-500', light: 'bg-teal-100' },
-]
+// Hash-based worker color generation (unique per worker ID)
+const hashStringToHue = (str: string): number => {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash)
+    hash = hash & hash // Convert to 32-bit integer
+  }
+  return Math.abs(hash) % 360
+}
+
+const getWorkerHsl = (workerId: string, saturation = 65, lightness = 50) => {
+  const hue = hashStringToHue(workerId)
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`
+}
 
 // Modal state
 const showModal = ref(false)
@@ -68,6 +78,82 @@ const searchResults = ref<Patient[]>([])
 const isSearching = ref(false)
 const showWorkerDropdown = ref(false)
 
+// Real time management (Admin only)
+const realTimeEditing = ref(false)
+const isResettingTime = ref(false)
+const realTimeForm = ref({
+  realStartTime: '',
+  realEndTime: '',
+  pausedDuration: 0,
+})
+const showResetConfirm = ref(false)
+
+// Format real duration for display (realEnd - realStart - pausedDuration)
+const formatRealDuration = (apt: Appointment) => {
+  if (!apt.realStartTime || !apt.realEndTime) return null
+  const start = new Date(apt.realStartTime).getTime()
+  const end = new Date(apt.realEndTime).getTime()
+  const pausedMs = (apt.pausedDuration || 0) * 60000
+  const durationMs = end - start - pausedMs
+  const minutes = Math.floor(durationMs / 60000)
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  const remainingMins = minutes % 60
+  return remainingMins > 0 ? `${hours}h ${remainingMins}min` : `${hours}h`
+}
+
+// Update real time (Admin only)
+const handleUpdateRealTime = async () => {
+  if (!selectedAppointment.value) return
+  
+  try {
+    isSaving.value = true
+    await api.put(`/appointments/${selectedAppointment.value.id}/real-time`, {
+      realStartTime: realTimeForm.value.realStartTime || undefined,
+      realEndTime: realTimeForm.value.realEndTime || undefined,
+      pausedDuration: realTimeForm.value.pausedDuration,
+    })
+    realTimeEditing.value = false
+    await loadAppointments()
+    showModal.value = false
+    resetForm()
+  } catch (err: any) {
+    formError.value = err.response?.data?.message || 'Error al actualizar tiempo real'
+  } finally {
+    isSaving.value = false
+  }
+}
+
+// Reset real time (Admin only)
+const handleResetRealTime = async () => {
+  if (!selectedAppointment.value) return
+  
+  try {
+    isResettingTime.value = true
+    await api.post(`/appointments/${selectedAppointment.value.id}/reset-time`)
+    showResetConfirm.value = false
+    await loadAppointments()
+    showModal.value = false
+    resetForm()
+  } catch (err: any) {
+    formError.value = err.response?.data?.message || 'Error al resetear tiempo'
+  } finally {
+    isResettingTime.value = false
+  }
+}
+
+// Initialize real time form when editing
+const initRealTimeForm = () => {
+  if (!selectedAppointment.value) return
+  const apt = selectedAppointment.value
+  realTimeForm.value = {
+    realStartTime: apt.realStartTime ? toLocalDateTimeString(new Date(apt.realStartTime)) : '',
+    realEndTime: apt.realEndTime ? toLocalDateTimeString(new Date(apt.realEndTime)) : '',
+    pausedDuration: apt.pausedDuration || 0,
+  }
+  realTimeEditing.value = true
+}
+
 // Drag & Drop state
 const isDragging = ref(false)
 const isResizing = ref(false)
@@ -88,12 +174,13 @@ const SNAP_MINUTES = 15
 const DRAG_THRESHOLD = 5
 const START_HOUR = 8
 const END_HOUR = 22
+const MIN_HOUR = 8  // Minimum allowed hour for appointments
+const MAX_HOUR = 22 // Maximum allowed hour for appointments
 
-// Get worker color by index
-const getWorkerColor = (workerId: string) => {
-  const index = workers.value.findIndex(w => w.id === workerId)
-  return WORKER_COLORS[index % WORKER_COLORS.length] || WORKER_COLORS[0]
-}
+// Get worker color styles (inline styles for dynamic HSL)
+const getWorkerColorStyle = (workerId: string) => ({
+  backgroundColor: getWorkerHsl(workerId),
+})
 
 // Check if current user is admin
 const isAdmin = computed(() => {
@@ -101,12 +188,47 @@ const isAdmin = computed(() => {
   return role === 'ADMIN' || role === 'SUPERADMIN'
 })
 
-// Check if appointment can be edited (dragged/resized)
-const canEditAppointment = (apt: Appointment) => {
+// Check if current user is assigned to the selected appointment
+const isCurrentUserAssignedToAppointment = computed(() => {
+  if (!selectedAppointment.value || !authStore.user?.id) return false
+  
+  const apt = selectedAppointment.value
+  
+  // Check appointmentWorkers array (multi-worker system)
+  if (apt.appointmentWorkers && apt.appointmentWorkers.length > 0) {
+    return apt.appointmentWorkers.some(aw => aw.userId === authStore.user?.id)
+  }
+  
+  // Fallback to legacy workerId
+  return apt.workerId === authStore.user?.id
+})
+
+// Check if modal should be read-only (worker viewing appointment they're not assigned to)
+const isReadOnlyModal = computed(() => {
+  // Not editing? Never read-only (it's a new appointment)
+  if (!isEditing.value) return false
   // Admins can always edit
+  if (isAdmin.value) return false
+  // Workers can only edit if assigned
+  return !isCurrentUserAssignedToAppointment.value
+})
+
+// Check if appointment can be edited (dragged/resized) in calendar
+const canEditAppointment = (apt: Appointment) => {
+  // Nobody can drag/resize completed or cancelled appointments in calendar
+  // (Admins can still edit them from patient's appointment list)
+  if (apt.status === 'CANCELLED' || apt.status === 'COMPLETED') return false
+  // Admins can always edit all appointments
   if (isAdmin.value) return true
-  // Workers can only edit non-closed appointments
-  return apt.status !== 'CANCELLED' && apt.status !== 'COMPLETED'
+  // Workers can only edit appointments they are assigned to
+  const userId = authStore.user?.id
+  if (!userId) return false
+  // Check if current user is assigned to this appointment
+  if (apt.appointmentWorkers && apt.appointmentWorkers.length > 0) {
+    return apt.appointmentWorkers.some(aw => aw.userId === userId)
+  }
+  // Fallback to legacy workerId
+  return apt.workerId === userId
 }
 
 // Computed - Days visible based on view mode
@@ -240,6 +362,57 @@ const filteredAppointments = computed(() => {
   })
 })
 
+// Validate appointment time is within allowed hours (8:00 - 22:00)
+const timeValidation = computed(() => {
+  const errors: string[] = []
+  
+  if (formData.value.startTime) {
+    const startDate = new Date(formData.value.startTime)
+    const startHour = startDate.getHours()
+    
+    if (startHour < MIN_HOUR) {
+      errors.push(`La hora de inicio no puede ser antes de las ${MIN_HOUR}:00`)
+    }
+    if (startHour >= MAX_HOUR) {
+      errors.push(`La hora de inicio no puede ser después de las ${MAX_HOUR - 1}:59`)
+    }
+  }
+  
+  if (formData.value.endTime) {
+    const endDate = new Date(formData.value.endTime)
+    const endHour = endDate.getHours()
+    const endMinutes = endDate.getMinutes()
+    
+    if (endHour < MIN_HOUR) {
+      errors.push(`La hora de fin no puede ser antes de las ${MIN_HOUR}:00`)
+    }
+    if (endHour > MAX_HOUR || (endHour === MAX_HOUR && endMinutes > 0)) {
+      errors.push(`La hora de fin no puede ser después de las ${MAX_HOUR}:00`)
+    }
+  }
+  
+  if (formData.value.startTime && formData.value.endTime) {
+    const startDate = new Date(formData.value.startTime)
+    const endDate = new Date(formData.value.endTime)
+    if (endDate <= startDate) {
+      errors.push('La hora de fin debe ser posterior a la hora de inicio')
+    }
+  }
+  
+  return {
+    isValid: errors.length === 0,
+    errors
+  }
+})
+
+// Check if form can be submitted
+const canSubmitForm = computed(() => {
+  return formData.value.patientId && 
+         formData.value.workerIds.length > 0 && 
+         timeValidation.value.isValid &&
+         !isSaving.value
+})
+
 // Group appointments by day with overlap detection
 const appointmentsByDay = computed(() => {
   const map = new Map<string, Array<Appointment & { column: number; totalColumns: number }>>()
@@ -331,8 +504,10 @@ const calculateOverlapLayout = (apts: Appointment[]) => {
 }
 
 // Load appointments
-const loadAppointments = async () => {
-  isLoading.value = true
+const loadAppointments = async (silent = false) => {
+  if (!silent) {
+    isLoading.value = true
+  }
   error.value = ''
   
   try {
@@ -349,7 +524,9 @@ const loadAppointments = async () => {
   } catch (err: any) {
     error.value = err.response?.data?.message || 'Error loading appointments'
   } finally {
-    isLoading.value = false
+    if (!silent) {
+      isLoading.value = false
+    }
   }
 }
 
@@ -404,7 +581,7 @@ const selectOnlyMe = () => {
   }
 }
 
-// Search patients
+// Search patients (only active ones)
 const searchPatients = async () => {
   if (patientSearch.value.length < 2) {
     searchResults.value = []
@@ -414,7 +591,7 @@ const searchPatients = async () => {
   isSearching.value = true
   try {
     const response = await api.get<ApiResponse<{ data: Patient[] }>>('/patients', {
-      params: { search: patientSearch.value, limit: 5 },
+      params: { search: patientSearch.value, limit: 5, isActive: 'true' },
     })
     if (response.success && response.data) {
       searchResults.value = response.data.data
@@ -449,14 +626,16 @@ const saveAppointment = async () => {
         status: formData.value.status,
         workerIds: formData.value.workerIds.length > 0 ? formData.value.workerIds : undefined,
       })
+      toast.success('Cita actualizada')
     } else {
       await api.post('/appointments', formData.value)
+      toast.success('Cita creada')
     }
     showModal.value = false
     resetForm()
-    await loadAppointments()
-  } catch (err: any) {
-    formError.value = err.response?.data?.message || 'Error saving appointment'
+    await loadAppointments(true) // Silent reload to avoid scroll jump
+  } catch {
+    // Error toast is shown automatically by API interceptor
   } finally {
     isSaving.value = false
   }
@@ -560,6 +739,28 @@ const resetForm = () => {
   formError.value = ''
   isEditing.value = false
   selectedAppointment.value = null
+  // Reset real time editing state
+  realTimeEditing.value = false
+  showResetConfirm.value = false
+}
+
+const closeModal = () => {
+  showModal.value = false
+  resetForm() // Clear form data when closing
+}
+
+// Start an appointment (transition to IN_PROGRESS)
+const handleStartAppointment = async () => {
+  if (!selectedAppointment.value) return
+  
+  try {
+    await activeAppointmentsStore.startAppointment(selectedAppointment.value.id)
+    showModal.value = false
+    resetForm()
+    await loadAppointments(true) // Silent reload to avoid scroll jump
+  } catch (err: any) {
+    formError.value = err.response?.data?.message || 'Error al iniciar la cita'
+  }
 }
 
 // Snap to 15-minute intervals
@@ -578,45 +779,70 @@ const getDayIndexFromX = (x: number, containerLeft: number, dayWidth: number) =>
   const rawIndex = Math.floor(relativeX / dayWidth)
   return Math.max(0, Math.min(6, rawIndex))
 }
-
 // Drag handlers
 const startDrag = (e: MouseEvent, apt: Appointment) => {
-  if (!canEditAppointment(apt)) return
   e.preventDefault()
+  e.stopPropagation()
   
-  isDragging.value = true
-  hasMoved.value = false
+  // Always track the appointment for potential click-to-open
   draggedAppointment.value = apt
+  hasMoved.value = false
   dragStartY.value = e.clientY
   dragStartX.value = e.clientX
   
-  const start = new Date(apt.startTime)
-  const end = new Date(apt.endTime)
-  originalStart.value = start
-  originalEnd.value = end
-  
-  const dayKey = start.toISOString().split('T')[0]
-  originalDayIndex.value = weekDays.value.findIndex(d => d.toISOString().split('T')[0] === dayKey)
-  
-  const startMinutes = start.getHours() * 60 + start.getMinutes()
-  const endMinutes = end.getHours() * 60 + end.getMinutes()
-  
-  previewTop.value = minutesToY(startMinutes)
-  previewHeight.value = minutesToY(endMinutes) - minutesToY(startMinutes)
-  previewDayIndex.value = originalDayIndex.value
+  // Only enable actual dragging if appointment is editable
+  if (canEditAppointment(apt)) {
+    isDragging.value = true
+    
+    const start = new Date(apt.startTime)
+    const end = new Date(apt.endTime)
+    originalStart.value = start
+    originalEnd.value = end
+    
+    const dayKey = start.toISOString().split('T')[0]
+    originalDayIndex.value = weekDays.value.findIndex(d => d.toISOString().split('T')[0] === dayKey)
+    
+    const startMinutes = start.getHours() * 60 + start.getMinutes()
+    const endMinutes = end.getHours() * 60 + end.getMinutes()
+    
+    previewTop.value = minutesToY(startMinutes)
+    previewHeight.value = minutesToY(endMinutes) - minutesToY(startMinutes)
+    previewDayIndex.value = originalDayIndex.value
+  }
   
   document.addEventListener('mousemove', onDrag)
   document.addEventListener('mouseup', endDrag)
 }
 
+// Track if user attempted to drag a non-editable appointment
+let attemptedDragNonEditable = false
+
 const onDrag = (e: MouseEvent) => {
-  if (!isDragging.value || !draggedAppointment.value || !calendarRef.value) return
+  if (!draggedAppointment.value || !calendarRef.value) return
+  
+  e.preventDefault()
   
   const dx = e.clientX - dragStartX.value
   const dy = e.clientY - dragStartY.value
   const distance = Math.sqrt(dx * dx + dy * dy)
   
   if (distance < DRAG_THRESHOLD) return
+  
+  // If trying to drag but not allowed, show toast once with specific reason
+  if (!isDragging.value && !attemptedDragNonEditable) {
+    attemptedDragNonEditable = true
+    const apt = draggedAppointment.value
+    if (apt?.status === 'COMPLETED' || apt?.status === 'CANCELLED') {
+      toast.warning(`No puedes mover citas ${apt.status === 'COMPLETED' ? 'completadas' : 'canceladas'}`)
+    } else if (apt?.status === 'NO_SHOW') {
+      toast.warning('No puedes mover citas con estado "No asistió"')
+    } else {
+      toast.warning('No puedes mover esta cita porque no estás asignado como trabajador')
+    }
+    return
+  }
+  
+  if (!isDragging.value) return
   
   hasMoved.value = true
   
@@ -643,14 +869,32 @@ const endDrag = async () => {
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', endDrag)
   
-  if (!isDragging.value || !draggedAppointment.value) {
+  // Save flag before resetting - if user tried to drag non-editable, don't open modal
+  const triedToMoveNonEditable = attemptedDragNonEditable
+  
+  // Reset drag attempt flag for next interaction
+  attemptedDragNonEditable = false
+  
+  const apt = draggedAppointment.value
+  
+  // If no appointment was tracked, nothing to do
+  if (!apt) {
     isDragging.value = false
     hasMoved.value = false
     return
   }
   
-  const apt = draggedAppointment.value
+  // If user tried to drag a non-editable appointment, don't open modal
+  if (triedToMoveNonEditable) {
+    isDragging.value = false
+    hasMoved.value = false
+    draggedAppointment.value = null
+    originalStart.value = null
+    originalEnd.value = null
+    return
+  }
   
+  // If no movement occurred, open the modal (works for both editable and non-editable)
   if (!hasMoved.value) {
     isDragging.value = false
     hasMoved.value = false
@@ -658,6 +902,13 @@ const endDrag = async () => {
     originalStart.value = null
     originalEnd.value = null
     openEditAppointment(apt)
+    return
+  }
+  
+  // Only process actual drag if dragging was enabled
+  if (!isDragging.value) {
+    draggedAppointment.value = null
+    hasMoved.value = false
     return
   }
   
@@ -678,7 +929,7 @@ const endDrag = async () => {
         startTime: newStart.toISOString(),
         endTime: newEnd.toISOString(),
       })
-      await loadAppointments()
+      await loadAppointments(true) // Silent reload to avoid scroll jump
     } catch (err: any) {
       error.value = err.response?.data?.message || 'Error updating appointment'
     }
@@ -757,7 +1008,7 @@ const endResize = async () => {
       await api.put(`/appointments/${apt.id}`, {
         endTime: newEnd.toISOString(),
       })
-      await loadAppointments()
+      await loadAppointments(true) // Silent reload to avoid scroll jump
     } catch (err: any) {
       error.value = err.response?.data?.message || 'Error updating appointment'
     }
@@ -808,6 +1059,22 @@ const isToday = (date: Date) => {
   return date.toDateString() === today.toDateString()
 }
 
+// Current time indicator position
+const currentTimePosition = computed(() => {
+  const currentHour = now.value.getHours()
+  const currentMinutes = now.value.getMinutes()
+  const totalMinutes = currentHour * 60 + currentMinutes
+  
+  // Only show if within visible hours range
+  if (currentHour < START_HOUR || currentHour >= END_HOUR) {
+    return null
+  }
+  
+  // Calculate position (same formula as minutesToY)
+  const top = ((totalMinutes - START_HOUR * 60) / 60) * HOUR_HEIGHT
+  return top
+})
+
 // Month view helpers
 const getMonthDayAppointments = (day: Date) => {
   const key = day.toISOString().split('T')[0]
@@ -836,6 +1103,11 @@ watch(patientSearch, () => {
 onMounted(async () => {
   await loadWorkers()
   await loadAppointments()
+  
+  // Start time update interval for current time indicator
+  timeUpdateInterval = setInterval(() => {
+    now.value = new Date()
+  }, 60000) // Update every minute
 })
 
 onUnmounted(() => {
@@ -843,6 +1115,12 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', endDrag)
   document.removeEventListener('mousemove', onResize)
   document.removeEventListener('mouseup', endResize)
+  
+  // Clear time update interval
+  if (timeUpdateInterval) {
+    clearInterval(timeUpdateInterval)
+    timeUpdateInterval = null
+  }
 })
 
 // Appointment types
@@ -857,6 +1135,7 @@ const appointmentTypes = [
 // Appointment statuses
 const appointmentStatuses = [
   { value: 'SCHEDULED', label: 'Programada' },
+  { value: 'IN_PROGRESS', label: 'En Progreso' },
   { value: 'COMPLETED', label: 'Completada' },
   { value: 'CANCELLED', label: 'Cancelada' },
   { value: 'NO_SHOW', label: 'No presentado' },
@@ -895,7 +1174,7 @@ const appointmentStatuses = [
       
       <div class="space-y-1">
         <label 
-          v-for="(worker, index) in workers" 
+          v-for="worker in workers" 
           :key="worker.id"
           class="flex items-center gap-2 p-2 rounded-lg hover:bg-surface-100 cursor-pointer"
         >
@@ -907,11 +1186,8 @@ const appointmentStatuses = [
           />
           <div 
             class="w-4 h-4 rounded border-2 flex items-center justify-center"
-            :class="[
-              selectedWorkerIds.has(worker.id) 
-                ? WORKER_COLORS[index % WORKER_COLORS.length]?.bg + ' border-transparent' 
-                : 'border-surface-300'
-            ]"
+            :class="selectedWorkerIds.has(worker.id) ? 'border-transparent' : 'border-surface-300'"
+            :style="selectedWorkerIds.has(worker.id) ? getWorkerColorStyle(worker.id) : {}"
           >
             <svg v-if="selectedWorkerIds.has(worker.id)" class="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
               <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
@@ -1075,16 +1351,27 @@ const appointmentStatuses = [
                   <div class="absolute w-full h-px bg-surface-100/50" style="top: 75%"></div>
                 </div>
 
+                <!-- Current time indicator (only on today) -->
+                <div 
+                  v-if="isToday(day) && currentTimePosition !== null"
+                  class="absolute left-0 right-0 z-20 pointer-events-none"
+                  :style="{ top: currentTimePosition + 'px' }"
+                >
+                  <div class="relative flex items-center">
+                    <!-- Red circle marker -->
+                    <div class="absolute -left-1.5 w-3 h-3 bg-red-500 rounded-full shadow-sm"></div>
+                    <!-- Red line -->
+                    <div class="w-full h-0.5 bg-red-500"></div>
+                  </div>
+                </div>
+
                 <!-- Appointments -->
                 <div 
                   v-for="apt in appointmentsByDay.get(day.toISOString().split('T')[0])" 
                   :key="apt.id"
-                  :style="getAppointmentStyle(apt)"
                   class="absolute rounded-lg px-2 py-1 text-white text-xs overflow-hidden select-none"
-                  :class="[
-                    getWorkerColor(apt.workerId || '').bg,
-                    canEditAppointment(apt) ? 'cursor-grab active:cursor-grabbing' : 'cursor-not-allowed opacity-60'
-                  ]"
+                  :class="canEditAppointment(apt) ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer opacity-75'"
+                  :style="{ ...getAppointmentStyle(apt), ...getWorkerColorStyle(apt.workerId || '') }"
                   @mousedown="startDrag($event, apt)"
                 >
                   <p class="font-medium truncate">
@@ -1109,9 +1396,9 @@ const appointmentStatuses = [
                     height: `${Math.max(previewHeight, 32)}px`,
                     left: '4px',
                     right: '4px',
+                    ...getWorkerColorStyle(draggedAppointment.workerId || ''),
                   }"
                   class="absolute rounded-lg px-2 py-1 text-white text-xs overflow-hidden pointer-events-none border-2 border-white/50"
-                  :class="getWorkerColor(draggedAppointment.workerId || '').bg"
                 >
                   <p class="font-medium truncate">
                     {{ draggedAppointment.patient?.firstName }} {{ draggedAppointment.patient?.lastName }}
@@ -1177,7 +1464,7 @@ const appointmentStatuses = [
                     v-for="apt in getMonthDayAppointments(day).slice(0, 3)" 
                     :key="apt.id"
                     class="text-[10px] truncate rounded px-1 py-0.5 text-white"
-                    :class="getWorkerColor(apt.workerId || '').bg"
+                    :style="getWorkerColorStyle(apt.workerId || '')"
                     @click.stop="openEditAppointment(apt)"
                   >
                     {{ formatTime(apt.startTime) }} {{ apt.patient?.firstName }}
@@ -1199,149 +1486,323 @@ const appointmentStatuses = [
     <!-- Appointment Modal -->
     <Teleport to="body">
       <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-surface-900/50" @click="showModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md animate-scale-in">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
-            <h2 class="text-lg font-semibold text-surface-900">{{ isEditing ? 'Editar Cita' : 'Nueva Cita' }}</h2>
-            <button @click="showModal = false" class="text-surface-400 hover:text-surface-600">
+        <div class="absolute inset-0 bg-surface-900/50" @click="closeModal"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md max-h-[85vh] flex flex-col animate-scale-in">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 flex-shrink-0">
+            <div class="flex items-center gap-3">
+              <h2 class="text-lg font-semibold text-surface-900">
+                {{ isReadOnlyModal ? 'Ver Cita' : (isEditing ? 'Editar Cita' : 'Nueva Cita') }}
+              </h2>
+              <!-- Start Appointment Button in header - only visible to assigned workers -->
+              <button 
+                v-if="isEditing && selectedAppointment?.status === 'SCHEDULED' && isCurrentUserAssignedToAppointment && !isReadOnlyModal"
+                type="button" 
+                @click="handleStartAppointment"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-full transition-colors"
+              >
+                <PlayIcon class="w-4 h-4" />
+                Iniciar
+              </button>
+            </div>
+            <button @click="closeModal" class="text-surface-400 hover:text-surface-600">
               <XMarkIcon class="w-6 h-6" />
             </button>
           </div>
           
-          <form @submit.prevent="saveAppointment" class="p-6 space-y-4">
-            <div v-if="formError" class="p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-700 text-sm">
-              {{ formError }}
-            </div>
-            
-            <!-- Patient search -->
-            <div class="relative">
-              <label class="label">Paciente *</label>
-              <input 
-                v-model="patientSearch" 
-                type="text" 
-                class="input" 
-                :class="{ 'bg-surface-100': isEditing }"
-                :disabled="isEditing"
-                placeholder="Buscar paciente..."
-                @focus="searchPatients"
-              />
-              <div 
-                v-if="searchResults.length > 0 && !isEditing"
-                class="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg border border-surface-200 max-h-48 overflow-auto"
-              >
-                <button
-                  v-for="patient in searchResults"
-                  :key="patient.id"
-                  type="button"
-                  @click="selectPatient(patient)"
-                  class="w-full px-4 py-2 text-left hover:bg-surface-50 flex items-center gap-2"
-                >
-                  <UserIcon class="w-4 h-4 text-surface-400" />
-                  {{ patient.firstName }} {{ patient.lastName }}
-                </button>
+          <!-- Scrollable content -->
+          <form @submit.prevent="saveAppointment" class="flex flex-col flex-1 overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-6 space-y-4">
+              <!-- Read-only warning banner -->
+              <div v-if="isReadOnlyModal" class="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm flex items-center gap-2">
+                <EyeIcon class="w-5 h-5 flex-shrink-0" />
+                <span>Solo visualización. No estás asignado a esta cita.</span>
               </div>
-            </div>
-            
-            <!-- Type -->
-            <div>
-              <label class="label">Tipo de cita *</label>
-              <select v-model="formData.type" required class="input">
-                <option v-for="type in appointmentTypes" :key="type.value" :value="type.value">
-                  {{ type.label }}
-                </option>
-              </select>
-            </div>
-            
-            <!-- Worker selector (dropdown with checkboxes) -->
-            <div class="relative">
-              <label class="label">Médicos asignados *</label>
-              <div 
-                class="input cursor-pointer flex items-center justify-between"
-                @click="showWorkerDropdown = !showWorkerDropdown"
-              >
-                <span v-if="formData.workerIds.length === 0" class="text-surface-400">
-                  Seleccionar médicos...
-                </span>
-                <span v-else class="truncate">
-                  {{ formData.workerIds.length }} médico(s) seleccionado(s)
-                </span>
-                <svg class="w-4 h-4 text-surface-400 transition-transform" :class="{ 'rotate-180': showWorkerDropdown }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
+              
+              <div v-if="formError" class="p-3 bg-danger-50 border border-danger-200 rounded-lg text-danger-700 text-sm">
+                {{ formError }}
               </div>
-              <!-- Backdrop to close on click outside -->
-              <div 
-                v-if="showWorkerDropdown" 
-                class="fixed inset-0 z-40" 
-                @click="showWorkerDropdown = false"
-              ></div>
-              <!-- Dropdown panel -->
-              <div 
-                v-if="showWorkerDropdown"
-                class="absolute z-50 mt-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-48 overflow-auto"
-                @click.stop
-              >
-                <label 
-                  v-for="worker in workers" 
-                  :key="worker.id"
-                  class="flex items-center gap-3 px-3 py-2 hover:bg-surface-50 cursor-pointer"
+              
+              <!-- Patient search -->
+              <div class="relative">
+                <label class="label">Paciente *</label>
+                <input 
+                  v-model="patientSearch" 
+                  type="text" 
+                  class="input" 
+                  :class="{ 'bg-surface-100': isEditing }"
+                  :disabled="isEditing"
+                  placeholder="Buscar paciente..."
+                  @focus="searchPatients"
+                />
+                <div 
+                  v-if="searchResults.length > 0 && !isEditing"
+                  class="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg border border-surface-200 max-h-48 overflow-auto"
                 >
-                  <input 
-                    type="checkbox" 
-                    :value="worker.id"
-                    v-model="formData.workerIds"
-                    class="w-4 h-4 text-primary-600 rounded border-surface-300 focus:ring-primary-500"
-                    @click.stop
-                  />
-                  <span class="text-sm">
-                    {{ worker.firstName }} {{ worker.lastName }}
-                    <span v-if="worker.id === authStore.user?.id" class="text-primary-600 font-medium">(yo)</span>
+                  <button
+                    v-for="patient in searchResults"
+                    :key="patient.id"
+                    type="button"
+                    @click="selectPatient(patient)"
+                    class="w-full px-4 py-2 text-left hover:bg-surface-50 flex items-center gap-2"
+                  >
+                    <UserIcon class="w-4 h-4 text-surface-400" />
+                    {{ patient.firstName }} {{ patient.lastName }}
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Type -->
+              <div>
+                <label class="label">Tipo de cita *</label>
+                <select v-model="formData.type" required class="input">
+                  <option v-for="type in appointmentTypes" :key="type.value" :value="type.value">
+                    {{ type.label }}
+                  </option>
+                </select>
+              </div>
+              
+              <!-- Worker selector (dropdown with checkboxes) -->
+              <div class="relative">
+                <label class="label">Médicos asignados *</label>
+                <div 
+                  class="input cursor-pointer flex items-center justify-between"
+                  @click="showWorkerDropdown = !showWorkerDropdown"
+                >
+                  <span v-if="formData.workerIds.length === 0" class="text-surface-400">
+                    Seleccionar médicos...
                   </span>
-                </label>
+                  <span v-else class="truncate">
+                    {{ formData.workerIds.length }} médico(s) seleccionado(s)
+                  </span>
+                  <svg class="w-4 h-4 text-surface-400 transition-transform" :class="{ 'rotate-180': showWorkerDropdown }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+                <!-- Backdrop to close on click outside -->
+                <div 
+                  v-if="showWorkerDropdown" 
+                  class="fixed inset-0 z-40" 
+                  @click="showWorkerDropdown = false"
+                ></div>
+                <!-- Dropdown panel -->
+                <div 
+                  v-if="showWorkerDropdown"
+                  class="absolute z-50 mt-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-48 overflow-auto"
+                  @click.stop
+                >
+                  <label 
+                    v-for="worker in workers" 
+                    :key="worker.id"
+                    class="flex items-center gap-3 px-3 py-2 hover:bg-surface-50 cursor-pointer"
+                  >
+                    <input 
+                      type="checkbox" 
+                      :value="worker.id"
+                      v-model="formData.workerIds"
+                      class="w-4 h-4 text-primary-600 rounded border-surface-300 focus:ring-primary-500"
+                      @click.stop
+                    />
+                    <span class="text-sm">
+                      {{ worker.firstName }} {{ worker.lastName }}
+                      <span v-if="worker.id === authStore.user?.id" class="text-primary-600 font-medium">(yo)</span>
+                    </span>
+                  </label>
+                </div>
+                <p v-if="formData.workerIds.length === 0" class="text-xs text-danger-500 mt-1">
+                  Selecciona al menos un médico
+                </p>
               </div>
-              <p v-if="formData.workerIds.length === 0" class="text-xs text-danger-500 mt-1">
-                Selecciona al menos un médico
-              </p>
-            </div>
-            
-            <!-- Status (only when editing) -->
-            <div v-if="isEditing">
-              <label class="label">Estado de la cita</label>
-              <select v-model="formData.status" class="input">
-                <option v-for="status in appointmentStatuses" :key="status.value" :value="status.value">
-                  {{ status.label }}
-                </option>
-              </select>
-            </div>
-            
-            <!-- Title -->
-            <div>
-              <label class="label">Título (opcional)</label>
-              <input v-model="formData.title" type="text" class="input" placeholder="Descripción breve" />
-            </div>
-            
-            <!-- Times -->
-            <div class="grid grid-cols-2 gap-4">
+              
+              <!-- Status (only when editing) -->
+              <div v-if="isEditing">
+                <label class="label">Estado de la cita</label>
+                <select v-model="formData.status" class="input">
+                  <option v-for="status in appointmentStatuses" :key="status.value" :value="status.value">
+                    {{ status.label }}
+                  </option>
+                </select>
+              </div>
+              
+              <!-- Title -->
               <div>
-                <label class="label">Inicio *</label>
-                <input v-model="formData.startTime" type="datetime-local" required class="input" />
+                <label class="label">Título (opcional)</label>
+                <input v-model="formData.title" type="text" class="input" placeholder="Descripción breve" />
               </div>
+              
+              <!-- Times -->
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="label">Inicio *</label>
+                  <input 
+                    v-model="formData.startTime" 
+                    type="datetime-local" 
+                    required 
+                    class="input"
+                    :class="{ 'border-danger-500 focus:border-danger-500 focus:ring-danger-500': !timeValidation.isValid && formData.startTime }"
+                  />
+                </div>
+                <div>
+                  <label class="label">Fin *</label>
+                  <input 
+                    v-model="formData.endTime" 
+                    type="datetime-local" 
+                    required 
+                    class="input"
+                    :class="{ 'border-danger-500 focus:border-danger-500 focus:ring-danger-500': !timeValidation.isValid && formData.endTime }"
+                  />
+                </div>
+              </div>
+              
+              <!-- Time validation errors -->
+              <div v-if="!timeValidation.isValid" class="p-3 rounded-lg bg-danger-50 border border-danger-200">
+                <p v-for="(error, index) in timeValidation.errors" :key="index" class="text-sm text-danger-600">
+                  {{ error }}
+                </p>
+                <p class="text-xs text-danger-500 mt-1">
+                  Horario permitido: {{ MIN_HOUR }}:00 - {{ MAX_HOUR }}:00
+                </p>
+              </div>
+              
+              <!-- Real Time Section (Admin only, for IN_PROGRESS or COMPLETED appointments) -->
+              <div 
+                v-if="isEditing && isAdmin && selectedAppointment && (selectedAppointment.status === 'IN_PROGRESS' || selectedAppointment.status === 'COMPLETED') && selectedAppointment.realStartTime"
+                class="p-4 rounded-lg bg-surface-50 border border-surface-200"
+              >
+                <div class="flex items-center justify-between mb-3">
+                  <h4 class="font-medium text-surface-900 flex items-center gap-2">
+                    <ClockIcon class="w-4 h-4 text-primary-500" />
+                    Tiempo Real
+                  </h4>
+                  <div class="flex gap-2">
+                    <button
+                      v-if="!realTimeEditing"
+                      type="button"
+                      @click="initRealTimeForm"
+                      class="text-xs text-primary-600 hover:text-primary-700"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      v-if="!realTimeEditing"
+                      type="button"
+                      @click="showResetConfirm = true"
+                      class="text-xs text-danger-600 hover:text-danger-700"
+                    >
+                      Resetear
+                    </button>
+                  </div>
+                </div>
+                
+                <!-- View mode -->
+                <div v-if="!realTimeEditing" class="space-y-2 text-sm">
+                  <div class="flex justify-between">
+                    <span class="text-surface-500">Inicio real:</span>
+                    <span class="font-medium">{{ formatTime(selectedAppointment.realStartTime!) }}</span>
+                  </div>
+                  <div v-if="selectedAppointment.realEndTime" class="flex justify-between">
+                    <span class="text-surface-500">Fin real:</span>
+                    <span class="font-medium">{{ formatTime(selectedAppointment.realEndTime) }}</span>
+                  </div>
+                  <div v-if="selectedAppointment.pausedDuration" class="flex justify-between">
+                    <span class="text-surface-500">Tiempo pausado:</span>
+                    <span class="font-medium">{{ selectedAppointment.pausedDuration }} min</span>
+                  </div>
+                  <div v-if="formatRealDuration(selectedAppointment)" class="flex justify-between pt-2 border-t border-surface-200">
+                    <span class="text-surface-700 font-medium">Tiempo trabajado:</span>
+                    <span class="font-bold text-primary-600">{{ formatRealDuration(selectedAppointment) }}</span>
+                  </div>
+                </div>
+                
+                <!-- Edit mode -->
+                <div v-else class="space-y-3">
+                  <div>
+                    <label class="label text-xs">Inicio real</label>
+                    <input 
+                      v-model="realTimeForm.realStartTime" 
+                      type="datetime-local" 
+                      class="input text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="label text-xs">Fin real</label>
+                    <input 
+                      v-model="realTimeForm.realEndTime" 
+                      type="datetime-local" 
+                      class="input text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="label text-xs">Tiempo pausado (minutos)</label>
+                    <input 
+                      v-model.number="realTimeForm.pausedDuration" 
+                      type="number" 
+                      min="0"
+                      class="input text-sm"
+                    />
+                  </div>
+                  <div class="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      @click="realTimeEditing = false"
+                      class="btn-secondary btn-sm flex-1"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      @click="handleUpdateRealTime"
+                      :disabled="isSaving"
+                      class="btn-primary btn-sm flex-1"
+                    >
+                      {{ isSaving ? 'Guardando...' : 'Guardar' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Reset Confirmation Dialog -->
+              <div v-if="showResetConfirm" class="p-4 rounded-lg bg-danger-50 border border-danger-200">
+                <p class="text-sm text-danger-700 mb-3">
+                  ¿Seguro que deseas resetear el tiempo? La cita volverá a estado <strong>Programada</strong> y se cancelará cualquier solicitud de valoración pendiente.
+                </p>
+                <div class="flex gap-2">
+                  <button
+                    type="button"
+                    @click="showResetConfirm = false"
+                    class="btn-secondary btn-sm flex-1"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    @click="handleResetRealTime"
+                    :disabled="isResettingTime"
+                    class="bg-danger-500 hover:bg-danger-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex-1"
+                  >
+                    {{ isResettingTime ? 'Reseteando...' : 'Sí, resetear' }}
+                  </button>
+                </div>
+              </div>
+              
               <div>
-                <label class="label">Fin *</label>
-                <input v-model="formData.endTime" type="datetime-local" required class="input" />
+                <label class="label">Notas</label>
+                <textarea v-model="formData.notes" class="input" rows="2"></textarea>
               </div>
             </div>
             
-            <div>
-              <label class="label">Notas</label>
-              <textarea v-model="formData.notes" class="input" rows="2"></textarea>
-            </div>
-            
-            <div class="flex gap-3 pt-4">
-              <button type="button" @click="showModal = false" class="btn-secondary flex-1">
-                Cancelar
+            <!-- Footer (sticky) -->
+            <div class="flex gap-3 px-6 py-4 border-t border-surface-100 flex-shrink-0 bg-white rounded-b-2xl">
+              <button type="button" @click="closeModal" class="btn-secondary flex-1">
+                {{ isReadOnlyModal || (isEditing && (selectedAppointment?.status === 'COMPLETED' || selectedAppointment?.status === 'CANCELLED')) ? 'Cerrar' : 'Cancelar' }}
               </button>
-              <button type="submit" :disabled="isSaving || !formData.patientId" class="btn-primary flex-1">
+              <!-- Only show save button for editable appointments (not read-only) -->
+              <button 
+                v-if="!isReadOnlyModal && (!isEditing || (selectedAppointment?.status !== 'COMPLETED' && selectedAppointment?.status !== 'CANCELLED'))"
+                type="submit" 
+                :disabled="!canSubmitForm" 
+                class="btn-primary flex-1"
+              >
                 {{ isSaving ? 'Guardando...' : (isEditing ? 'Guardar Cambios' : 'Crear Cita') }}
               </button>
             </div>

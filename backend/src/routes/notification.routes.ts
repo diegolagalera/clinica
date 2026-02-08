@@ -4,7 +4,10 @@ import { authenticate, requireAdmin, tenantContext, requireClinicContext } from 
 
 const router = Router();
 
-// All routes require authentication and admin role
+// Status check - available to all authenticated users
+router.get('/status', authenticate, tenantContext, requireClinicContext, notificationController.getStatus);
+
+// All other routes require admin role
 router.use(authenticate);
 router.use(tenantContext);
 router.use(requireAdmin);

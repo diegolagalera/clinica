@@ -223,14 +223,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     const selectClinic = (clinicId: string) => {
-        const previousClinicId = currentClinicId.value
         currentClinicId.value = clinicId
         localStorage.setItem(CURRENT_CLINIC_KEY, clinicId)
-
-        // Reload page to refresh data with new clinic context
-        if (previousClinicId && previousClinicId !== clinicId) {
-            window.location.reload()
-        }
     }
 
     const selectOrganization = (orgId: string) => {

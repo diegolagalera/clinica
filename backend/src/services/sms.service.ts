@@ -22,23 +22,23 @@ export const SMS_VARIABLES = {
     doctor_name: 'Nombre del profesional',
 };
 
-// Default templates
+// Default templates (optimized for 1 SMS segment = 160 chars max)
 const DEFAULT_TEMPLATES: Record<SmsTemplateType, { name: string; content: string }> = {
     APPOINTMENT_CREATED: {
         name: 'Cita Confirmada',
-        content: 'Hola {{patient_name}}, tu cita en {{clinic_name}} está confirmada para el {{appointment_date}} a las {{appointment_time}}. Tel: {{clinic_phone}}',
+        content: '{{clinic_name}}\nCita confirmada\n{{appointment_date}} · {{appointment_time}}\nTel: {{clinic_phone}}',
     },
     APPOINTMENT_REMINDER_24H: {
         name: 'Recordatorio 24h',
-        content: 'Recordatorio: Mañana tienes cita en {{clinic_name}} a las {{appointment_time}}. ¡Te esperamos!',
+        content: '{{clinic_name}}\nRecordatorio: mañana\n{{appointment_time}}\nTel: {{clinic_phone}}',
     },
     APPOINTMENT_REMINDER_1H: {
         name: 'Recordatorio 1h',
-        content: 'Tu cita en {{clinic_name}} es en 1 hora ({{appointment_time}}). ¡Nos vemos pronto!',
+        content: '{{clinic_name}}\nTu cita es en 1h\n{{appointment_time}}\n¡Te esperamos!',
     },
     APPOINTMENT_CANCELLED: {
         name: 'Cita Cancelada',
-        content: 'Tu cita del {{appointment_date}} en {{clinic_name}} ha sido cancelada. Contacta al {{clinic_phone}} para reprogramar.',
+        content: '{{clinic_name}}\nCita cancelada: {{appointment_date}}\nContacta: {{clinic_phone}}',
     },
     CUSTOM: {
         name: 'Personalizada',

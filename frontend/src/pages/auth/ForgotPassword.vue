@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { api } from '@/services/api'
 
 const email = ref('')
 const isLoading = ref(false)
@@ -11,11 +12,10 @@ const handleSubmit = async () => {
   isLoading.value = true
 
   try {
-    // API call would go here
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    await api.post('/auth/forgot-password', { email: email.value })
     success.value = true
   } catch (err: any) {
-    error.value = err.message || 'Error al enviar el correo'
+    error.value = err.response?.data?.message || err.message || 'Error al enviar el correo'
   } finally {
     isLoading.value = false
   }

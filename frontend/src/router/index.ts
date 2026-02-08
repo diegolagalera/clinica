@@ -30,7 +30,9 @@ const ClinicCalendar = () => import('@/pages/clinic/Calendar.vue')
 const ClinicRecords = () => import('@/pages/clinic/Records.vue')
 const ClinicRadiographs = () => import('@/pages/clinic/Radiographs.vue')
 const ClinicInventory = () => import('@/pages/clinic/Inventory.vue')
+const ClinicSuppliers = () => import('@/pages/clinic/Suppliers.vue')
 const ClinicStockPacks = () => import('@/pages/clinic/StockPacks.vue')
+const ClinicStockAnalytics = () => import('@/pages/clinic/StockAnalytics.vue')
 const ClinicInvoices = () => import('@/pages/clinic/Invoices.vue')
 const ClinicNotifications = () => import('@/pages/clinic/Notifications.vue')
 const ClinicTemplateEditor = () => import('@/pages/clinic/TemplateEditor.vue')
@@ -38,6 +40,14 @@ const ClinicSmsConfig = () => import('@/pages/clinic/SmsConfig.vue')
 const ClinicSettings = () => import('@/pages/clinic/Settings.vue')
 const ClinicRatings = () => import('@/pages/clinic/Ratings.vue')
 const OdontogramFullscreen = () => import('@/pages/clinic/OdontogramFullscreen.vue')
+
+// Marketing pages
+const MarketingDashboard = () => import('@/pages/clinic/MarketingDashboard.vue')
+const TemplateLibrary = () => import('@/pages/clinic/TemplateLibrary.vue')
+const MarketingTemplateEditor = () => import('@/pages/clinic/TemplateEditor.vue')
+const BirthdaySettings = () => import('@/pages/clinic/BirthdaySettings.vue')
+const CampaignEditor = () => import('@/pages/clinic/CampaignEditor.vue')
+const AudienceBuilder = () => import('@/pages/clinic/AudienceBuilder.vue')
 
 // Patient pages
 const PatientDashboard = () => import('@/pages/patient/Dashboard.vue')
@@ -60,7 +70,7 @@ const routes: RouteRecordRaw[] = [
             { path: 'login', name: 'login', component: Login },
             { path: 'register', name: 'register', component: Register },
             { path: 'forgot-password', name: 'forgot-password', component: ForgotPassword },
-            { path: 'reset-password/:token', name: 'reset-password', component: ResetPassword },
+            { path: 'reset-password', name: 'reset-password', component: ResetPassword },
         ],
     },
 
@@ -99,7 +109,9 @@ const routes: RouteRecordRaw[] = [
             { path: 'records', name: 'clinic-records', component: ClinicRecords },
             { path: 'radiographs', name: 'clinic-radiographs', component: ClinicRadiographs },
             { path: 'inventory', name: 'clinic-inventory', component: ClinicInventory },
+            { path: 'suppliers', name: 'clinic-suppliers', component: ClinicSuppliers },
             { path: 'stock-packs', name: 'clinic-stock-packs', component: ClinicStockPacks },
+            { path: 'stock-analytics', name: 'clinic-stock-analytics', component: ClinicStockAnalytics },
             {
                 path: 'invoices',
                 name: 'clinic-invoices',
@@ -135,6 +147,63 @@ const routes: RouteRecordRaw[] = [
                 name: 'clinic-ratings',
                 component: ClinicRatings,
                 meta: { roles: [Role.ADMIN] } // Only Admin
+            },
+            // Marketing routes
+            {
+                path: 'marketing',
+                name: 'clinic-marketing',
+                component: MarketingDashboard,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'marketing/templates',
+                name: 'clinic-marketing-templates',
+                component: TemplateLibrary,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'marketing/templates/new',
+                name: 'clinic-marketing-template-new',
+                component: MarketingTemplateEditor,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'marketing/templates/:id/edit',
+                name: 'clinic-marketing-template-edit',
+                component: MarketingTemplateEditor,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'marketing/birthday',
+                name: 'clinic-marketing-birthday',
+                component: BirthdaySettings,
+                meta: { roles: [Role.ADMIN] }
+            },
+            // Campaign routes
+            {
+                path: 'marketing/campaigns/new',
+                name: 'clinic-marketing-campaign-new',
+                component: CampaignEditor,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'marketing/campaigns/:id/edit',
+                name: 'clinic-marketing-campaign-edit',
+                component: CampaignEditor,
+                meta: { roles: [Role.ADMIN] }
+            },
+            // Segment routes
+            {
+                path: 'marketing/segments/new',
+                name: 'clinic-marketing-segment-new',
+                component: AudienceBuilder,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'marketing/segments/:id/edit',
+                name: 'clinic-marketing-segment-edit',
+                component: AudienceBuilder,
+                meta: { roles: [Role.ADMIN] }
             },
         ],
     },

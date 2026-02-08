@@ -28,6 +28,7 @@ export const appointmentTypeEnum = pgEnum('appointment_type', [
 ]);
 export const appointmentStatusEnum = pgEnum('appointment_status', [
     'SCHEDULED',
+    'IN_PROGRESS',
     'COMPLETED',
     'CANCELLED',
     'NO_SHOW',
@@ -91,6 +92,21 @@ export const auditActionEnum = pgEnum('audit_action', [
     'LOGOUT',
     'EXPORT',
     'AI_ANALYSIS',
+]);
+
+export const bugReportCategoryEnum = pgEnum('bug_report_category', [
+    'UI',
+    'FUNCTIONALITY',
+    'DATA',
+    'PERFORMANCE',
+    'OTHER',
+]);
+
+export const bugReportStatusEnum = pgEnum('bug_report_status', [
+    'PENDING',
+    'IN_PROGRESS',
+    'RESOLVED',
+    'CLOSED',
 ]);
 
 // ============================================================================
@@ -271,6 +287,10 @@ export const patients = pgTable(
         insuranceNumber: varchar('insurance_number', { length: 100 }),
         consentGiven: boolean('consent_given').default(false).notNull(),
         consentDate: timestamp('consent_date'),
+        // Marketing preferences
+        acceptsMarketing: boolean('accepts_marketing').default(true).notNull(),
+        acceptsBirthdayEmails: boolean('accepts_birthday_emails').default(true).notNull(),
+        marketingUnsubscribeToken: varchar('marketing_unsubscribe_token', { length: 64 }),
         isActive: boolean('is_active').default(true).notNull(),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -305,7 +325,12 @@ export const appointments = pgTable(
         description: text('description'),
         startTime: timestamp('start_time').notNull(),
         endTime: timestamp('end_time').notNull(),
-        duration: integer('duration').notNull(), // In minutes
+        duration: integer('duration').notNull(), // In minutes (planned)
+        // Real-time tracking fields
+        realStartTime: timestamp('real_start_time'),  // Actual start time
+        realEndTime: timestamp('real_end_time'),      // Actual end time
+        pausedDuration: integer('paused_duration').default(0), // Paused minutes
+        startedById: uuid('started_by_id').references(() => users.id), // Who started
         notes: text('notes'),
         reminderSent: boolean('reminder_sent').default(false).notNull(),
         createdById: uuid('created_by_id').references(() => users.id),
@@ -466,6 +491,35 @@ export const radiographAiResults = pgTable(
 );
 
 // ============================================================================
+// SUPPLIERS
+// ============================================================================
+
+export const suppliers = pgTable(
+    'suppliers',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        name: varchar('name', { length: 255 }).notNull(),
+        contactPerson: varchar('contact_person', { length: 255 }),
+        email: varchar('email', { length: 255 }),
+        phone: varchar('phone', { length: 50 }),
+        phone2: varchar('phone2', { length: 50 }),
+        website: varchar('website', { length: 500 }),
+        address: text('address'),
+        notes: text('notes'),
+        isActive: boolean('is_active').default(true).notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('suppliers_clinic_id_idx').on(table.clinicId),
+        nameIdx: index('suppliers_name_idx').on(table.name),
+    })
+);
+
+// ============================================================================
 // INVENTORY ITEMS
 // ============================================================================
 
@@ -476,6 +530,8 @@ export const inventoryItems = pgTable(
         clinicId: uuid('clinic_id')
             .notNull()
             .references(() => clinics.id, { onDelete: 'cascade' }),
+        supplierId: uuid('supplier_id')
+            .references(() => suppliers.id, { onDelete: 'set null' }),
         sku: varchar('sku', { length: 100 }),
         name: varchar('name', { length: 255 }).notNull(),
         description: text('description'),
@@ -486,17 +542,18 @@ export const inventoryItems = pgTable(
         maxStock: integer('max_stock'),
         costPrice: decimal('cost_price', { precision: 10, scale: 2 }),
         sellPrice: decimal('sell_price', { precision: 10, scale: 2 }),
-        supplier: varchar('supplier', { length: 255 }),
+        supplier: varchar('supplier', { length: 255 }), // Legacy field, keep for backwards compatibility
         supplierCode: varchar('supplier_code', { length: 100 }),
         expirationDate: timestamp('expiration_date'),
         location: varchar('location', { length: 100 }),
-        imageUrl: varchar('image_url', { length: 500 }), // URL de imagen del producto
+        imageUrl: varchar('image_url', { length: 500 }),
         isActive: boolean('is_active').default(true).notNull(),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('inventory_items_clinic_id_idx').on(table.clinicId),
+        supplierIdIdx: index('inventory_items_supplier_id_idx').on(table.supplierId),
         skuIdx: index('inventory_items_sku_idx').on(table.sku),
         categoryIdx: index('inventory_items_category_idx').on(table.category),
         lowStockIdx: index('inventory_items_low_stock_idx').on(table.currentStock, table.minStock),
@@ -519,6 +576,7 @@ export const stockMovements = pgTable(
             .references(() => inventoryItems.id, { onDelete: 'cascade' }),
         type: stockMovementTypeEnum('type').notNull(),
         quantity: integer('quantity').notNull(),
+        unitCost: decimal('unit_cost', { precision: 10, scale: 2 }), // Cost per unit for IN movements
         previousStock: integer('previous_stock').notNull(),
         newStock: integer('new_stock').notNull(),
         reason: text('reason'),
@@ -605,6 +663,9 @@ export const appointmentStockUsage = pgTable(
         registeredById: uuid('registered_by_id')
             .notNull()
             .references(() => users.id),
+        // Deferred confirmation: stock is only deducted when confirmed (on appointment completion)
+        isConfirmed: boolean('is_confirmed').default(false).notNull(),
+        confirmedAt: timestamp('confirmed_at'),
         createdAt: timestamp('created_at').defaultNow().notNull(),
     },
     (table) => ({
@@ -964,10 +1025,22 @@ export const radiographAiResultsRelations = relations(radiographAiResults, ({ on
     }),
 }));
 
+export const suppliersRelations = relations(suppliers, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [suppliers.clinicId],
+        references: [clinics.id],
+    }),
+    items: many(inventoryItems),
+}));
+
 export const inventoryItemsRelations = relations(inventoryItems, ({ one, many }) => ({
     clinic: one(clinics, {
         fields: [inventoryItems.clinicId],
         references: [clinics.id],
+    }),
+    supplier: one(suppliers, {
+        fields: [inventoryItems.supplierId],
+        references: [suppliers.id],
     }),
     movements: many(stockMovements),
     packItems: many(stockPackItems),
@@ -1610,5 +1683,303 @@ export const workerRatingsRelations = relations(workerRatings, ({ one }) => ({
     appointment: one(appointments, {
         fields: [workerRatings.appointmentId],
         references: [appointments.id],
+    }),
+}));
+
+// ============================================================================
+// EMAIL MARKETING
+// ============================================================================
+
+export const campaignStatusEnum = pgEnum('campaign_status', [
+    'DRAFT',      // En edición
+    'SCHEDULED',  // Programada para enviar
+    'SENDING',    // Enviando
+    'SENT',       // Enviada
+    'PAUSED',     // Pausada
+    'CANCELLED',  // Cancelada
+]);
+
+export const marketingTemplateCategoryEnum = pgEnum('marketing_template_category', [
+    'birthday',
+    'promo',
+    'seasonal',
+    'educational',
+    'reactivation',
+    'onboarding',
+    'newsletter',
+    'custom',
+]);
+
+// Marketing Templates (independent from notification templates)
+export const marketingTemplates = pgTable(
+    'marketing_templates',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id').references(() => clinics.id, { onDelete: 'cascade' }), // null = system template
+        name: varchar('name', { length: 100 }).notNull(),
+        subject: varchar('subject', { length: 255 }).notNull(),
+        category: marketingTemplateCategoryEnum('category').default('custom'),
+        designJson: jsonb('design_json').notNull().default({}), // Unlayer JSON
+        htmlContent: text('html_content'), // Rendered HTML cache
+        previewText: varchar('preview_text', { length: 150 }),
+        thumbnailUrl: varchar('thumbnail_url', { length: 500 }),
+        isSystemTemplate: boolean('is_system_template').default(false).notNull(),
+        isActive: boolean('is_active').default(true).notNull(),
+        createdById: uuid('created_by_id').references(() => users.id),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('marketing_templates_clinic_id_idx').on(table.clinicId),
+        categoryIdx: index('marketing_templates_category_idx').on(table.category),
+        systemIdx: index('marketing_templates_system_idx').on(table.isSystemTemplate),
+    })
+);
+
+// Audience Segments (saved patient filters)
+export const audienceSegments = pgTable(
+    'audience_segments',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        name: varchar('name', { length: 100 }).notNull(),
+        description: text('description'),
+        filters: jsonb('filters').notNull().default([]), // Array of filter conditions
+        patientCount: integer('patient_count').default(0), // Cached count
+        isActive: boolean('is_active').default(true).notNull(),
+        createdById: uuid('created_by_id').references(() => users.id),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('audience_segments_clinic_id_idx').on(table.clinicId),
+    })
+);
+
+// Marketing Campaigns
+export const marketingCampaigns = pgTable(
+    'marketing_campaigns',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        templateId: uuid('template_id').references(() => marketingTemplates.id, { onDelete: 'set null' }),
+        segmentId: uuid('segment_id').references(() => audienceSegments.id, { onDelete: 'set null' }),
+        name: varchar('name', { length: 100 }).notNull(),
+        subject: varchar('subject', { length: 255 }).notNull(),
+        htmlContent: text('html_content'), // Rendered content at send time
+        status: campaignStatusEnum('status').default('DRAFT').notNull(),
+        scheduledAt: timestamp('scheduled_at'), // null = immediate
+        sentAt: timestamp('sent_at'),
+        totalRecipients: integer('total_recipients').default(0),
+        sentCount: integer('sent_count').default(0),
+        failedCount: integer('failed_count').default(0),
+        createdById: uuid('created_by_id').references(() => users.id),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('marketing_campaigns_clinic_id_idx').on(table.clinicId),
+        statusIdx: index('marketing_campaigns_status_idx').on(table.status),
+        scheduledAtIdx: index('marketing_campaigns_scheduled_at_idx').on(table.scheduledAt),
+    })
+);
+
+// Campaign Recipients (email queue for batch sending)
+export const campaignRecipients = pgTable(
+    'campaign_recipients',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        campaignId: uuid('campaign_id')
+            .notNull()
+            .references(() => marketingCampaigns.id, { onDelete: 'cascade' }),
+        patientId: uuid('patient_id')
+            .notNull()
+            .references(() => patients.id, { onDelete: 'cascade' }),
+        email: varchar('email', { length: 255 }).notNull(),
+        status: varchar('status', { length: 20 }).default('pending').notNull(), // pending, sent, failed
+        sentAt: timestamp('sent_at'),
+        errorMessage: text('error_message'),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        campaignIdIdx: index('campaign_recipients_campaign_id_idx').on(table.campaignId),
+        statusIdx: index('campaign_recipients_status_idx').on(table.status),
+    })
+);
+
+// Birthday Email Settings (per clinic)
+export const birthdaySettings = pgTable('birthday_settings', {
+    id: uuid('id').defaultRandom().primaryKey(),
+    clinicId: uuid('clinic_id')
+        .notNull()
+        .unique()
+        .references(() => clinics.id, { onDelete: 'cascade' }),
+    isEnabled: boolean('is_enabled').default(false).notNull(),
+    templateId: uuid('template_id').references(() => marketingTemplates.id, { onDelete: 'set null' }),
+    sendHour: integer('send_hour').default(9).notNull(), // 0-23 (9 = 9:00 AM)
+    daysInAdvance: integer('days_in_advance').default(0).notNull(), // 0 = same day
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// Birthday Email Log (prevents duplicate emails)
+export const birthdayEmailLog = pgTable(
+    'birthday_email_log',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        patientId: uuid('patient_id')
+            .notNull()
+            .references(() => patients.id, { onDelete: 'cascade' }),
+        year: integer('year').notNull(), // Birthday year
+        sentAt: timestamp('sent_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicPatientYearIdx: uniqueIndex('birthday_email_log_unique_idx').on(
+            table.clinicId,
+            table.patientId,
+            table.year
+        ),
+    })
+);
+
+// EMAIL MARKETING RELATIONS
+
+export const marketingTemplatesRelations = relations(marketingTemplates, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [marketingTemplates.clinicId],
+        references: [clinics.id],
+    }),
+    createdBy: one(users, {
+        fields: [marketingTemplates.createdById],
+        references: [users.id],
+    }),
+    campaigns: many(marketingCampaigns),
+}));
+
+export const audienceSegmentsRelations = relations(audienceSegments, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [audienceSegments.clinicId],
+        references: [clinics.id],
+    }),
+    createdBy: one(users, {
+        fields: [audienceSegments.createdById],
+        references: [users.id],
+    }),
+    campaigns: many(marketingCampaigns),
+}));
+
+export const marketingCampaignsRelations = relations(marketingCampaigns, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [marketingCampaigns.clinicId],
+        references: [clinics.id],
+    }),
+    template: one(marketingTemplates, {
+        fields: [marketingCampaigns.templateId],
+        references: [marketingTemplates.id],
+    }),
+    segment: one(audienceSegments, {
+        fields: [marketingCampaigns.segmentId],
+        references: [audienceSegments.id],
+    }),
+    createdBy: one(users, {
+        fields: [marketingCampaigns.createdById],
+        references: [users.id],
+    }),
+    recipients: many(campaignRecipients),
+}));
+
+export const campaignRecipientsRelations = relations(campaignRecipients, ({ one }) => ({
+    campaign: one(marketingCampaigns, {
+        fields: [campaignRecipients.campaignId],
+        references: [marketingCampaigns.id],
+    }),
+    patient: one(patients, {
+        fields: [campaignRecipients.patientId],
+        references: [patients.id],
+    }),
+}));
+
+export const birthdaySettingsRelations = relations(birthdaySettings, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [birthdaySettings.clinicId],
+        references: [clinics.id],
+    }),
+    template: one(marketingTemplates, {
+        fields: [birthdaySettings.templateId],
+        references: [marketingTemplates.id],
+    }),
+}));
+
+export const birthdayEmailLogRelations = relations(birthdayEmailLog, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [birthdayEmailLog.clinicId],
+        references: [clinics.id],
+    }),
+    patient: one(patients, {
+        fields: [birthdayEmailLog.patientId],
+        references: [patients.id],
+    }),
+}));
+
+// ============================================================================
+// BUG REPORTS
+// ============================================================================
+
+export const bugReports = pgTable(
+    'bug_reports',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        userId: uuid('user_id')
+            .notNull()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        organizationId: uuid('organization_id')
+            .references(() => organizations.id, { onDelete: 'set null' }),
+        clinicId: uuid('clinic_id')
+            .references(() => clinics.id, { onDelete: 'set null' }),
+        title: varchar('title', { length: 200 }).notNull(),
+        description: text('description').notNull(),
+        category: bugReportCategoryEnum('category').notNull().default('OTHER'),
+        status: bugReportStatusEnum('status').notNull().default('PENDING'),
+        pageUrl: varchar('page_url', { length: 500 }),
+        userAgent: varchar('user_agent', { length: 500 }),
+        adminNotes: text('admin_notes'),
+        resolvedAt: timestamp('resolved_at'),
+        resolvedById: uuid('resolved_by_id').references(() => users.id),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        userIdIdx: index('bug_reports_user_id_idx').on(table.userId),
+        organizationIdIdx: index('bug_reports_organization_id_idx').on(table.organizationId),
+        clinicIdIdx: index('bug_reports_clinic_id_idx').on(table.clinicId),
+        statusIdx: index('bug_reports_status_idx').on(table.status),
+        createdAtIdx: index('bug_reports_created_at_idx').on(table.createdAt),
+    })
+);
+
+export const bugReportsRelations = relations(bugReports, ({ one }) => ({
+    user: one(users, {
+        fields: [bugReports.userId],
+        references: [users.id],
+    }),
+    organization: one(organizations, {
+        fields: [bugReports.organizationId],
+        references: [organizations.id],
+    }),
+    clinic: one(clinics, {
+        fields: [bugReports.clinicId],
+        references: [clinics.id],
+    }),
+    resolvedBy: one(users, {
+        fields: [bugReports.resolvedById],
+        references: [users.id],
+        relationName: 'bugReportResolvedBy',
     }),
 }));

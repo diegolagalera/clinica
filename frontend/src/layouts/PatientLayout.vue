@@ -40,12 +40,8 @@ const isActiveRoute = (href: string) => {
         <Bars3Icon class="w-6 h-6" />
       </button>
       <div class="flex items-center gap-2 ml-3">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center">
-          <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-          </svg>
-        </div>
-        <span class="font-display font-bold text-surface-900">DentalERP</span>
+        <img src="@/assets/img/logo.png" alt="CUSPIA-ERP" class="w-10 h-10 rounded-xl object-cover shadow-md ring-2 ring-primary-100" />
+        <span class="font-display font-bold text-surface-900">CUSPIA-ERP</span>
       </div>
     </header>
 
@@ -58,13 +54,9 @@ const isActiveRoute = (href: string) => {
       <div class="fixed inset-y-0 left-0 w-64 bg-white">
         <div class="flex flex-col h-full">
           <div class="flex items-center gap-3 px-6 h-16 border-b border-surface-200">
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center">
-              <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-              </svg>
-            </div>
+            <img src="@/assets/img/logo.png" alt="CUSPIA-ERP" class="w-12 h-12 rounded-2xl object-cover shadow-lg ring-2 ring-primary-100" />
             <div>
-              <h1 class="font-display font-bold text-surface-900">DentalERP</h1>
+              <h1 class="font-display font-bold text-surface-900">CUSPIA-ERP</h1>
               <p class="text-xs text-surface-500">Portal del Paciente</p>
             </div>
           </div>
@@ -109,13 +101,9 @@ const isActiveRoute = (href: string) => {
       <!-- Desktop sidebar -->
       <aside class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-surface-200">
         <div class="flex items-center gap-3 px-6 h-16 border-b border-surface-200">
-          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center">
-            <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-            </svg>
-          </div>
+          <img src="@/assets/img/logo.png" alt="CUSPIA-ERP" class="w-12 h-12 rounded-2xl object-cover shadow-lg ring-2 ring-primary-100" />
           <div>
-            <h1 class="font-display font-bold text-surface-900">DentalERP</h1>
+            <h1 class="font-display font-bold text-surface-900">CUSPIA-ERP</h1>
             <p class="text-xs text-surface-500">Portal del Paciente</p>
           </div>
         </div>

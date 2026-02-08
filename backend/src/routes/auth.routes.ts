@@ -15,6 +15,8 @@ router.post('/verify-email', authController.verifyEmail);
 // Protected routes
 router.post('/logout', authenticate, authController.logout);
 router.get('/me', authenticate, authController.getCurrentUser);
+router.put('/me', authenticate, authController.updateMyInfo);
+router.put('/change-password', authenticate, authController.changePassword);
 
 // 2FA routes (ADMIN and SUPERADMIN only)
 router.post('/2fa/setup', authenticate, requireAdmin, authController.setup2FA);

@@ -122,7 +122,7 @@ export const startReminderScheduler = () => {
 
     // Run immediately on startup
     processReminders().catch(err => {
-        logger.error(`Initial reminder processing failed: ${err.message}`);
+        logger.error('Initial reminder processing failed:', err);
     });
 
     // Then run every 5 minutes

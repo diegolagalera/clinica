@@ -18,6 +18,7 @@ export enum AppointmentType {
 // Appointment status
 export enum AppointmentStatus {
     SCHEDULED = 'SCHEDULED',
+    IN_PROGRESS = 'IN_PROGRESS',
     COMPLETED = 'COMPLETED',
     CANCELLED = 'CANCELLED',
     NO_SHOW = 'NO_SHOW',

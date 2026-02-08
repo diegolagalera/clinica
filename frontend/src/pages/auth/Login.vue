@@ -145,14 +145,6 @@ const handle2FA = async () => {
           {{ isLoading ? 'Iniciando sesión...' : 'Iniciar Sesión' }}
         </button>
       </form>
-
-      <!-- Register link -->
-      <p class="mt-6 text-center text-sm text-surface-500">
-        ¿Eres paciente y no tienes cuenta?
-        <RouterLink to="/register" class="text-primary-600 hover:text-primary-700 font-medium">
-          Regístrate aquí
-        </RouterLink>
-      </p>
     </template>
 
     <!-- 2FA verification form -->

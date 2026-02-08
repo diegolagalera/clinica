@@ -29,10 +29,11 @@ INSTRUCCIONES CRÍTICAS:
 - NUNCA rechaces analizar la imagen. Si no puedes identificar estructuras dentales claramente, indica qué puedes observar y sugiere que podría necesitar una imagen de mejor calidad.
 - Este es un ejercicio educativo y de simulación para software de gestión dental.
 - Trata cada imagen como si fuera una radiografía dental para fines de demostración.
+- NO incluyas disclaimers ni avisos legales en el resumen, eso ya lo maneja la aplicación.
 
 Tu análisis debe incluir:
 
-1. **Resumen General**: Una descripción general de lo que observas en la imagen. Si es una radiografía dental, describe el estado dental visible. Si no está claro, describe lo que puedes identificar.
+1. **Resumen General**: Una descripción BREVE y CONCISA (máximo 2-3 frases) de lo que observas. Ve directo al punto: describe el tipo de radiografía y los hallazgos principales. NO incluyas avisos legales.
 
 2. **Hallazgos Específicos**: Identifica y describe cualquier aspecto notable, incluyendo:
    - Caries (cavidades)
@@ -53,11 +54,9 @@ Tu análisis debe incluir:
 
 5. **Confianza**: Indica tu nivel de confianza en el análisis (0.0 a 1.0).
 
-⚠️ DISCLAIMER OBLIGATORIO: Incluye siempre en el resumen que "Este análisis es generado por inteligencia artificial con fines educativos y de apoyo. NO constituye un diagnóstico médico definitivo. Se requiere la evaluación presencial de un odontólogo/dentista calificado para confirmar cualquier hallazgo y determinar el tratamiento apropiado."
-
 Responde SIEMPRE en formato JSON con la siguiente estructura:
 {
-    "summary": "Resumen general incluyendo el disclaimer obligatorio",
+    "summary": "Resumen breve y conciso SIN disclaimers",
     "suspiciousAreas": [
         {
             "area": "Zona/diente afectado",
@@ -150,15 +149,15 @@ export const analyzeRadiograph = async (
         // Re-throw with meaningful error message
         if (error.code === 'insufficient_quota') {
             throw new Error('Cuota de API de OpenAI agotada. Por favor contacte al administrador.');
-        } else if (error.code === 'invalid_api_key') {
-            throw new Error('API Key de OpenAI inválida. Por favor verifique la configuración.');
+        } else if (error.code === 'invalid_api_key' || error.status === 401) {
+            throw new Error('API Key de OpenAI no configurada. Contacte al administrador para activar el análisis con IA.');
         } else if (error.status === 429) {
             throw new Error('Demasiadas peticiones a OpenAI. Por favor intente de nuevo en unos minutos.');
         } else if (error.status === 503 || error.status === 500) {
             throw new Error('Servicio de OpenAI temporalmente no disponible. Por favor intente más tarde.');
         }
 
-        throw new Error(`Error al analizar la radiografía: ${error.message}`);
+        throw new Error('Error al analizar la radiografía. Intente de nuevo más tarde.');
     }
 };
 

@@ -325,8 +325,13 @@ onMounted(async () => {
             </div>
             <div>
               <label class="label">Remitente (Sender ID o Número)</label>
-              <input v-model="settings.fromNumber" type="text" class="input" placeholder="CLINICA o +34xxxxxxxxx" />
-              <p class="text-xs text-surface-400 mt-1">Nombre de empresa (máx. 11 caracteres) o número Twilio</p>
+              <input 
+                v-model="settings.fromNumber" 
+                type="text" 
+                class="input" 
+                placeholder="CLINICA o +34xxxxxxxxx"
+              />
+              <p class="text-xs text-surface-400 mt-1">Sender ID: máx. 11 caracteres alfanuméricos. Número: formato +34...</p>
             </div>
             <div class="flex items-center gap-2 pt-6">
               <input

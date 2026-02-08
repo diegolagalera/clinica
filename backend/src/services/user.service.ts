@@ -256,6 +256,25 @@ export const createUser = async (
         }
     }
 
+    // For ADMIN role, auto-assign to ALL clinics in their organization
+    if (input.role === 'ADMIN' && input.organizationId) {
+        const orgClinics = await db.query.clinics.findMany({
+            where: and(
+                eq(clinics.organizationId, input.organizationId),
+                eq(clinics.isActive, true)
+            ),
+        });
+
+        for (const clinic of orgClinics) {
+            await db.insert(workerClinics).values({
+                userId: user!.id,
+                clinicId: clinic.id,
+                role: 'Administrador',
+                isActive: true,
+            });
+        }
+    }
+
     return { success: true, data: user! };
 };
 
@@ -320,8 +339,9 @@ export const updateUser = async (
         }
     }
 
-    // Sync workerClinics if clinicIds was provided
-    if (allClinicIds !== undefined && (input.role === 'WORKER' || existing.role === 'WORKER')) {
+    // Sync workerClinics if clinicIds was provided (for both WORKER and ADMIN roles)
+    const currentRole = input.role || existing.role;
+    if (allClinicIds !== undefined && (currentRole === 'WORKER' || currentRole === 'ADMIN')) {
         // Delete all existing clinic assignments
         await db.delete(workerClinics).where(eq(workerClinics.userId, id));
 
@@ -330,6 +350,7 @@ export const updateUser = async (
             await db.insert(workerClinics).values({
                 userId: id,
                 clinicId: clinicId,
+                role: currentRole === 'ADMIN' ? 'Administrador' : null,
                 isActive: true,
             });
         }

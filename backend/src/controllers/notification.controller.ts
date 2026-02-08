@@ -40,6 +40,26 @@ const templateSchema = z.object({
 });
 
 /**
+ * GET /notifications/status
+ * Check if email notifications are enabled (available to all authenticated users)
+ */
+export const getStatus = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const clinicId = req.tenantContext?.clinicId;
+    if (!clinicId) {
+        res.json(success({ emailEnabled: false, smsEnabled: false }));
+        return;
+    }
+
+    const settings = await emailService.getEmailSettings(clinicId);
+    const emailEnabled = settings?.isEnabled && !!settings?.smtpHost && !!settings?.smtpUser;
+
+    res.json(success({
+        emailEnabled: !!emailEnabled,
+        smsEnabled: false, // TODO: add SMS status check
+    }));
+});
+
+/**
  * GET /notifications/settings
  */
 export const getSettings = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {

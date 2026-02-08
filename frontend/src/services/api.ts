@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosError } from 'axios'
 import { useAuthStore } from '@/stores/auth'
+import { toast } from '@/composables/useToast'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
@@ -46,22 +47,35 @@ class ApiService {
             (error) => Promise.reject(error)
         )
 
-        // Response interceptor - handle token refresh and account deactivation
+        // Response interceptor - handle token refresh, account deactivation, and show error toasts
         this.client.interceptors.response.use(
             (response) => response,
             async (error: AxiosError) => {
-                const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean }
-                const errorData = error.response?.data as { code?: string; message?: string } | undefined
+                const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean; _silentError?: boolean }
+                const errorData = error.response?.data as {
+                    code?: string
+                    message?: string
+                    errors?: Record<string, string[]>
+                } | undefined
 
                 // Handle account deactivation - immediate logout without retry
                 if (error.response?.status === 401 && errorData?.code === 'ACCOUNT_DEACTIVATED') {
                     const authStore = useAuthStore()
                     // Clear auth data and redirect to login
                     authStore.logout()
+                    toast.error('Tu cuenta ha sido desactivada')
                     return Promise.reject(new Error('Tu cuenta ha sido desactivada'))
                 }
 
                 if (error.response?.status === 401 && !originalRequest._retry) {
+                    // Don't retry auth endpoints to avoid infinite loops
+                    const isAuthEndpoint = originalRequest.url?.includes('/auth/')
+                    if (isAuthEndpoint) {
+                        const authStore = useAuthStore()
+                        authStore.logout()
+                        return Promise.reject(error)
+                    }
+
                     if (this.isRefreshing) {
                         return new Promise((resolve, reject) => {
                             this.failedQueue.push({ resolve, reject })
@@ -95,6 +109,50 @@ class ApiService {
                     } finally {
                         this.isRefreshing = false
                     }
+                }
+
+                // Show error toast for non-401 errors (unless silenced)
+                if (!originalRequest._silentError && error.response?.status !== 401) {
+                    let message = errorData?.message || 'Ha ocurrido un error'
+
+                    // Format validation errors nicely
+                    if (errorData?.errors && typeof errorData.errors === 'object') {
+                        const fieldTranslations: Record<string, string> = {
+                            email: 'Email',
+                            firstName: 'Nombre',
+                            lastName: 'Apellido',
+                            phone: 'Teléfono',
+                            dateOfBirth: 'Fecha de nacimiento',
+                            idNumber: 'DNI/NIE',
+                            address: 'Dirección',
+                            city: 'Ciudad',
+                            postalCode: 'Código postal',
+                            password: 'Contraseña',
+                            title: 'Título',
+                            description: 'Descripción',
+                            name: 'Nombre',
+                            date: 'Fecha',
+                            time: 'Hora',
+                        }
+
+                        const errorMessages = Object.entries(errorData.errors)
+                            .map(([field, messages]) => {
+                                const fieldName = fieldTranslations[field] || field
+                                const errorText = messages.map(m => {
+                                    // Translate common Zod error messages
+                                    if (m === 'Invalid email') return 'no es válido'
+                                    if (m === 'Required') return 'es obligatorio'
+                                    if (m.includes('at least')) return `debe tener al menos ${m.match(/\d+/)?.[0]} caracteres`
+                                    if (m.includes('too long')) return 'es demasiado largo'
+                                    return m
+                                }).join(', ')
+                                return `${fieldName}: ${errorText}`
+                            })
+
+                        message = errorMessages.join(' | ')
+                    }
+
+                    toast.error(message)
                 }
 
                 return Promise.reject(error)

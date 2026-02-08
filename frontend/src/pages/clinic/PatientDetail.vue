@@ -2,7 +2,9 @@
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useActiveAppointmentsStore } from '@/stores/activeAppointments'
 import { api } from '@/services/api'
+import { onSocketEvent, joinAppointmentRoom, leaveAppointmentRoom } from '@/services/websocket'
 import type { Patient, Appointment, ApiResponse, User, Radiograph } from '@/types'
 import OdontogramComponent from '@/components/odontogram/Odontogram.vue'
 import {
@@ -24,6 +26,14 @@ import {
   StarIcon,
   CubeIcon,
   MagnifyingGlassIcon,
+  PauseIcon,
+  PlayIcon,
+  CheckIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  EyeIcon,
+  SparklesIcon,
 } from '@heroicons/vue/24/outline'
 
 interface ClinicalRecord {
@@ -51,6 +61,7 @@ interface RecordType {
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const activeAppointmentsStore = useActiveAppointmentsStore()
 const patientId = computed(() => route.params.id as string)
 
 // Check if current user is admin
@@ -59,11 +70,53 @@ const isAdmin = computed(() => {
   return role === 'ADMIN' || role === 'SUPERADMIN'
 })
 
+// Get active appointment for this patient (if any)
+const activeAppointmentForPatient = computed(() => {
+  return activeAppointmentsStore.appointments.find(a => a.patientId === patientId.value)
+})
+
 // Check if appointment can be edited
 const canEditAppointment = (apt: Appointment) => {
   if (isAdmin.value) return true
   return apt.status !== 'CANCELLED' && apt.status !== 'COMPLETED'
 }
+
+// Check if appointment can be deleted/cancelled (never allow for completed - protects stock and clinical data)
+const canDeleteAppointment = (apt: Appointment) => {
+  // Never allow deleting completed appointments - they have stock and clinical data
+  if (apt.status === 'COMPLETED') return false
+  // Cancel already cancelled makes no sense
+  if (apt.status === 'CANCELLED') return false
+  // Otherwise, same rules as edit
+  return canEditAppointment(apt)
+}
+
+// Timer tick for real-time updates
+const timerTick = ref(0)
+let timerInterval: number | null = null
+
+// Computed for live elapsed time display
+const liveElapsedTime = computed(() => {
+  // Force reactivity with tick
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars  
+  const _ = timerTick.value
+  
+  const apt = activeAppointmentForPatient.value
+  if (!apt?.realStartTime) return '--:--:--'
+  
+  const startTime = new Date(apt.realStartTime).getTime()
+  const now = Date.now()
+  const elapsedMs = now - startTime
+  const pausedMs = (apt.pausedDuration ?? 0) * 60000
+  const activeMs = elapsedMs - pausedMs
+  
+  const totalSeconds = Math.floor(activeMs / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+})
 
 // State
 const patient = ref<Patient | null>(null)
@@ -99,6 +152,8 @@ const recordForm = ref({
   treatment: '',
 })
 const expandedRecords = ref<Set<string>>(new Set())
+const showSignConfirmModal = ref(false)
+const recordToSign = ref<ClinicalRecord | null>(null)
 
 // Audio recording state
 const isRecording = ref(false)
@@ -113,6 +168,7 @@ const isLoadingAppointments = ref(false)
 const showAppointmentModal = ref(false)
 const isSavingAppointment = ref(false)
 const isEditingAppointment = ref(false)
+const isReadOnlyAppointment = ref(false)
 const selectedAppointment = ref<Appointment | null>(null)
 const appointmentForm = ref({
   type: 'VISIT',
@@ -124,9 +180,22 @@ const appointmentForm = ref({
   workerIds: [] as string[],
 })
 
+// Real time editing (admin only)
+const realTimeEditing = ref(false)
+const showResetConfirm = ref(false)
+const isResettingTime = ref(false)
+const realTimeForm = ref({
+  realStartTime: '',
+  realEndTime: '',
+  pausedDuration: 0
+})
+
 // Rating requests tracking
 const ratingRequestsSent = ref<Record<string, boolean>>({})
 const sendingRatingFor = ref<string | null>(null)
+const showRatingConfirmModal = ref(false)
+const pendingRatingAppointmentId = ref<string | null>(null)
+const isEmailEnabled = ref(true) // Will be checked on load
 
 // Workers list
 const workers = ref<User[]>([])
@@ -170,6 +239,32 @@ const showStockItemDropdown = ref(false)
 const isLoadingStock = ref(false)
 const stockQuantity = ref(1)
 const stockImageLightbox = ref<string | null>(null)
+const selectedStockItem = ref<StockItem | null>(null)  // Selected item before adding
+
+// Pending stock changes (not persisted until save)
+interface PendingStockAddition {
+  tempId: string  // temporary ID for local tracking
+  itemId: string
+  quantity: number
+  item: StockItem  // full item data for display
+}
+const pendingStockAdditions = ref<PendingStockAddition[]>([])
+const pendingStockRemovals = ref<string[]>([])  // IDs of existing stock usage to remove
+const isSavingStock = ref(false)
+const stockSaveError = ref('')
+
+// Active appointment stock banner
+const bannerStockSearch = ref('')
+const showBannerStockDropdown = ref(false)
+const bannerStockQuantity = ref(1)
+const selectedBannerStockItem = ref<StockItem | null>(null)
+const bannerStockItems = ref<AppointmentStockUsage[]>([])
+const bannerPendingStock = ref<PendingStockAddition[]>([])
+const isLoadingBannerStock = ref(false)
+const showNoStockConfirmModal = ref(false)
+const showCancelActiveModal = ref(false)
+const showCompleteConfirmModal = ref(false)
+const cancelConfirmText = ref('')
 
 // Edit patient modal
 const showEditPatientModal = ref(false)
@@ -188,6 +283,7 @@ const patientForm = ref({
   postalCode: '',
   allergies: '',
   notes: '',
+  acceptsMarketing: true,
 })
 
 const appointmentTypes = [
@@ -233,6 +329,7 @@ const openEditPatientModal = () => {
     postalCode: patient.value.postalCode || '',
     allergies: patient.value.allergies || '',
     notes: patient.value.notes || '',
+    acceptsMarketing: patient.value.acceptsMarketing ?? true,
   }
   patientFormError.value = ''
   showEditPatientModal.value = true
@@ -372,12 +469,20 @@ const saveRecord = async () => {
   }
 }
 
-// Sign record
-const signRecord = async (record: ClinicalRecord) => {
-  if (!confirm('¿Firmar este registro? Una vez firmado no se puede modificar.')) return
+// Sign record - open confirmation modal
+const signRecord = (record: ClinicalRecord) => {
+  recordToSign.value = record
+  showSignConfirmModal.value = true
+}
+
+// Confirm sign record
+const confirmSignRecord = async () => {
+  if (!recordToSign.value) return
   try {
-    await api.post(`/clinical-records/${record.id}/sign`)
+    await api.post(`/clinical-records/${recordToSign.value.id}/sign`)
     await loadRecords()
+    showSignConfirmModal.value = false
+    recordToSign.value = null
   } catch (err: any) {
     error.value = err.response?.data?.message || 'Error signing record'
   }
@@ -527,12 +632,15 @@ const openAppointmentModal = () => {
     status: 'SCHEDULED',
     workerIds: authStore.user?.id ? [authStore.user.id] : [],
   }
+  isReadOnlyAppointment.value = false
   showAppointmentModal.value = true
 }
 
 const openEditAppointmentModal = (apt: Appointment) => {
   isEditingAppointment.value = true
   selectedAppointment.value = apt
+  // Read-only mode for workers viewing completed appointments
+  isReadOnlyAppointment.value = apt.status === 'COMPLETED' && !isAdmin.value
   
   // Get workerIds from appointmentWorkers or fallback to workerId
   const workerIds = apt.appointmentWorkers?.length 
@@ -566,8 +674,12 @@ const openEditAppointmentModal = (apt: Appointment) => {
 
 const saveAppointment = async () => {
   isSavingAppointment.value = true
+  stockSaveError.value = ''
   try {
+    let appointmentId = selectedAppointment.value?.id
+    
     if (isEditingAppointment.value && selectedAppointment.value) {
+      // Update existing appointment
       await api.put(`/appointments/${selectedAppointment.value.id}`, {
         type: appointmentForm.value.type,
         title: appointmentForm.value.title || undefined,
@@ -577,8 +689,14 @@ const saveAppointment = async () => {
         status: appointmentForm.value.status,
         workerIds: appointmentForm.value.workerIds.length > 0 ? appointmentForm.value.workerIds : undefined,
       })
+      
+      // Persist pending stock changes if any
+      if (hasPendingStockChanges.value && appointmentId) {
+        await persistPendingStockChanges(appointmentId)
+      }
     } else {
-      await api.post('/appointments', {
+      // Create new appointment
+      const response = await api.post<ApiResponse<Appointment>>('/appointments', {
         patientId: patientId.value,
         type: appointmentForm.value.type,
         title: appointmentForm.value.title || undefined,
@@ -587,16 +705,40 @@ const saveAppointment = async () => {
         notes: appointmentForm.value.notes || undefined,
         workerIds: appointmentForm.value.workerIds.length > 0 ? appointmentForm.value.workerIds : undefined,
       })
+      // Note: New appointments won't have stock changes since we only show stock section for editing
+      appointmentId = response.data?.id
     }
+    
+    // Reset pending stock on successful save
+    resetPendingStockChanges()
+    
     showAppointmentModal.value = false
     isEditingAppointment.value = false
     selectedAppointment.value = null
     await loadAppointments()
   } catch (err: any) {
     error.value = err.response?.data?.message || 'Error saving appointment'
+    // Don't close modal if there's an error
   } finally {
     isSavingAppointment.value = false
   }
+}
+
+// Close appointment modal and reset pending stock changes
+const closeAppointmentModal = () => {
+  // Reset pending stock changes (discard any unsaved changes)
+  resetPendingStockChanges()
+  // Reset stock selection
+  selectedStockItem.value = null
+  stockItemSearch.value = ''
+  stockQuantity.value = 1
+  // Reset real time editing state
+  realTimeEditing.value = false
+  showResetConfirm.value = false
+  // Close modal
+  showAppointmentModal.value = false
+  isEditingAppointment.value = false
+  selectedAppointment.value = null
 }
 
 const cancelAppointment = async (apt: Appointment) => {
@@ -609,28 +751,116 @@ const cancelAppointment = async (apt: Appointment) => {
   }
 }
 
+// Real time management (admin only)
+const initRealTimeForm = () => {
+  if (!selectedAppointment.value) return
+  const apt = selectedAppointment.value
+  realTimeForm.value = {
+    realStartTime: apt.realStartTime ? new Date(apt.realStartTime).toISOString().slice(0, 16) : '',
+    realEndTime: apt.realEndTime ? new Date(apt.realEndTime).toISOString().slice(0, 16) : '',
+    pausedDuration: apt.pausedDuration || 0
+  }
+  realTimeEditing.value = true
+}
+
+const formatRealDuration = (apt: Appointment) => {
+  if (!apt.realStartTime || !apt.realEndTime) return null
+  const start = new Date(apt.realStartTime)
+  const end = new Date(apt.realEndTime)
+  let diffMs = end.getTime() - start.getTime()
+  if (apt.pausedDuration) {
+    diffMs -= apt.pausedDuration * 60 * 1000
+  }
+  const minutes = Math.floor(diffMs / 60000)
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  if (hours > 0) {
+    return `${hours}h ${mins}m`
+  }
+  return `${mins}m`
+}
+
+const handleUpdateRealTime = async () => {
+  if (!selectedAppointment.value) return
+  try {
+    await api.put(`/appointments/${selectedAppointment.value.id}/real-time`, {
+      realStartTime: realTimeForm.value.realStartTime ? new Date(realTimeForm.value.realStartTime).toISOString() : null,
+      realEndTime: realTimeForm.value.realEndTime ? new Date(realTimeForm.value.realEndTime).toISOString() : null,
+      pausedDuration: realTimeForm.value.pausedDuration || 0
+    })
+    await loadAppointments()
+    realTimeEditing.value = false
+  } catch (err: any) {
+    error.value = err.response?.data?.message || 'Error updating real time'
+  }
+}
+
+const handleResetRealTime = async () => {
+  if (!selectedAppointment.value) return
+  isResettingTime.value = true
+  try {
+    await api.post(`/appointments/${selectedAppointment.value.id}/reset-time`)
+    await loadAppointments()
+    showResetConfirm.value = false
+    showAppointmentModal.value = false
+    selectedAppointment.value = null
+  } catch (err: any) {
+    error.value = err.response?.data?.message || 'Error resetting time'
+  } finally {
+    isResettingTime.value = false
+  }
+}
+
+
+// Open rating confirmation modal instead of using confirm()
+const openRatingConfirmModal = (appointmentId: string) => {
+  pendingRatingAppointmentId.value = appointmentId
+  showRatingConfirmModal.value = true
+}
+
+// Close rating modal
+const closeRatingConfirmModal = () => {
+  showRatingConfirmModal.value = false
+  pendingRatingAppointmentId.value = null
+}
+
+// Rating result state 
+const ratingSuccess = ref<string | null>(null)
+const ratingError = ref<string | null>(null)
+
 // Send rating request email for completed appointment
-const sendRatingRequest = async (appointmentId: string) => {
+const confirmSendRatingRequest = async () => {
+  if (!pendingRatingAppointmentId.value) return
+  
+  const appointmentId = pendingRatingAppointmentId.value
+  showRatingConfirmModal.value = false
   sendingRatingFor.value = appointmentId
+  ratingSuccess.value = null
+  ratingError.value = null
+  
   try {
     const response = await api.post<{ success: boolean; error?: string; ratingUrl?: string; alreadySent?: boolean }>(
       `/ratings/test/${appointmentId}`
     )
     if (response.success) {
       ratingRequestsSent.value[appointmentId] = true
-      // Show a toast or notification
-      alert('Email de valoración enviado correctamente')
+      ratingSuccess.value = 'Email de valoración enviado correctamente'
+      setTimeout(() => { ratingSuccess.value = null }, 3000)
     } else if (response.alreadySent) {
       ratingRequestsSent.value[appointmentId] = true
-      alert('El email de valoración ya fue enviado anteriormente')
+      ratingSuccess.value = 'El email de valoración ya fue enviado anteriormente'
+      setTimeout(() => { ratingSuccess.value = null }, 3000)
     } else {
-      alert(response.error || 'Error al enviar el email')
+      ratingError.value = response.error || 'Error al enviar el email'
+      setTimeout(() => { ratingError.value = null }, 5000)
     }
   } catch (err: any) {
     console.error('Error sending rating request:', err)
-    alert(err.message || 'Error al enviar el email de valoración')
+    ratingError.value = err.message || 'Error al enviar el email de valoración'
+    setTimeout(() => { ratingError.value = null }, 5000)
   } finally {
     sendingRatingFor.value = null
+    pendingRatingAppointmentId.value = null
   }
 }
 
@@ -685,43 +915,396 @@ const loadAppointmentStock = async (appointmentId: string) => {
   }
 }
 
-const addStockToAppointment = async (itemId: string, quantity: number) => {
-  if (!selectedAppointment.value) return
-  try {
-    await api.post(`/appointments/${selectedAppointment.value.id}/stock`, {
-      itemId,
-      quantity,
-    })
-    stockItemSearch.value = ''
-    stockQuantity.value = 1
-    showStockItemDropdown.value = false
-    await loadAppointmentStock(selectedAppointment.value.id)
-    // Refresh stock items to show updated quantities
-    await loadStockItems()
-  } catch (err: any) {
-    alert(err.response?.data?.message || 'Error al añadir stock')
-  }
+// Computed: Combined view of stock (existing + pending added - pending removed)
+const visibleStockItems = computed(() => {
+  // Filter out items marked for removal and add isPending flag
+  const existingFiltered = appointmentStock.value
+    .filter(usage => !pendingStockRemovals.value.includes(usage.id))
+    .map(usage => ({
+      ...usage,
+      isPending: false,
+    }))
+  
+  // Convert pending additions to display format
+  const pendingAsUsage = pendingStockAdditions.value.map(pending => ({
+    id: pending.tempId,
+    itemId: pending.itemId,
+    quantity: pending.quantity,
+    isPending: true, // flag to show different styling
+    item: {
+      id: pending.item.id,
+      name: pending.item.name,
+      unit: pending.item.unit,
+      imageUrl: pending.item.imageUrl,
+    }
+  }))
+  
+  return [...existingFiltered, ...pendingAsUsage]
+})
+
+// Check if there are any pending changes
+const hasPendingStockChanges = computed(() => {
+  return pendingStockAdditions.value.length > 0 || pendingStockRemovals.value.length > 0
+})
+
+// Select stock item from dropdown (doesn't add yet)
+const selectStockItem = (item: StockItem) => {
+  selectedStockItem.value = item
+  stockItemSearch.value = item.name
+  showStockItemDropdown.value = false
 }
 
+// Clear selected stock item
+const clearSelectedStockItem = () => {
+  selectedStockItem.value = null
+  stockItemSearch.value = ''
+  stockQuantity.value = 1
+}
+
+// Add selected stock item to pending list
+const addSelectedStockToAppointment = () => {
+  if (!selectedAppointment.value || !selectedStockItem.value) return
+  
+  const item = selectedStockItem.value
+  const quantity = stockQuantity.value
+  
+  if (quantity < 1) {
+    stockSaveError.value = 'La cantidad debe ser al menos 1'
+    return
+  }
+  
+  // Check if already in pending (merge quantities)
+  const existingPending = pendingStockAdditions.value.find(p => p.itemId === item.id)
+  if (existingPending) {
+    existingPending.quantity += quantity
+  } else {
+    // Also check if it's in the existing stock (should update quantity)
+    const existingStock = appointmentStock.value.find(s => s.itemId === item.id)
+    if (existingStock && !pendingStockRemovals.value.includes(existingStock.id)) {
+      // Add to pending as new entry (will create separate usage record)
+      pendingStockAdditions.value.push({
+        tempId: `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        itemId: item.id,
+        quantity,
+        item,
+      })
+    } else {
+      // Add to pending
+      pendingStockAdditions.value.push({
+        tempId: `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        itemId: item.id,
+        quantity,
+        item,
+      })
+    }
+  }
+  
+  // Reset selection
+  clearSelectedStockItem()
+  stockSaveError.value = ''
+}
+
+// Apply pack - adds all pack items to pending
 const applyPackToAppointment = async (packId: string) => {
   if (!selectedAppointment.value) return
   try {
-    await api.post(`/appointments/${selectedAppointment.value.id}/stock/pack/${packId}`)
-    await loadAppointmentStock(selectedAppointment.value.id)
-    await loadStockItems()
+    // Get pack items from API
+    const response = await api.get<ApiResponse<{ items: Array<{ itemId: string, quantity: number, item: StockItem }> }>>(`/stock/packs/${packId}`)
+    if (response.success && response.data?.items) {
+      // Add each pack item to pending
+      for (const packItem of response.data.items) {
+        const existingPending = pendingStockAdditions.value.find(p => p.itemId === packItem.itemId)
+        if (existingPending) {
+          existingPending.quantity += packItem.quantity
+        } else {
+          pendingStockAdditions.value.push({
+            tempId: `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            itemId: packItem.itemId,
+            quantity: packItem.quantity,
+            item: packItem.item,
+          })
+        }
+      }
+    }
   } catch (err: any) {
-    alert(err.response?.data?.message || 'Error al aplicar pack')
+    stockSaveError.value = err.response?.data?.message || 'Error al cargar pack'
   }
 }
 
-const removeStockFromAppointment = async (usageId: string) => {
-  if (!selectedAppointment.value) return
+// Remove stock - either remove from pending or mark existing for removal
+const removeStockFromAppointment = (usageId: string) => {
+  // Check if it's a pending addition
+  const pendingIndex = pendingStockAdditions.value.findIndex(p => p.tempId === usageId)
+  if (pendingIndex >= 0) {
+    // Remove from pending additions
+    pendingStockAdditions.value.splice(pendingIndex, 1)
+  } else {
+    // It's an existing item - mark for removal
+    if (!pendingStockRemovals.value.includes(usageId)) {
+      pendingStockRemovals.value.push(usageId)
+    }
+  }
+}
+
+// Persist all pending stock changes to backend
+const persistPendingStockChanges = async (appointmentId: string) => {
+  isSavingStock.value = true
+  stockSaveError.value = ''
+  
   try {
-    await api.delete(`/appointments/${selectedAppointment.value.id}/stock/${usageId}`)
-    await loadAppointmentStock(selectedAppointment.value.id)
+    // 1. Remove items marked for removal
+    for (const usageId of pendingStockRemovals.value) {
+      await api.delete(`/appointments/${appointmentId}/stock/${usageId}`)
+    }
+    
+    // 2. Add pending additions
+    for (const pending of pendingStockAdditions.value) {
+      await api.post(`/appointments/${appointmentId}/stock`, {
+        itemId: pending.itemId,
+        quantity: pending.quantity,
+      })
+    }
+    
+    // 3. Clear pending state
+    resetPendingStockChanges()
+    
+    // 4. Reload actual stock from server
+    await loadAppointmentStock(appointmentId)
     await loadStockItems()
+    
   } catch (err: any) {
-    alert(err.response?.data?.message || 'Error al quitar stock')
+    stockSaveError.value = err.response?.data?.message || 'Error al guardar stock'
+    throw err // Re-throw so saveAppointment knows there was an error
+  } finally {
+    isSavingStock.value = false
+  }
+}
+
+// Reset pending changes (on cancel or after successful save)
+const resetPendingStockChanges = () => {
+  pendingStockAdditions.value = []
+  pendingStockRemovals.value = []
+  stockSaveError.value = ''
+}
+
+// ==========================================
+// Banner Stock Functions (for active appointment)
+// ==========================================
+
+// Computed: filtered stock items for banner search
+const filteredBannerStockItems = computed(() => {
+  if (!bannerStockSearch.value) return stockItems.value.slice(0, 8)
+  const search = bannerStockSearch.value.toLowerCase()
+  return stockItems.value
+    .filter(item => 
+      item.name.toLowerCase().includes(search) || 
+      item.sku?.toLowerCase().includes(search)
+    )
+    .slice(0, 8)
+})
+
+// Computed: combined visible banner stock (existing + pending)
+const visibleBannerStockItems = computed(() => {
+  // Ensure arrays exist
+  const existingItems = bannerStockItems.value || []
+  const pendingItems = bannerPendingStock.value || []
+  
+  // Pending additions as usage-like objects
+  const pendingAsUsage = pendingItems.map(pending => ({
+    id: pending.tempId,
+    itemId: pending.itemId,
+    quantity: pending.quantity,
+    isPending: true,
+    item: {
+      id: pending.item.id,
+      name: pending.item.name,
+      unit: pending.item.unit,
+      imageUrl: pending.item.imageUrl,
+    }
+  }))
+  
+  return [...existingItems.map(s => ({ ...s, isPending: false })), ...pendingAsUsage]
+})
+
+// Load stock for the active appointment (called when banner mounts)
+const loadBannerStock = async () => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt) {
+    if (bannerStockItems.value.length > 0) {
+      bannerStockItems.value = []
+    }
+    isLoadingBannerStock.value = false
+    return
+  }
+  
+  // Only show loading on first load, not on polling updates
+  const isFirstLoad = bannerStockItems.value.length === 0
+  if (isFirstLoad) {
+    isLoadingBannerStock.value = true
+  }
+  
+  try {
+    const response = await api.get<ApiResponse<{ items: AppointmentStockUsage[], totalItems: number }>>(`/appointments/${apt.id}/stock`)
+    if (response.success && response.data?.items && Array.isArray(response.data.items)) {
+      // Only update if data actually changed (prevents flickering)
+      const newData = JSON.stringify(response.data.items)
+      const currentData = JSON.stringify(bannerStockItems.value)
+      if (newData !== currentData) {
+        bannerStockItems.value = response.data.items
+      }
+    } else if (bannerStockItems.value.length > 0) {
+      bannerStockItems.value = []
+    }
+  } catch (err) {
+    console.warn('Could not load banner stock', err)
+    // Don't clear on error during polling
+    if (isFirstLoad) {
+      bannerStockItems.value = []
+    }
+  } finally {
+    isLoadingBannerStock.value = false
+  }
+}
+
+// Select banner stock item from dropdown
+const selectBannerStockItem = (item: StockItem) => {
+  selectedBannerStockItem.value = item
+  bannerStockSearch.value = item.name
+  showBannerStockDropdown.value = false
+}
+
+// Clear selected banner stock item
+const clearBannerStockItem = () => {
+  selectedBannerStockItem.value = null
+  bannerStockSearch.value = ''
+  bannerStockQuantity.value = 1
+}
+
+// Add stock item to banner (immediately persists to backend)
+const addBannerStockItem = async () => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt || !selectedBannerStockItem.value) return
+  
+  const item = selectedBannerStockItem.value
+  const quantity = bannerStockQuantity.value
+  
+  if (quantity < 1) return
+  
+  try {
+    await api.post(`/appointments/${apt.id}/stock`, {
+      itemId: item.id,
+      quantity: quantity,
+    })
+    
+    // Reload stock list
+    await loadBannerStock()
+    await loadStockItems() // Update available stock counts
+    
+    // Clear selection
+    clearBannerStockItem()
+  } catch (err: any) {
+    console.error('Error adding stock to appointment', err)
+  }
+}
+
+// Remove stock from banner (persists immediately)
+const removeBannerStockItem = async (usageId: string) => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt) return
+  
+  try {
+    await api.delete(`/appointments/${apt.id}/stock/${usageId}`)
+    await loadBannerStock()
+    await loadStockItems()
+  } catch (err) {
+    console.error('Error removing stock', err)
+  }
+}
+
+// Apply pack to banner
+const applyBannerPack = async (packId: string) => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt || !packId) return
+  
+  try {
+    const response = await api.get<ApiResponse<{ items: { itemId: string; quantity: number; item: StockItem }[] }>>(`/stock/packs/${packId}`)
+    if (response.success && response.data?.items) {
+      for (const packItem of response.data.items) {
+        await api.post(`/appointments/${apt.id}/stock`, {
+          itemId: packItem.itemId,
+          quantity: packItem.quantity,
+        })
+      }
+      await loadBannerStock()
+      await loadStockItems()
+    }
+  } catch (err) {
+    console.error('Error applying pack', err)
+  }
+}
+
+// Complete appointment with validation
+const handleCompleteWithValidation = async () => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt) return
+  
+  // Check if there's any stock assigned (both existing and pending)
+  const hasStock = visibleBannerStockItems.value.length > 0
+  
+  if (!hasStock) {
+    showNoStockConfirmModal.value = true
+    return
+  }
+  
+  // Stock exists, show confirmation modal
+  showCompleteConfirmModal.value = true
+}
+
+// Confirm complete appointment
+const confirmCompleteAppointment = async () => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt) return
+  
+  showCompleteConfirmModal.value = false
+  await completeAppointmentWithStock(apt.id)
+}
+
+// Confirm complete without stock
+const confirmCompleteWithoutStock = async () => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt) return
+  
+  showNoStockConfirmModal.value = false
+  await activeAppointmentsStore.completeAppointment(apt.id)
+}
+
+// Confirm cancel active appointment
+const confirmCancelActiveAppointment = async () => {
+  const apt = activeAppointmentForPatient.value
+  if (!apt) return
+  
+  showCancelActiveModal.value = false
+  cancelConfirmText.value = ''
+  await activeAppointmentsStore.cancelActiveAppointment(apt.id)
+  // Clear banner state
+  bannerStockItems.value = []
+  bannerPendingStock.value = []
+}
+
+// Complete appointment with stock confirmation
+const completeAppointmentWithStock = async (appointmentId: string) => {
+  try {
+    // First, confirm all pending stock (this deducts from inventory)
+    await api.post(`/appointments/${appointmentId}/stock/confirm`)
+    
+    // Then complete the appointment
+    await activeAppointmentsStore.completeAppointment(appointmentId)
+    
+    // Clear banner state
+    bannerStockItems.value = []
+    bannerPendingStock.value = []
+  } catch (err) {
+    console.error('Error completing appointment with stock', err)
   }
 }
 
@@ -1077,16 +1660,105 @@ watch(activeTab, (tab, oldTab) => {
   }
 })
 
+// Reload banner stock when active appointment changes (by ID)
+// Also join/leave WebSocket appointment rooms for real-time updates
+watch(
+  () => activeAppointmentForPatient.value?.id,
+  (newId, oldId) => {
+    // Leave old room if previously in one
+    if (oldId) {
+      leaveAppointmentRoom(oldId)
+    }
+    
+    if (newId && newId !== oldId) {
+      // Join new appointment room for real-time stock updates
+      joinAppointmentRoom(newId)
+      // Only load stock via HTTP on initial mount or when switching appointments
+      // WebSocket listener will handle real-time updates
+      loadBannerStock()
+    } else if (!newId) {
+      bannerStockItems.value = []
+    }
+  },
+  { immediate: true } // Join room if already active on mount
+)
+
+// Load notification status (email enabled check)
+const loadNotificationStatus = async () => {
+  try {
+    const response = await api.get<ApiResponse<{ emailEnabled: boolean; smsEnabled: boolean }>>('/notifications/status')
+    if (response.success && response.data) {
+      isEmailEnabled.value = response.data.emailEnabled
+    }
+  } catch (err) {
+    // If endpoint fails, assume email is not enabled
+    isEmailEnabled.value = false
+  }
+}
+
+// Watch for patient ID changes (e.g., clicking different patient in Notch)
+// This is needed because Vue Router doesn't remount the component when only params change
+watch(patientId, (newId, oldId) => {
+  if (newId && newId !== oldId) {
+    console.log('🔄 Patient changed, reloading data for:', newId)
+    // Reset state
+    patient.value = null
+    bannerStockItems.value = []
+    selectedRadiograph.value = null
+    
+    // Leave old appointment room
+    if (oldId) {
+      leaveAppointmentRoom()
+    }
+    
+    // Reload all data for new patient
+    loadPatient()
+    loadBannerStock()
+    loadNotificationStatus()
+  }
+})
+
+// WebSocket listener cleanup function
+let unsubscribeStockUpdates: (() => void) | null = null
+
 onMounted(() => {
   loadPatient()
   loadWorkers()
   loadStockItems()
   loadStockPacks()
+  loadNotificationStatus()
+  loadBannerStock() // Load stock for active appointment banner
+  
+  // Subscribe to stock:updated WebSocket events for real-time sync
+  unsubscribeStockUpdates = onSocketEvent('stock:updated', (data: unknown) => {
+    const { appointmentId, items } = data as { appointmentId: string; items: AppointmentStockUsage[] }
+    const apt = activeAppointmentForPatient.value
+    
+    // Only update if this is for our current appointment
+    if (apt && apt.id === appointmentId && items) {
+      console.log('🔌 Stock updated (via WS):', items.length, 'items')
+      bannerStockItems.value = items
+    }
+  })
+  
+  // Start timer for active appointment display
+  timerInterval = window.setInterval(() => {
+    timerTick.value++
+  }, 1000)
 })
 
 // Cleanup polling on unmount
 onUnmounted(() => {
   stopPolling()
+  if (timerInterval) {
+    clearInterval(timerInterval)
+  }
+  // Leave appointment room if in one
+  leaveAppointmentRoom()
+  // Cleanup WebSocket listener
+  if (unsubscribeStockUpdates) {
+    unsubscribeStockUpdates()
+  }
 })
 </script>
 
@@ -1130,10 +1802,210 @@ onUnmounted(() => {
             </span>
           </div>
         </div>
-        <button @click="openEditPatientModal" class="btn-secondary">
-          <PencilIcon class="w-4 h-4" />
-          Editar
-        </button>
+        
+        <!-- Action buttons -->
+        <div class="flex items-center gap-2 flex-shrink-0">
+          <!-- Edit patient button -->
+          <button @click="openEditPatientModal" class="btn-secondary">
+            <PencilIcon class="w-4 h-4" />
+            <span class="hidden sm:inline">Editar</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Appointment Stock Banner -->
+      <div 
+        v-if="activeAppointmentForPatient" 
+        class="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-4 shadow-sm"
+      >
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center">
+              <span class="w-3 h-3 rounded-full bg-white animate-pulse" />
+            </div>
+            <div>
+              <h3 class="font-semibold text-emerald-900">Cita en Curso</h3>
+              <p class="text-sm text-emerald-700">
+                {{ activeAppointmentForPatient?.title || 'Cita activa' }}
+                <span class="mx-1">•</span>
+                <span class="font-mono">{{ liveElapsedTime }}</span>
+              </p>
+            </div>
+          </div>
+          
+          <!-- Action buttons -->
+          <div class="flex items-center gap-2">
+            <!-- Pause/Resume -->
+            <button 
+              v-if="activeAppointmentsStore.isPaused(activeAppointmentForPatient)"
+              @click="activeAppointmentsStore.resumeAppointment(activeAppointmentForPatient.id)"
+              class="btn-secondary !bg-white !border-emerald-300 hover:!bg-emerald-50"
+              title="Reanudar"
+            >
+              <PlayIcon class="w-4 h-4 text-emerald-600" />
+              <span class="hidden sm:inline">Reanudar</span>
+            </button>
+            <button 
+              v-else
+              @click="activeAppointmentsStore.pauseAppointment(activeAppointmentForPatient.id)"
+              class="btn-secondary !bg-white !border-amber-300 hover:!bg-amber-50"
+              title="Pausar"
+            >
+              <PauseIcon class="w-4 h-4 text-amber-600" />
+              <span class="hidden sm:inline">Pausar</span>
+            </button>
+            
+            <!-- Complete -->
+            <button 
+              @click="handleCompleteWithValidation"
+              class="btn-primary !bg-emerald-600 hover:!bg-emerald-700"
+              title="Finalizar cita"
+            >
+              <CheckIcon class="w-4 h-4" />
+              <span class="hidden sm:inline">Finalizar</span>
+            </button>
+            
+            <!-- Divider -->
+            <div class="w-px h-6 bg-surface-300 mx-1"></div>
+            
+            <!-- Cancel (separated as destructive action) -->
+            <button 
+              @click="showCancelActiveModal = true"
+              class="btn-secondary !bg-white !border-red-300 hover:!bg-red-50"
+              title="Cancelar cita"
+            >
+              <XMarkIcon class="w-4 h-4 text-red-600" />
+              <span class="hidden sm:inline">Cancelar</span>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Stock Section -->
+        <div class="bg-white/70 backdrop-blur rounded-xl p-4 border border-emerald-100">
+          <label class="label flex items-center gap-2 mb-3 text-emerald-800">
+            <CubeIcon class="w-4 h-4" />
+            Stock Utilizado
+          </label>
+          
+          <!-- Pack Selector + Search Row -->
+          <div class="flex flex-col sm:flex-row gap-2 mb-3">
+            <!-- Pack selector -->
+            <select 
+              v-if="stockPacks.length > 0"
+              class="input flex-shrink-0 text-sm sm:w-48"
+              @change="(e: Event) => { const target = e.target as HTMLSelectElement; if (target.value) { applyBannerPack(target.value); target.value = ''; } }"
+            >
+              <option value="">+ Pack rápido...</option>
+              <option v-for="pack in stockPacks" :key="pack.id" :value="pack.id">
+                {{ pack.name }} ({{ pack.itemCount || 0 }})
+              </option>
+            </select>
+            
+            <!-- Search + Quantity + Add -->
+            <div class="flex gap-2 flex-1">
+              <div class="relative flex-1">
+                <MagnifyingGlassIcon class="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" />
+                <input 
+                  v-model="bannerStockSearch"
+                  type="text"
+                  :placeholder="selectedBannerStockItem ? '' : 'Buscar item...'"
+                  class="input pl-8 text-sm w-full"
+                  :class="{ 'pr-8 bg-primary-50 border-primary-300': selectedBannerStockItem }"
+                  @focus="!selectedBannerStockItem && (showBannerStockDropdown = true)"
+                  :readonly="!!selectedBannerStockItem"
+                />
+                <!-- Clear selection -->
+                <button
+                  v-if="selectedBannerStockItem"
+                  type="button"
+                  @click="clearBannerStockItem"
+                  class="absolute right-2 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-600"
+                >
+                  <XMarkIcon class="w-4 h-4" />
+                </button>
+              </div>
+              <input 
+                v-model.number="bannerStockQuantity" 
+                type="number" 
+                min="1" 
+                class="input w-16 text-sm text-center"
+                placeholder="Qty"
+              />
+              <button
+                v-if="selectedBannerStockItem"
+                type="button"
+                @click="addBannerStockItem"
+                class="btn-primary btn-sm px-3"
+                title="Añadir"
+              >
+                <PlusIcon class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          
+          <!-- Dropdown Backdrop -->
+          <div 
+            v-if="showBannerStockDropdown" 
+            class="fixed inset-0 z-40" 
+            @click="showBannerStockDropdown = false"
+          />
+          
+          <!-- Dropdown -->
+          <div 
+            v-if="showBannerStockDropdown && filteredBannerStockItems.length > 0 && !selectedBannerStockItem" 
+            class="relative z-50 -mt-2 mb-2"
+          >
+            <div class="bg-white border border-surface-200 rounded-lg shadow-lg max-h-48 overflow-auto">
+              <button
+                v-for="item in filteredBannerStockItems"
+                :key="item.id"
+                type="button"
+                class="w-full px-3 py-2 text-left text-sm hover:bg-surface-50 flex items-center gap-3"
+                @click="selectBannerStockItem(item)"
+              >
+                <div class="w-8 h-8 rounded bg-surface-100 overflow-hidden flex-shrink-0">
+                  <img 
+                    v-if="item.imageUrl" 
+                    :src="`/api/v1/stock/items/${item.id}/image`" 
+                    class="w-full h-full object-cover"
+                  />
+                  <div v-else class="w-full h-full flex items-center justify-center text-surface-400">
+                    <CubeIcon class="w-4 h-4" />
+                  </div>
+                </div>
+                <span class="flex-1 truncate">{{ item.name }}</span>
+                <span class="text-xs text-surface-400 flex-shrink-0">{{ item.currentStock }} {{ item.unit }}</span>
+              </button>
+            </div>
+          </div>
+          
+          <!-- Stock Items List -->
+          <div v-if="isLoadingBannerStock" class="text-center py-3">
+            <div class="animate-spin w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full mx-auto" />
+          </div>
+          <div v-else-if="visibleBannerStockItems.length > 0" class="flex flex-wrap gap-2">
+            <div 
+              v-for="usage in visibleBannerStockItems" 
+              :key="usage.id"
+              class="inline-flex items-center gap-2 py-1.5 px-3 rounded-full text-sm bg-white border border-surface-200"
+            >
+              <span class="truncate max-w-[120px]">{{ usage.item.name }}</span>
+              <span class="text-surface-500">×{{ usage.quantity }}</span>
+              <button 
+                type="button"
+                @click="removeBannerStockItem(usage.id)"
+                class="text-red-400 hover:text-red-600 -mr-1"
+                title="Quitar"
+              >
+                <XMarkIcon class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <p v-else class="text-sm text-surface-400 text-center py-2">
+            No hay stock registrado aún
+          </p>
+        </div>
       </div>
 
       <!-- Stats -->
@@ -1368,9 +2240,26 @@ onUnmounted(() => {
                 {{ getStatusLabel(apt.status) }}
               </span>
               <!-- Send rating button for completed appointments -->
+              <!-- Disabled when email not enabled - with visible tooltip -->
+              <div 
+                v-if="apt.status === 'COMPLETED' && isAdmin && !ratingRequestsSent[apt.id] && !isEmailEnabled"
+                class="relative group"
+              >
+                <button 
+                  disabled
+                  class="p-2 text-gray-300 cursor-not-allowed rounded-lg"
+                >
+                  <StarIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-3 py-2 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                  Email no configurado
+                  <div class="absolute left-full top-1/2 -translate-y-1/2 border-4 border-transparent border-l-gray-800"></div>
+                </div>
+              </div>
+              <!-- Active button when email is enabled -->
               <button 
-                v-if="apt.status === 'COMPLETED' && isAdmin && !ratingRequestsSent[apt.id]"
-                @click="sendRatingRequest(apt.id)"
+                v-else-if="apt.status === 'COMPLETED' && isAdmin && !ratingRequestsSent[apt.id]"
+                @click="openRatingConfirmModal(apt.id)"
                 :disabled="sendingRatingFor === apt.id"
                 class="p-2 text-amber-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
                 title="Enviar email de valoración"
@@ -1385,6 +2274,16 @@ onUnmounted(() => {
               >
                 <StarIcon class="w-4 h-4" />
               </span>
+              <!-- View details button for completed appointments (available to all) -->
+              <button 
+                v-if="apt.status === 'COMPLETED' && !isAdmin"
+                @click="openEditAppointmentModal(apt)" 
+                class="p-2 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg"
+                title="Ver detalles de la cita"
+              >
+                <EyeIcon class="w-4 h-4" />
+              </button>
+              <!-- Edit button (only for admin on completed, or anyone on non-completed) -->
               <button 
                 v-if="canEditAppointment(apt)"
                 @click="openEditAppointmentModal(apt)" 
@@ -1394,7 +2293,7 @@ onUnmounted(() => {
                 <PencilIcon class="w-4 h-4" />
               </button>
               <button 
-                v-if="canEditAppointment(apt)"
+                v-if="canDeleteAppointment(apt)"
                 @click="cancelAppointment(apt)" 
                 class="p-2 text-surface-400 hover:text-danger-600 hover:bg-danger-50 rounded-lg"
                 title="Cancelar cita"
@@ -1488,6 +2387,9 @@ onUnmounted(() => {
                     Confianza: {{ Math.round((radiograph.aiResult.confidence as number) * 100) }}%
                   </span>
                 </div>
+                
+                <!-- Mini disclaimer -->
+                <p class="text-xs text-amber-600 italic">⚠️ Segunda opinión IA - No es diagnóstico definitivo</p>
               </div>
 
               <!-- Error state with retry -->
@@ -1502,6 +2404,21 @@ onUnmounted(() => {
               <div v-else-if="radiograph.aiResult && radiograph.aiResult.status === 'PROCESSING'" class="flex items-center gap-2 text-blue-600">
                 <div class="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
                 <span class="text-sm">Analizando...</span>
+              </div>
+
+              <!-- Pending state -->
+              <div v-else-if="radiograph.aiResult && radiograph.aiResult.status === 'PENDING'" class="flex items-center gap-2 text-yellow-600">
+                <div class="animate-spin w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full"></div>
+                <span class="text-sm">En cola de análisis...</span>
+              </div>
+
+              <!-- No AI analysis yet - show analyze button -->
+              <div v-else-if="!radiograph.aiResult" class="space-y-2">
+                <p class="text-sm text-surface-500">Sin análisis de IA</p>
+                <button @click="retryAnalysis(radiograph.id)" class="btn-primary text-sm">
+                  <SparklesIcon class="w-4 h-4" />
+                  Analizar con IA
+                </button>
               </div>
 
               <!-- Worker Notes -->
@@ -1584,7 +2501,7 @@ onUnmounted(() => {
                 ></textarea>
               </div>
               <p v-if="isUploadingRadiograph" class="text-sm text-primary-600 flex items-center gap-2">
-                <div class="animate-spin w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full"></div>
+                <span class="inline-block animate-spin w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full"></span>
                 Subiendo y analizando...
               </p>
               <p v-if="radiographError" class="text-sm text-red-600 bg-red-50 p-3 rounded-lg">
@@ -1599,27 +2516,35 @@ onUnmounted(() => {
       <Teleport to="body">
         <div v-if="selectedRadiograph" class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-surface-900/75" @click="closeRadiographDetail"></div>
-          <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden animate-scale-in">
+          <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-6xl max-h-[95vh] overflow-hidden animate-scale-in">
             <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
               <h2 class="text-lg font-semibold text-surface-900">{{ selectedRadiograph.originalFilename }}</h2>
               <button @click="closeRadiographDetail" class="text-surface-400 hover:text-surface-600">
                 <XMarkIcon class="w-6 h-6" />
               </button>
             </div>
-            <div class="flex flex-col lg:flex-row max-h-[calc(90vh-80px)] overflow-hidden">
+            <div class="flex flex-col lg:flex-row max-h-[calc(95vh-80px)] overflow-hidden">
               <!-- Image -->
-              <div class="lg:w-2/3 bg-surface-900 flex items-center justify-center">
+              <div class="lg:w-3/4 bg-surface-900 flex items-center justify-center p-4">
                 <img
                   :src="getRadiographImageUrl(selectedRadiograph)"
                   :alt="selectedRadiograph.originalFilename"
-                  class="max-w-full max-h-[60vh] object-contain"
+                  class="max-w-full max-h-[80vh] object-contain rounded-lg"
                 />
               </div>
               <!-- Analysis Panel -->
-              <div class="lg:w-1/3 p-6 overflow-y-auto bg-surface-50">
+              <div class="lg:w-1/4 p-6 overflow-y-auto bg-surface-50">
                 <h3 class="font-semibold text-surface-900 mb-4">Análisis IA</h3>
                 
                 <template v-if="selectedRadiograph.aiResult && selectedRadiograph.aiResult.status === 'COMPLETED'">
+                  <!-- AI Disclaimer -->
+                  <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-4">
+                    <p class="text-xs text-amber-800">
+                      <strong>⚠️ Aviso:</strong> Este análisis es una herramienta de apoyo generada por IA. 
+                      No constituye un diagnóstico médico definitivo. Se requiere la evaluación de un profesional cualificado.
+                    </p>
+                  </div>
+                  
                   <!-- Summary -->
                   <div class="mb-4">
                     <p class="text-sm font-medium text-surface-700 mb-1">Resumen</p>
@@ -1789,19 +2714,22 @@ onUnmounted(() => {
     <!-- Appointment Modal -->
     <Teleport to="body">
       <div v-if="showAppointmentModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-surface-900/50" @click="showAppointmentModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-scale-in">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
-            <h2 class="text-lg font-semibold text-surface-900">{{ isEditingAppointment ? 'Editar Cita' : 'Nueva Cita' }}</h2>
-            <button @click="showAppointmentModal = false" class="text-surface-400 hover:text-surface-600">
+        <div class="absolute inset-0 bg-surface-900/50" @click="closeAppointmentModal"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col animate-scale-in">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 flex-shrink-0">
+            <h2 class="text-lg font-semibold text-surface-900">{{ isReadOnlyAppointment ? 'Detalles de la Cita' : (isEditingAppointment ? 'Editar Cita' : 'Nueva Cita') }}</h2>
+            <button @click="closeAppointmentModal" class="text-surface-400 hover:text-surface-600">
               <XMarkIcon class="w-6 h-6" />
             </button>
           </div>
           
-          <form @submit.prevent="saveAppointment" class="p-6 space-y-4">
+          <!-- Content (scrollable) -->
+          <form @submit.prevent="saveAppointment" class="flex flex-col flex-1 min-h-0">
+            <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
             <div>
               <label class="label">Tipo de cita *</label>
-              <select v-model="appointmentForm.type" required class="input">
+              <select v-model="appointmentForm.type" required class="input" :disabled="isReadOnlyAppointment">
                 <option v-for="type in appointmentTypes" :key="type.value" :value="type.value">
                   {{ type.label }}
                 </option>
@@ -1812,8 +2740,9 @@ onUnmounted(() => {
             <div class="relative">
               <label class="label">Médicos asignados *</label>
               <div 
-                class="input cursor-pointer flex items-center justify-between"
-                @click="showWorkerDropdown = !showWorkerDropdown"
+                class="input flex items-center justify-between"
+                :class="{ 'cursor-pointer': !isReadOnlyAppointment, 'bg-surface-50': isReadOnlyAppointment }"
+                @click="!isReadOnlyAppointment && (showWorkerDropdown = !showWorkerDropdown)"
               >
                 <span v-if="appointmentForm.workerIds.length === 0" class="text-surface-400">
                   Seleccionar médicos...
@@ -1847,6 +2776,7 @@ onUnmounted(() => {
                     :value="worker.id"
                     v-model="appointmentForm.workerIds"
                     class="w-4 h-4 text-primary-600 rounded border-surface-300 focus:ring-primary-500"
+                    :disabled="isReadOnlyAppointment"
                     @click.stop
                   />
                   <span class="text-sm">
@@ -1863,7 +2793,7 @@ onUnmounted(() => {
             <!-- Status (only when editing) -->
             <div v-if="isEditingAppointment">
               <label class="label">Estado de la cita</label>
-              <select v-model="appointmentForm.status" class="input">
+              <select v-model="appointmentForm.status" class="input" :disabled="isReadOnlyAppointment">
                 <option v-for="status in appointmentStatuses" :key="status.value" :value="status.value">
                   {{ status.label }}
                 </option>
@@ -1872,23 +2802,143 @@ onUnmounted(() => {
             
             <div>
               <label class="label">Título (opcional)</label>
-              <input v-model="appointmentForm.title" type="text" class="input" placeholder="Descripción breve" />
+              <input v-model="appointmentForm.title" type="text" class="input" :disabled="isReadOnlyAppointment" placeholder="Descripción breve" />
             </div>
             
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <label class="label">Inicio *</label>
-                <input v-model="appointmentForm.startTime" type="datetime-local" required class="input" />
+                <input v-model="appointmentForm.startTime" type="datetime-local" required class="input" :disabled="isReadOnlyAppointment" />
               </div>
               <div>
                 <label class="label">Fin *</label>
-                <input v-model="appointmentForm.endTime" type="datetime-local" required class="input" />
+                <input v-model="appointmentForm.endTime" type="datetime-local" required class="input" :disabled="isReadOnlyAppointment" />
+              </div>
+            </div>
+            
+            <!-- Real Time Section (Admin only, for IN_PROGRESS or COMPLETED appointments) -->
+            <div 
+              v-if="isEditingAppointment && isAdmin && selectedAppointment && (selectedAppointment.status === 'IN_PROGRESS' || selectedAppointment.status === 'COMPLETED') && selectedAppointment.realStartTime"
+              class="p-4 rounded-lg bg-surface-50 border border-surface-200"
+            >
+              <div class="flex items-center justify-between mb-3">
+                <h4 class="font-medium text-surface-900 flex items-center gap-2">
+                  <ClockIcon class="w-4 h-4 text-primary-500" />
+                  Tiempo Real
+                </h4>
+                <div class="flex gap-2">
+                  <button
+                    v-if="!realTimeEditing"
+                    type="button"
+                    @click="initRealTimeForm"
+                    class="text-xs text-primary-600 hover:text-primary-700"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    v-if="!realTimeEditing"
+                    type="button"
+                    @click="showResetConfirm = true"
+                    class="text-xs text-danger-600 hover:text-danger-700"
+                  >
+                    Resetear
+                  </button>
+                </div>
+              </div>
+              
+              <!-- View mode -->
+              <div v-if="!realTimeEditing" class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                  <span class="text-surface-500">Inicio real:</span>
+                  <span class="font-medium">{{ new Date(selectedAppointment.realStartTime).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) }}</span>
+                </div>
+                <div v-if="selectedAppointment.realEndTime" class="flex justify-between">
+                  <span class="text-surface-500">Fin real:</span>
+                  <span class="font-medium">{{ new Date(selectedAppointment.realEndTime).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) }}</span>
+                </div>
+                <div v-if="selectedAppointment.pausedDuration" class="flex justify-between">
+                  <span class="text-surface-500">Tiempo pausado:</span>
+                  <span class="font-medium">{{ selectedAppointment.pausedDuration }} min</span>
+                </div>
+                <div v-if="formatRealDuration(selectedAppointment)" class="flex justify-between pt-2 border-t border-surface-200">
+                  <span class="text-surface-700 font-medium">Tiempo trabajado:</span>
+                  <span class="font-bold text-primary-600">{{ formatRealDuration(selectedAppointment) }}</span>
+                </div>
+              </div>
+              
+              <!-- Edit mode -->
+              <div v-else class="space-y-3">
+                <div>
+                  <label class="label text-xs">Inicio real</label>
+                  <input 
+                    v-model="realTimeForm.realStartTime" 
+                    type="datetime-local" 
+                    class="input text-sm"
+                  />
+                </div>
+                <div>
+                  <label class="label text-xs">Fin real</label>
+                  <input 
+                    v-model="realTimeForm.realEndTime" 
+                    type="datetime-local" 
+                    class="input text-sm"
+                  />
+                </div>
+                <div>
+                  <label class="label text-xs">Tiempo pausado (minutos)</label>
+                  <input 
+                    v-model.number="realTimeForm.pausedDuration" 
+                    type="number" 
+                    min="0"
+                    class="input text-sm"
+                  />
+                </div>
+                <div class="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    @click="realTimeEditing = false"
+                    class="btn-secondary btn-sm flex-1"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    @click="handleUpdateRealTime"
+                    class="btn-primary btn-sm flex-1"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Reset Confirmation -->
+              <div v-if="showResetConfirm" class="mt-3 p-3 bg-red-50 rounded-lg border border-red-200">
+                <p class="text-sm text-red-700 mb-2">
+                  ¿Resetear tiempos? La cita volverá a estado SCHEDULED.
+                </p>
+                <div class="flex gap-2">
+                  <button
+                    type="button"
+                    @click="showResetConfirm = false"
+                    class="btn-secondary btn-sm flex-1"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    @click="handleResetRealTime"
+                    :disabled="isResettingTime"
+                    class="bg-danger-500 hover:bg-danger-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex-1"
+                  >
+                    {{ isResettingTime ? 'Reseteando...' : 'Sí, resetear' }}
+                  </button>
+                </div>
               </div>
             </div>
             
             <div>
               <label class="label">Notas</label>
-              <textarea v-model="appointmentForm.notes" rows="2" class="input" placeholder="Notas adicionales..."></textarea>
+              <textarea v-model="appointmentForm.notes" rows="2" class="input" :disabled="isReadOnlyAppointment" placeholder="Notas adicionales..."></textarea>
             </div>
             
             <!-- Stock Usage Section (only when editing) -->
@@ -1900,8 +2950,8 @@ onUnmounted(() => {
                 </label>
               </div>
 
-              <!-- Quick Pack Selector -->
-              <div v-if="stockPacks.length > 0" class="mb-3">
+              <!-- Quick Pack Selector (hide in read-only) -->
+              <div v-if="stockPacks.length > 0 && !isReadOnlyAppointment" class="mb-3">
                 <select 
                   class="input text-sm" 
                   @change="(e: Event) => { const target = e.target as HTMLSelectElement; if (target.value) { applyPackToAppointment(target.value); target.value = ''; } }"
@@ -1913,18 +2963,29 @@ onUnmounted(() => {
                 </select>
               </div>
 
-              <!-- Add Item Search -->
-              <div class="relative mb-3">
+              <!-- Add Item Search (hide in read-only) -->
+              <div v-if="!isReadOnlyAppointment" class="relative mb-3">
                 <div class="flex gap-2">
                   <div class="relative flex-1">
                     <MagnifyingGlassIcon class="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" />
                     <input 
                       v-model="stockItemSearch"
                       type="text"
-                      placeholder="Buscar item..."
+                      :placeholder="selectedStockItem ? '' : 'Buscar item...'"
                       class="input pl-8 text-sm w-full"
-                      @focus="showStockItemDropdown = true"
+                      :class="{ 'pr-8 bg-primary-50 border-primary-300': selectedStockItem }"
+                      @focus="!selectedStockItem && (showStockItemDropdown = true)"
+                      :readonly="!!selectedStockItem"
                     />
+                    <!-- Clear selection button -->
+                    <button
+                      v-if="selectedStockItem"
+                      type="button"
+                      @click="clearSelectedStockItem"
+                      class="absolute right-2 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-600"
+                    >
+                      <XMarkIcon class="w-4 h-4" />
+                    </button>
                   </div>
                   <input 
                     v-model.number="stockQuantity" 
@@ -1933,6 +2994,16 @@ onUnmounted(() => {
                     class="input w-16 text-sm text-center"
                     placeholder="Qty"
                   />
+                  <!-- Add button (only visible when item is selected) -->
+                  <button
+                    v-if="selectedStockItem"
+                    type="button"
+                    @click="addSelectedStockToAppointment"
+                    class="btn-primary btn-sm px-3"
+                    title="Añadir stock"
+                  >
+                    <PlusIcon class="w-4 h-4" />
+                  </button>
                 </div>
                 
                 <!-- Backdrop -->
@@ -1942,10 +3013,10 @@ onUnmounted(() => {
                   @click="showStockItemDropdown = false"
                 ></div>
                 
-                <!-- Dropdown -->
+                <!-- Dropdown (opens upwards to avoid being cut off) -->
                 <div 
-                  v-if="showStockItemDropdown && filteredStockItems.length > 0" 
-                  class="absolute z-50 mt-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-48 overflow-auto"
+                  v-if="showStockItemDropdown && filteredStockItems.length > 0 && !selectedStockItem" 
+                  class="absolute z-50 bottom-full mb-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-48 overflow-auto"
                   @click.stop
                 >
                   <button
@@ -1953,7 +3024,7 @@ onUnmounted(() => {
                     :key="item.id"
                     type="button"
                     class="w-full px-3 py-2 text-left text-sm hover:bg-surface-50 flex items-center gap-3"
-                    @click="addStockToAppointment(item.id, stockQuantity)"
+                    @click="selectStockItem(item)"
                   >
                     <div class="w-8 h-8 rounded bg-surface-100 overflow-hidden flex-shrink-0">
                       <img 
@@ -1975,11 +3046,12 @@ onUnmounted(() => {
               <div v-if="isLoadingStock" class="text-center py-2">
                 <div class="animate-spin w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full mx-auto"></div>
               </div>
-              <div v-else-if="appointmentStock.length > 0" class="space-y-1 max-h-32 overflow-y-auto">
+              <div v-else-if="visibleStockItems.length > 0" class="space-y-1 max-h-64 overflow-y-auto">
                 <div 
-                  v-for="usage in appointmentStock" 
+                  v-for="usage in visibleStockItems" 
                   :key="usage.id"
-                  class="flex items-center gap-2 py-1.5 px-2 bg-surface-50 rounded text-sm"
+                  class="flex items-center gap-2 py-1.5 px-2 rounded text-sm"
+                  :class="usage.isPending ? 'bg-primary-50 border border-dashed border-primary-300' : 'bg-surface-50'"
                 >
                   <div 
                     class="w-8 h-8 rounded bg-surface-200 overflow-hidden flex-shrink-0"
@@ -1995,9 +3067,13 @@ onUnmounted(() => {
                       <CubeIcon class="w-4 h-4" />
                     </div>
                   </div>
-                  <span class="flex-1 truncate">{{ usage.item.name }}</span>
+                  <span class="flex-1 truncate">
+                    {{ usage.item.name }}
+                    <span v-if="usage.isPending" class="text-xs text-primary-600 ml-1">(pendiente)</span>
+                  </span>
                   <span class="text-surface-500 mr-2 flex-shrink-0">{{ usage.quantity }} {{ usage.item.unit }}</span>
                   <button 
+                    v-if="!isReadOnlyAppointment"
                     type="button"
                     @click="removeStockFromAppointment(usage.id)"
                     class="text-red-500 hover:bg-red-50 p-1 rounded flex-shrink-0"
@@ -2010,14 +3086,31 @@ onUnmounted(() => {
               <p v-else class="text-xs text-surface-400 text-center py-2">
                 No hay stock registrado para esta cita
               </p>
+              
+              <!-- Stock save error -->
+              <p v-if="stockSaveError" class="text-xs text-red-600 bg-red-50 p-2 rounded mt-2">
+                {{ stockSaveError }}
+              </p>
+              
+              <!-- Pending changes indicator -->
+              <p v-if="hasPendingStockChanges" class="text-xs text-primary-600 mt-2">
+                ⚠️ Hay cambios de stock pendientes. Guarda para confirmarlos.
+              </p>
             </div>
             
-            <div class="flex gap-3 pt-4">
-              <button type="button" @click="showAppointmentModal = false" class="btn-secondary flex-1">
-                Cancelar
+            </div>
+            <!-- Footer (sticky) -->
+            <div class="flex gap-3 px-6 py-4 border-t border-surface-100 flex-shrink-0 bg-white rounded-b-2xl">
+              <button type="button" @click="closeAppointmentModal" class="btn-secondary flex-1">
+                {{ isReadOnlyAppointment ? 'Cerrar' : 'Cancelar' }}
               </button>
-              <button type="submit" :disabled="isSavingAppointment" class="btn-primary flex-1">
-                {{ isSavingAppointment ? 'Guardando...' : (isEditingAppointment ? 'Guardar Cambios' : 'Crear Cita') }}
+              <button 
+                v-if="!isReadOnlyAppointment" 
+                type="submit" 
+                :disabled="isSavingAppointment || isSavingStock" 
+                class="btn-primary flex-1"
+              >
+                {{ isSavingAppointment || isSavingStock ? 'Guardando...' : (isEditingAppointment ? 'Guardar Cambios' : 'Crear Cita') }}
               </button>
             </div>
           </form>
@@ -2107,6 +3200,24 @@ onUnmounted(() => {
                 <label class="label">Notas</label>
                 <textarea v-model="patientForm.notes" class="input" rows="2" placeholder="Notas adicionales..."></textarea>
               </div>
+              
+              <!-- Marketing Preferences -->
+              <div class="md:col-span-2 pt-4 border-t border-surface-200">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="label mb-0">📧 Acepta emails de marketing</label>
+                    <p class="text-xs text-surface-400">Incluye emails de cumpleaños, promociones y newsletters</p>
+                  </div>
+                  <label class="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      v-model="patientForm.acceptsMarketing" 
+                      class="sr-only peer"
+                    />
+                    <div class="w-11 h-6 bg-surface-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                  </label>
+                </div>
+              </div>
             </div>
             
             <div class="flex gap-3 pt-4">
@@ -2139,6 +3250,237 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+    </Teleport>
+    
+    <!-- Rating Confirmation Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showRatingConfirmModal" 
+        class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
+        @click.self="closeRatingConfirmModal"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <StarIcon class="w-6 h-6 text-amber-500" />
+            </div>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Enviar solicitud de valoración</h3>
+            <p class="text-surface-600 mb-6">
+              Se enviará un email al paciente solicitando que valore su experiencia en la clínica.
+            </p>
+            <div class="flex gap-3">
+              <button 
+                @click="closeRatingConfirmModal" 
+                class="btn-secondary flex-1"
+              >
+                Cancelar
+              </button>
+              <button 
+                @click="confirmSendRatingRequest" 
+                class="btn-primary flex-1"
+              >
+                Enviar Email
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- No Stock Confirmation Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showNoStockConfirmModal" 
+        class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
+        @click.self="showNoStockConfirmModal = false"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CubeIcon class="w-6 h-6 text-amber-500" />
+            </div>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Finalizar sin stock</h3>
+            <p class="text-surface-600 mb-6">
+              No hay stock registrado para esta cita. ¿Estás seguro de que quieres finalizar sin asignar ningún material?
+            </p>
+            <div class="flex gap-3">
+              <button 
+                @click="showNoStockConfirmModal = false" 
+                class="btn-secondary flex-1"
+              >
+                Añadir Stock
+              </button>
+              <button 
+                @click="confirmCompleteWithoutStock" 
+                class="btn-primary !bg-amber-600 hover:!bg-amber-700 flex-1"
+              >
+                Finalizar Igualmente
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- Complete Appointment Confirmation Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showCompleteConfirmModal" 
+        class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
+        @click.self="showCompleteConfirmModal = false"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircleIcon class="w-6 h-6 text-green-600" />
+            </div>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Finalizar cita</h3>
+            <p class="text-surface-600 mb-6">
+              ¿Estás seguro de que quieres finalizar esta cita? Se guardará el stock utilizado y se cerrará la sesión.
+            </p>
+            <div class="flex gap-3">
+              <button 
+                @click="showCompleteConfirmModal = false" 
+                class="btn-secondary flex-1"
+              >
+                Cancelar
+              </button>
+              <button 
+                @click="confirmCompleteAppointment" 
+                class="btn-primary !bg-green-600 hover:!bg-green-700 flex-1"
+              >
+                Finalizar Cita
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- Sign Record Confirmation Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showSignConfirmModal" 
+        class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
+        @click.self="showSignConfirmModal = false; recordToSign = null"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckBadgeIcon class="w-6 h-6 text-green-600" />
+            </div>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Firmar registro clínico</h3>
+            <p class="text-surface-600 mb-6">
+              Una vez firmado, el registro quedará <strong>bloqueado permanentemente</strong> y no podrá ser editado ni eliminado.
+            </p>
+            <div class="flex gap-3">
+              <button 
+                @click="showSignConfirmModal = false; recordToSign = null" 
+                class="btn-secondary flex-1"
+              >
+                Cancelar
+              </button>
+              <button 
+                @click="confirmSignRecord" 
+                class="btn-primary !bg-green-600 hover:!bg-green-700 flex-1"
+              >
+                Firmar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- Cancel Active Appointment Confirmation Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showCancelActiveModal" 
+        class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
+        @click.self="showCancelActiveModal = false; cancelConfirmText = ''"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <XMarkIcon class="w-6 h-6 text-red-500" />
+            </div>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Cancelar cita en curso</h3>
+            <p class="text-surface-600 mb-4">
+              ¿Estás seguro de que quieres cancelar esta cita? Se borrará el tiempo registrado y la cita quedará como cancelada.
+            </p>
+            
+            <!-- Confirmation input -->
+            <div class="mb-6">
+              <label class="text-sm text-surface-500 mb-2 block">
+                Escribe <span class="font-bold text-red-600">cancelar</span> para confirmar
+              </label>
+              <input 
+                v-model="cancelConfirmText"
+                type="text"
+                class="input w-full text-center"
+                placeholder="cancelar"
+                autocomplete="off"
+              />
+            </div>
+            
+            <div class="flex gap-3">
+              <button 
+                @click="showCancelActiveModal = false; cancelConfirmText = ''" 
+                class="btn-secondary flex-1"
+              >
+                Volver
+              </button>
+              <button 
+                @click="confirmCancelActiveAppointment" 
+                class="btn-primary !bg-red-600 hover:!bg-red-700 flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="cancelConfirmText.toLowerCase() !== 'cancelar'"
+              >
+                Cancelar Cita
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    
+    <!-- Rating Success Toast -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition ease-out duration-300"
+        enter-from-class="translate-y-2 opacity-0"
+        enter-to-class="translate-y-0 opacity-100"
+        leave-active-class="transition ease-in duration-200"
+        leave-from-class="translate-y-0 opacity-100"
+        leave-to-class="translate-y-2 opacity-0"
+      >
+        <div 
+          v-if="ratingSuccess" 
+          class="fixed bottom-4 right-4 z-[110] bg-green-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2"
+        >
+          <CheckCircleIcon class="w-5 h-5" />
+          <span>{{ ratingSuccess }}</span>
+        </div>
+      </Transition>
+    </Teleport>
+    
+    <!-- Rating Error Toast -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition ease-out duration-300"
+        enter-from-class="translate-y-2 opacity-0"
+        enter-to-class="translate-y-0 opacity-100"
+        leave-active-class="transition ease-in duration-200"
+        leave-from-class="translate-y-0 opacity-100"
+        leave-to-class="translate-y-2 opacity-0"
+      >
+        <div 
+          v-if="ratingError" 
+          class="fixed bottom-4 right-4 z-[110] bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2"
+        >
+          <ExclamationCircleIcon class="w-5 h-5" />
+          <span>{{ ratingError }}</span>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

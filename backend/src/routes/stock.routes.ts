@@ -3,6 +3,7 @@ import multer from 'multer';
 import * as stockController from '../controllers/stock.controller.js';
 import * as stockPacksController from '../controllers/stock-packs.controller.js';
 import * as stockReportsController from '../controllers/stock-reports.controller.js';
+import * as supplierController from '../controllers/supplier.controller.js';
 import { authenticate, requireStaff, tenantContext, requireAdmin } from '../middleware/index.js';
 
 const router = Router();
@@ -52,6 +53,31 @@ router.get('/reports/movements', stockReportsController.getMovementsReport);
 
 // Expiring items
 router.get('/reports/expiring', stockReportsController.getExpiringItems);
+
+// ============================================================================
+// SUPPLIERS
+// ============================================================================
+
+// List suppliers (with search)
+router.get('/suppliers', supplierController.listSuppliers);
+
+// Get all suppliers (for dropdown, no pagination)
+router.get('/suppliers/all', supplierController.getAllSuppliers);
+
+// Get single supplier
+router.get('/suppliers/:id', supplierController.getSupplier);
+
+// Get items for a supplier
+router.get('/suppliers/:id/items', supplierController.getSupplierItems);
+
+// Create supplier (admin only)
+router.post('/suppliers', requireAdmin, supplierController.createSupplier);
+
+// Update supplier (admin only)
+router.put('/suppliers/:id', requireAdmin, supplierController.updateSupplier);
+
+// Delete supplier (admin only)
+router.delete('/suppliers/:id', requireAdmin, supplierController.deleteSupplier);
 
 // ============================================================================
 // INVENTORY ITEMS
@@ -122,5 +148,3 @@ router.post('/packs/:id/items', requireAdmin, stockPacksController.addPackItem);
 router.delete('/packs/:id/items/:itemId', requireAdmin, stockPacksController.removePackItem);
 
 export default router;
-
-

@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
 import { api } from '@/services/api'
 import type { Patient, ApiResponse, PaginatedResponse } from '@/types'
 import {
@@ -11,16 +10,34 @@ import {
   XMarkIcon,
   PhoneIcon,
   EnvelopeIcon,
+  PencilIcon,
 } from '@heroicons/vue/24/outline'
+import PhoneCountrySelect from '@/components/PhoneCountrySelect.vue'
 
 const router = useRouter()
-const authStore = useAuthStore()
+
+// Country codes list (most common for Spain market)
+const countryCodes = [
+  { code: '+34', country: 'ES', name: 'España', flag: '🇪🇸' },
+  { code: '+33', country: 'FR', name: 'Francia', flag: '🇫🇷' },
+  { code: '+351', country: 'PT', name: 'Portugal', flag: '🇵🇹' },
+  { code: '+44', country: 'GB', name: 'Reino Unido', flag: '🇬🇧' },
+  { code: '+49', country: 'DE', name: 'Alemania', flag: '🇩🇪' },
+  { code: '+39', country: 'IT', name: 'Italia', flag: '🇮🇹' },
+  { code: '+212', country: 'MA', name: 'Marruecos', flag: '🇲🇦' },
+  { code: '+52', country: 'MX', name: 'México', flag: '🇲🇽' },
+  { code: '+54', country: 'AR', name: 'Argentina', flag: '🇦🇷' },
+  { code: '+57', country: 'CO', name: 'Colombia', flag: '🇨🇴' },
+  { code: '+1', country: 'US', name: 'Estados Unidos', flag: '🇺🇸' },
+  { code: '+55', country: 'BR', name: 'Brasil', flag: '🇧🇷' },
+]
 
 // State
 const patients = ref<Patient[]>([])
 const isLoading = ref(true)
 const error = ref('')
 const searchQuery = ref('')
+const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
 const currentPage = ref(1)
 const totalPages = ref(1)
 const total = ref(0)
@@ -33,7 +50,8 @@ const formData = ref({
   firstName: '',
   lastName: '',
   email: '',
-  phone: '',
+  phoneCountry: '+34',
+  phoneNumber: '',
   dateOfBirth: '',
   gender: '',
   idNumber: '',
@@ -42,9 +60,10 @@ const formData = ref({
   postalCode: '',
   allergies: '',
   notes: '',
+  isActive: true,
+  acceptsMarketing: true,
 })
 const isSaving = ref(false)
-const formError = ref('')
 
 // Load patients
 const loadPatients = async () => {
@@ -52,13 +71,20 @@ const loadPatients = async () => {
   error.value = ''
   
   try {
-    const response = await api.get<ApiResponse<PaginatedResponse<Patient>>>('/patients', {
-      params: {
-        page: currentPage.value,
-        limit: 10,
-        search: searchQuery.value || undefined,
-      },
-    })
+    const params: Record<string, unknown> = {
+      page: currentPage.value,
+      limit: 10,
+      search: searchQuery.value || undefined,
+    }
+    
+    // Add status filter
+    if (statusFilter.value === 'active') {
+      params.isActive = 'true'
+    } else if (statusFilter.value === 'inactive') {
+      params.isActive = 'false'
+    }
+    
+    const response = await api.get<ApiResponse<PaginatedResponse<Patient>>>('/patients', { params })
     
     if (response.success && response.data) {
       patients.value = response.data.data
@@ -74,13 +100,29 @@ const loadPatients = async () => {
 
 // Save patient
 const savePatient = async () => {
-  formError.value = ''
   isSaving.value = true
   
   try {
+    // Combine phone in E.164 format
+    const phone = formData.value.phoneNumber 
+      ? `${formData.value.phoneCountry}${formData.value.phoneNumber.replace(/\D/g, '')}`
+      : ''
+    
     const payload = {
-      ...formData.value,
+      firstName: formData.value.firstName,
+      lastName: formData.value.lastName,
+      email: formData.value.email,
+      phone,
       dateOfBirth: formData.value.dateOfBirth || undefined,
+      gender: formData.value.gender,
+      idNumber: formData.value.idNumber,
+      address: formData.value.address,
+      city: formData.value.city,
+      postalCode: formData.value.postalCode,
+      allergies: formData.value.allergies,
+      notes: formData.value.notes,
+      isActive: formData.value.isActive,
+      acceptsMarketing: formData.value.acceptsMarketing,
     }
     
     if (modalMode.value === 'create') {
@@ -93,7 +135,9 @@ const savePatient = async () => {
     resetForm()
     await loadPatients()
   } catch (err: any) {
-    formError.value = err.response?.data?.message || 'Error saving patient'
+    // Error toast is handled by API service interceptor
+    // Keep modal open for user to fix the form
+    showModal.value = true
   } finally {
     isSaving.value = false
   }
@@ -109,11 +153,28 @@ const openCreateModal = () => {
 const openEditModal = (patient: Patient) => {
   modalMode.value = 'edit'
   selectedPatient.value = patient
+  
+  // Parse phone number to extract country code and number
+  let phoneCountry = '+34'
+  let phoneNumber = ''
+  if (patient.phone) {
+    // Try to find matching country code
+    const matchedCountry = countryCodes.find(c => patient.phone?.startsWith(c.code))
+    if (matchedCountry) {
+      phoneCountry = matchedCountry.code
+      phoneNumber = patient.phone.slice(matchedCountry.code.length)
+    } else {
+      // If no match, assume it's the full number without country code
+      phoneNumber = patient.phone.replace(/^\+/, '')
+    }
+  }
+  
   formData.value = {
     firstName: patient.firstName,
     lastName: patient.lastName,
     email: patient.email || '',
-    phone: patient.phone || '',
+    phoneCountry,
+    phoneNumber,
     dateOfBirth: patient.dateOfBirth ? patient.dateOfBirth.split('T')[0] : '',
     gender: patient.gender || '',
     idNumber: patient.idNumber || '',
@@ -122,6 +183,8 @@ const openEditModal = (patient: Patient) => {
     postalCode: patient.postalCode || '',
     allergies: patient.allergies || '',
     notes: patient.notes || '',
+    isActive: patient.isActive,
+    acceptsMarketing: (patient as any).acceptsMarketing ?? true,
   }
   showModal.value = true
 }
@@ -131,7 +194,8 @@ const resetForm = () => {
     firstName: '',
     lastName: '',
     email: '',
-    phone: '',
+    phoneCountry: '+34',
+    phoneNumber: '',
     dateOfBirth: '',
     gender: '',
     idNumber: '',
@@ -140,9 +204,10 @@ const resetForm = () => {
     postalCode: '',
     allergies: '',
     notes: '',
+    isActive: true,
+    acceptsMarketing: true,
   }
   selectedPatient.value = null
-  formError.value = ''
 }
 
 const viewPatient = (patient: Patient) => {
@@ -158,6 +223,23 @@ watch(searchQuery, () => {
     loadPatients()
   }, 300)
 })
+
+// Status filter change
+watch(statusFilter, () => {
+  currentPage.value = 1
+  loadPatients()
+})
+
+// Toggle patient active status
+const togglePatientStatus = async (patient: Patient, event: Event) => {
+  event.stopPropagation()
+  try {
+    await api.put(`/patients/${patient.id}`, { isActive: !patient.isActive })
+    await loadPatients()
+  } catch (err: any) {
+    console.error('Error updating patient status:', err)
+  }
+}
 
 onMounted(() => {
   loadPatients()
@@ -178,7 +260,7 @@ onMounted(() => {
       </button>
     </div>
 
-    <!-- Search -->
+    <!-- Search and Filter -->
     <div class="flex gap-4">
       <div class="relative flex-1 max-w-md">
         <MagnifyingGlassIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-400" />
@@ -189,6 +271,11 @@ onMounted(() => {
           class="input pl-10"
         />
       </div>
+      <select v-model="statusFilter" class="input w-auto pr-10 cursor-pointer">
+        <option value="all">Todos los pacientes</option>
+        <option value="active">Solo activos</option>
+        <option value="inactive">Solo inactivos</option>
+      </select>
     </div>
 
     <!-- Error -->
@@ -228,9 +315,33 @@ onMounted(() => {
               </span>
             </div>
           </div>
-          <span :class="patient.isActive ? 'badge-success' : 'badge-neutral'" class="flex-shrink-0">
-            {{ patient.isActive ? 'Activo' : 'Inactivo' }}
-          </span>
+          <div class="flex items-center gap-3 flex-shrink-0">
+            <!-- Toggle de estado activo con tooltip -->
+            <div class="relative group">
+              <button
+                @click="togglePatientStatus(patient, $event)"
+                :class="patient.isActive ? 'bg-primary-600' : 'bg-surface-300'"
+                class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+              >
+                <span
+                  :class="patient.isActive ? 'translate-x-6' : 'translate-x-1'"
+                  class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                />
+              </button>
+              <!-- Tooltip a la izquierda -->
+              <div class="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none z-50">
+                {{ patient.isActive ? 'Desactivar paciente' : 'Activar paciente' }}
+                <div class="absolute left-full top-1/2 -translate-y-1/2 border-4 border-transparent border-l-surface-800"></div>
+              </div>
+            </div>
+            <button 
+              @click.stop="openEditModal(patient)"
+              class="p-2 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+              title="Editar paciente"
+            >
+              <PencilIcon class="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -273,8 +384,9 @@ onMounted(() => {
     <Teleport to="body">
       <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-surface-900/50" @click="showModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-scale-in">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 sticky top-0 bg-white">
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col animate-scale-in">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100 flex-shrink-0">
             <h2 class="text-lg font-semibold text-surface-900">
               {{ modalMode === 'create' ? 'Nuevo Paciente' : 'Editar Paciente' }}
             </h2>
@@ -283,74 +395,102 @@ onMounted(() => {
             </button>
           </div>
           
-          <form @submit.prevent="savePatient" class="p-6 space-y-4">
-            <div v-if="formError" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm">
-              {{ formError }}
+          <!-- Scrollable content -->
+          <form @submit.prevent="savePatient" class="flex flex-col flex-1 overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-6 space-y-4">
+              <div class="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label class="label">Nombre *</label>
+                  <input v-model="formData.firstName" type="text" required class="input" placeholder="María" />
+                </div>
+                
+                <div>
+                  <label class="label">Apellidos *</label>
+                  <input v-model="formData.lastName" type="text" required class="input" placeholder="García López" />
+                </div>
+                
+                <div>
+                  <label class="label">Email</label>
+                  <input v-model="formData.email" type="email" class="input" placeholder="maria@email.com" />
+                </div>
+                
+                <div class="md:col-span-2">
+                  <label class="label">Teléfono</label>
+                  <div class="flex gap-2">
+                    <PhoneCountrySelect v-model="formData.phoneCountry" />
+                    <input 
+                      v-model="formData.phoneNumber" 
+                      type="tel" 
+                      class="input flex-1" 
+                      placeholder="612345678"
+                      @input="formData.phoneNumber = formData.phoneNumber.replace(/\D/g, '')"
+                    />
+                  </div>
+                  <p class="text-xs text-surface-400 mt-1">Solo números, sin espacios</p>
+                </div>
+                
+                <div>
+                  <label class="label">Fecha de nacimiento</label>
+                  <input v-model="formData.dateOfBirth" type="date" class="input" />
+                </div>
+                
+                <div>
+                  <label class="label">Género</label>
+                  <select v-model="formData.gender" class="input">
+                    <option value="">Seleccionar...</option>
+                    <option value="male">Masculino</option>
+                    <option value="female">Femenino</option>
+                    <option value="other">Otro</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label class="label">DNI/NIE</label>
+                  <input v-model="formData.idNumber" type="text" class="input" placeholder="12345678A" />
+                </div>
+                
+                <div>
+                  <label class="label">Ciudad</label>
+                  <input v-model="formData.city" type="text" class="input" placeholder="Madrid" />
+                </div>
+                
+                <div class="md:col-span-2">
+                  <label class="label">Dirección</label>
+                  <input v-model="formData.address" type="text" class="input" placeholder="Calle Mayor 10, 2ºB" />
+                </div>
+                
+                <div class="md:col-span-2">
+                  <label class="label">Alergias</label>
+                  <textarea v-model="formData.allergies" class="input" rows="2" placeholder="Penicilina, látex..."></textarea>
+                </div>
+                
+                <div class="md:col-span-2">
+                  <label class="label">Notas</label>
+                  <textarea v-model="formData.notes" class="input" rows="2" placeholder="Notas adicionales..."></textarea>
+                </div>
+                
+                <!-- Marketing Preferences -->
+                <div class="md:col-span-2 pt-4 border-t border-surface-200">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label class="label mb-0">📧 Acepta emails de marketing</label>
+                      <p class="text-xs text-surface-400">Cumpleaños, promociones y newsletters</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        v-model="formData.acceptsMarketing" 
+                        class="sr-only peer"
+                      />
+                      <div class="w-11 h-6 bg-surface-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                    </label>
+                  </div>
+                </div>
+              </div>
             </div>
             
-            <div class="grid md:grid-cols-2 gap-4">
-              <div>
-                <label class="label">Nombre *</label>
-                <input v-model="formData.firstName" type="text" required class="input" placeholder="María" />
-              </div>
-              
-              <div>
-                <label class="label">Apellidos *</label>
-                <input v-model="formData.lastName" type="text" required class="input" placeholder="García López" />
-              </div>
-              
-              <div>
-                <label class="label">Email</label>
-                <input v-model="formData.email" type="email" class="input" placeholder="maria@email.com" />
-              </div>
-              
-              <div>
-                <label class="label">Teléfono</label>
-                <input v-model="formData.phone" type="tel" class="input" placeholder="+34 612 345 678" />
-              </div>
-              
-              <div>
-                <label class="label">Fecha de nacimiento</label>
-                <input v-model="formData.dateOfBirth" type="date" class="input" />
-              </div>
-              
-              <div>
-                <label class="label">Género</label>
-                <select v-model="formData.gender" class="input">
-                  <option value="">Seleccionar...</option>
-                  <option value="male">Masculino</option>
-                  <option value="female">Femenino</option>
-                  <option value="other">Otro</option>
-                </select>
-              </div>
-              
-              <div>
-                <label class="label">DNI/NIE</label>
-                <input v-model="formData.idNumber" type="text" class="input" placeholder="12345678A" />
-              </div>
-              
-              <div>
-                <label class="label">Ciudad</label>
-                <input v-model="formData.city" type="text" class="input" placeholder="Madrid" />
-              </div>
-              
-              <div class="md:col-span-2">
-                <label class="label">Dirección</label>
-                <input v-model="formData.address" type="text" class="input" placeholder="Calle Mayor 10, 2ºB" />
-              </div>
-              
-              <div class="md:col-span-2">
-                <label class="label">Alergias</label>
-                <textarea v-model="formData.allergies" class="input" rows="2" placeholder="Penicilina, látex..."></textarea>
-              </div>
-              
-              <div class="md:col-span-2">
-                <label class="label">Notas</label>
-                <textarea v-model="formData.notes" class="input" rows="2" placeholder="Notas adicionales..."></textarea>
-              </div>
-            </div>
-            
-            <div class="flex gap-3 pt-4">
+            <!-- Footer (sticky) -->
+            <div class="flex gap-3 px-6 py-4 border-t border-surface-100 flex-shrink-0 bg-white rounded-b-2xl">
               <button type="button" @click="showModal = false" class="btn-secondary flex-1">
                 Cancelar
               </button>
@@ -363,4 +503,5 @@ onMounted(() => {
       </div>
     </Teleport>
   </div>
+
 </template>

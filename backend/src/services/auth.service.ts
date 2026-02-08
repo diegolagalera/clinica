@@ -7,6 +7,8 @@ import { users, refreshTokens, organizations, clinics } from '../db/schema.js';
 import { config } from '../config/env.js';
 import { UnauthorizedError, BadRequestError, NotFoundError, ConflictError } from '../utils/errors.js';
 import type { AccessTokenPayload, RefreshTokenPayload, ServiceResult, Role } from '../types/index.js';
+import { logger } from '../utils/logger.js';
+import { sendPasswordResetEmail } from './email.service.js';
 
 const SALT_ROUNDS = 12;
 
@@ -38,6 +40,7 @@ export interface UserInfo {
     email: string;
     firstName: string;
     lastName: string;
+    phone: string | null;
     role: Role;
     organizationId: string | null;
     clinicId: string | null;
@@ -144,6 +147,7 @@ export const register = async (input: RegisterInput): ServiceResult<{ user: User
                     email: user.email,
                     firstName: user.firstName,
                     lastName: user.lastName,
+                    phone: user.phone,
                     role: user.role as Role,
                     organizationId: user.organizationId,
                     clinicId: user.clinicId,
@@ -195,6 +199,7 @@ export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: 
                         email: user.email,
                         firstName: user.firstName,
                         lastName: user.lastName,
+                        phone: user.phone,
                         role: user.role as Role,
                         organizationId: user.organizationId,
                         clinicId: user.clinicId,
@@ -228,6 +233,7 @@ export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: 
     const refreshPayload: RefreshTokenPayload = {
         userId: user.id,
         tokenVersion: user.tokenVersion,
+        jti: crypto.randomUUID(), // Unique ID to prevent duplicate tokens
     };
 
     const accessToken = generateAccessToken(accessPayload);
@@ -261,6 +267,7 @@ export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: 
                 email: user.email,
                 firstName: user.firstName,
                 lastName: user.lastName,
+                phone: user.phone,
                 role: user.role as Role,
                 organizationId: user.organizationId,
                 clinicId: user.clinicId,
@@ -290,8 +297,49 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
             },
         });
 
-        if (!storedToken || storedToken.revokedAt) {
+        if (!storedToken) {
             throw new UnauthorizedError('Invalid refresh token');
+        }
+
+        // Handle race condition: token already revoked by another tab
+        if (storedToken.revokedAt) {
+            // If this token was replaced by another, use that one
+            if (storedToken.replacedByToken) {
+                const replacementToken = await db.query.refreshTokens.findFirst({
+                    where: and(
+                        eq(refreshTokens.token, storedToken.replacedByToken),
+                        eq(refreshTokens.userId, decoded.userId)
+                    ),
+                    with: {
+                        user: true,
+                    },
+                });
+
+                // If replacement exists and is valid, generate new access token
+                if (replacementToken && !replacementToken.revokedAt && new Date() < replacementToken.expiresAt) {
+                    const user = replacementToken.user;
+                    if (user.tokenVersion === decoded.tokenVersion) {
+                        const accessPayload: AccessTokenPayload = {
+                            userId: user.id,
+                            email: user.email,
+                            role: user.role as Role,
+                            organizationId: user.organizationId,
+                            clinicId: user.clinicId,
+                        };
+                        const newAccessToken = generateAccessToken(accessPayload);
+
+                        return {
+                            success: true,
+                            data: {
+                                accessToken: newAccessToken,
+                                refreshToken: storedToken.replacedByToken,
+                                expiresIn: parseExpiry(config.jwt.accessExpiry),
+                            },
+                        };
+                    }
+                }
+            }
+            throw new UnauthorizedError('Refresh token has been revoked');
         }
 
         if (new Date() > storedToken.expiresAt) {
@@ -317,6 +365,7 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
         const refreshPayload: RefreshTokenPayload = {
             userId: user.id,
             tokenVersion: user.tokenVersion,
+            jti: crypto.randomUUID(), // Unique ID to prevent duplicate tokens
         };
 
         const newAccessToken = generateAccessToken(accessPayload);
@@ -491,8 +540,11 @@ export const requestPasswordReset = async (email: string): Promise<ServiceResult
         })
         .where(eq(users.id, user.id));
 
-    // TODO: Send email with reset link
-    // await sendPasswordResetEmail(user.email, resetToken);
+    // Send password reset email
+    const emailResult = await sendPasswordResetEmail(user.email, resetToken);
+    if (!emailResult.success) {
+        logger.warn(`Failed to send password reset email to ${user.email}: ${emailResult.error}`);
+    }
 
     return { success: true, data: true };
 };
@@ -544,3 +596,80 @@ export const verifyEmail = async (token: string): Promise<ServiceResult<boolean>
 
     return { success: true, data: true };
 };
+
+/**
+ * Update user's basic info (firstName, lastName, phone)
+ */
+export const updateUserInfo = async (
+    userId: string,
+    data: { firstName?: string | undefined; lastName?: string | undefined; phone?: string | undefined }
+): Promise<UserInfo> => {
+    const user = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+    });
+
+    if (!user) {
+        throw new NotFoundError('User not found');
+    }
+
+    const [updated] = await db.update(users)
+        .set({
+            ...(data.firstName && { firstName: data.firstName }),
+            ...(data.lastName && { lastName: data.lastName }),
+            ...(data.phone !== undefined && { phone: data.phone }),
+            updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId))
+        .returning();
+
+    return {
+        id: updated!.id,
+        email: updated!.email,
+        firstName: updated!.firstName,
+        lastName: updated!.lastName,
+        phone: updated!.phone,
+        role: updated!.role as Role,
+        organizationId: updated!.organizationId,
+        clinicId: updated!.clinicId,
+        twoFactorEnabled: updated!.twoFactorEnabled,
+        emailVerified: updated!.emailVerified,
+    };
+};
+
+/**
+ * Change user's password (requires current password verification)
+ */
+export const changePassword = async (
+    userId: string,
+    currentPassword: string,
+    newPassword: string
+): Promise<ServiceResult<boolean>> => {
+    const user = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+    });
+
+    if (!user) {
+        throw new NotFoundError('User not found');
+    }
+
+    // Verify current password
+    const isValidPassword = await verifyPassword(currentPassword, user.passwordHash);
+    if (!isValidPassword) {
+        throw new BadRequestError('La contraseña actual es incorrecta');
+    }
+
+    // Hash new password
+    const passwordHash = await hashPassword(newPassword);
+
+    // Update password and increment token version to invalidate all existing tokens
+    await db.update(users)
+        .set({
+            passwordHash,
+            tokenVersion: user.tokenVersion + 1,
+            updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+
+    return { success: true, data: true };
+};
+

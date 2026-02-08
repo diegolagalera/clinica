@@ -1,9 +1,10 @@
 import { eq, and, gte, lte, sql, or, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { appointments, patients, users, appointmentWorkers } from '../db/schema.js';
+import { appointments, patients, users, appointmentWorkers, auditLogs, ratingRequests, workerClinics } from '../db/schema.js';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult, TenantContext } from '../types/index.js';
 import { AppointmentType, AppointmentStatus } from '../types/enums.js';
+import { appointmentEvents } from '../websocket.js';
 
 export interface CreateAppointmentInput {
     clinicId: string;
@@ -33,6 +34,38 @@ export interface UpdateAppointmentInput {
 }
 
 export type AppointmentType_ = typeof appointments.$inferSelect;
+
+/**
+ * Helper to get all worker IDs assigned to an appointment
+ * Includes both legacy workerId and new appointmentWorkers
+ */
+async function getAppointmentWorkerIds(appointmentId: string): Promise<string[]> {
+    const appointment = await db.query.appointments.findFirst({
+        where: eq(appointments.id, appointmentId),
+        columns: { workerId: true },
+        with: {
+            appointmentWorkers: {
+                columns: { userId: true },
+            },
+        },
+    });
+
+    if (!appointment) return [];
+
+    const workerIds = new Set<string>();
+
+    // Add legacy workerId if exists
+    if (appointment.workerId) {
+        workerIds.add(appointment.workerId);
+    }
+
+    // Add all appointmentWorkers
+    for (const aw of appointment.appointmentWorkers) {
+        workerIds.add(aw.userId);
+    }
+
+    return Array.from(workerIds);
+}
 
 /**
  * Get appointments for a date range
@@ -204,8 +237,8 @@ export const checkConflicts = async (
             // New appointment contains existing
             and(lte(sql`${startTime}`, appointments.startTime), gte(sql`${endTime}`, appointments.endTime))
         ),
-        // Exclude cancelled/no-show
-        sql`${appointments.status} NOT IN ('CANCELLED', 'NO_SHOW')`
+        // Exclude completed/cancelled/no-show - only SCHEDULED and IN_PROGRESS block the slot
+        sql`${appointments.status} NOT IN ('CANCELLED', 'NO_SHOW', 'COMPLETED')`
     );
 
     if (excludeAppointmentId) {
@@ -242,17 +275,35 @@ export const createAppointment = async (
         ? input.workerIds
         : (input.workerId ? [input.workerId] : [input.createdById]);
 
-    // Validate all workers exist and belong to clinic
+    // Validate all workers exist and belong to clinic (via direct clinicId OR workerClinics table)
     for (const wId of effectiveWorkerIds) {
+        // First check if user exists with correct role
         const worker = await db.query.users.findFirst({
             where: and(
                 eq(users.id, wId),
-                eq(users.clinicId, input.clinicId),
                 sql`${users.role} IN ('ADMIN', 'WORKER')`
             ),
         });
+
         if (!worker) {
-            throw new BadRequestError(`Worker ${wId} not found in this clinic`);
+            throw new BadRequestError(`Worker ${wId} not found`);
+        }
+
+        // Check if worker is assigned to this clinic (via direct clinicId OR worker_clinics)
+        const hasDirectClinic = worker.clinicId === input.clinicId;
+
+        if (!hasDirectClinic) {
+            const workerClinicAssignment = await db.query.workerClinics.findFirst({
+                where: and(
+                    eq(workerClinics.userId, wId),
+                    eq(workerClinics.clinicId, input.clinicId),
+                    eq(workerClinics.isActive, true)
+                ),
+            });
+
+            if (!workerClinicAssignment) {
+                throw new BadRequestError(`Worker ${wId} not assigned to this clinic`);
+            }
         }
     }
 
@@ -431,4 +482,429 @@ export const getWorkerSchedule = async (
         appointments: dayAppointments,
         totalAppointments: dayAppointments.length,
     };
+};
+
+// ============================================================================
+// ACTIVE APPOINTMENT MANAGEMENT
+// ============================================================================
+
+/**
+ * Get all active (IN_PROGRESS) appointments for a user
+ * Returns appointments where the user is one of the assigned workers
+ */
+export const getActiveAppointments = async (
+    clinicId: string,
+    userId: string
+): Promise<AppointmentType_[]> => {
+    const activeAppts = await db.query.appointments.findMany({
+        where: and(
+            eq(appointments.clinicId, clinicId),
+            eq(appointments.status, 'IN_PROGRESS')
+        ),
+        with: {
+            patient: true,
+            worker: true,
+            appointmentWorkers: {
+                with: {
+                    user: true,
+                },
+            },
+        },
+    });
+
+    // Filter to only appointments where this user is assigned
+    return activeAppts.filter(apt => {
+        const assignedWorkerIds = apt.appointmentWorkers.map(aw => aw.userId);
+        return assignedWorkerIds.includes(userId) || apt.workerId === userId;
+    });
+};
+
+/**
+ * Start an appointment (transition to IN_PROGRESS)
+ */
+export const startAppointment = async (
+    id: string,
+    startedById: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    if (existing.status !== 'SCHEDULED') {
+        throw new BadRequestError(`Cannot start appointment with status ${existing.status}`);
+    }
+
+    // Check if patient already has an active appointment
+    const patientActiveAppointment = await db.query.appointments.findFirst({
+        where: and(
+            eq(appointments.patientId, existing.patientId),
+            eq(appointments.status, 'IN_PROGRESS'),
+            eq(appointments.clinicId, existing.clinicId)
+        ),
+    });
+
+    if (patientActiveAppointment) {
+        throw new BadRequestError('Este paciente ya tiene una cita activa en curso. Debe finalizar la cita actual antes de iniciar otra.');
+    }
+
+    await db
+        .update(appointments)
+        .set({
+            status: 'IN_PROGRESS',
+            realStartTime: new Date(),
+            startedById,
+            updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, id));
+
+    // Re-fetch with full relations for frontend
+    const updated = await db.query.appointments.findFirst({
+        where: eq(appointments.id, id),
+        with: {
+            patient: true,
+            worker: true,
+            appointmentWorkers: {
+                with: {
+                    user: true,
+                },
+            },
+        },
+    });
+
+    // Emit WebSocket event only to assigned workers
+    const workerIds = await getAppointmentWorkerIds(id);
+    appointmentEvents.started(workerIds, updated);
+
+    return updated!;
+};
+
+/**
+ * Pause an active appointment
+ * Note: pausedDuration tracks cumulative paused time in minutes
+ */
+export const pauseAppointment = async (
+    id: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    if (existing.status !== 'IN_PROGRESS') {
+        throw new BadRequestError('Can only pause active appointments');
+    }
+
+    // We store the pause timestamp in notes temporarily (simple approach)
+    // The pausedDuration will be updated when resumed
+    const [updated] = await db
+        .update(appointments)
+        .set({
+            notes: existing.notes
+                ? `${existing.notes}\n[PAUSED:${new Date().toISOString()}]`
+                : `[PAUSED:${new Date().toISOString()}]`,
+            updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, id))
+        .returning();
+
+    // Emit WebSocket event only to assigned workers
+    const workerIds = await getAppointmentWorkerIds(id);
+    appointmentEvents.updated(workerIds, updated);
+
+    return updated!;
+};
+
+/**
+ * Resume a paused appointment
+ */
+export const resumeAppointment = async (
+    id: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    if (existing.status !== 'IN_PROGRESS') {
+        throw new BadRequestError('Can only resume active appointments');
+    }
+
+    // Calculate paused duration from the pause timestamp in notes
+    let additionalPausedMinutes = 0;
+    if (existing.notes) {
+        const pauseMatch = existing.notes.match(/\[PAUSED:([^\]]+)\]/);
+        if (pauseMatch) {
+            const pauseTime = new Date(pauseMatch[1]!);
+            additionalPausedMinutes = Math.round((Date.now() - pauseTime.getTime()) / 60000);
+        }
+    }
+
+    // Remove pause marker and update paused duration
+    const cleanNotes = existing.notes?.replace(/\n?\[PAUSED:[^\]]+\]/g, '') || null;
+    const newPausedDuration = (existing.pausedDuration || 0) + additionalPausedMinutes;
+
+    const [updated] = await db
+        .update(appointments)
+        .set({
+            pausedDuration: newPausedDuration,
+            notes: cleanNotes,
+            updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, id))
+        .returning();
+
+    // Emit WebSocket event only to assigned workers
+    const workerIds = await getAppointmentWorkerIds(id);
+    appointmentEvents.updated(workerIds, updated);
+
+    return updated!;
+};
+
+/**
+ * Complete an active appointment
+ */
+export const completeAppointment = async (
+    id: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    if (existing.status !== 'IN_PROGRESS') {
+        throw new BadRequestError('Can only complete active appointments');
+    }
+
+    const [updated] = await db
+        .update(appointments)
+        .set({
+            status: 'COMPLETED',
+            realEndTime: new Date(),
+            updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, id))
+        .returning();
+
+    // Emit WebSocket event only to assigned workers
+    const workerIds = await getAppointmentWorkerIds(id);
+    appointmentEvents.completed(workerIds, id);
+
+    return updated!;
+};
+
+// ============================================================================
+// ADMIN: REAL TIME MANAGEMENT
+// ============================================================================
+
+export interface UpdateRealTimeInput {
+    realStartTime?: Date | undefined;
+    realEndTime?: Date | undefined;
+    pausedDuration?: number | undefined;
+}
+
+/**
+ * Update real time fields (Admin only)
+ * Allows correcting errors when workers start/end appointments incorrectly
+ */
+export const updateRealTime = async (
+    id: string,
+    input: UpdateRealTimeInput,
+    adminUserId: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    // Validate times if both provided
+    if (input.realStartTime && input.realEndTime && input.realEndTime <= input.realStartTime) {
+        throw new BadRequestError('El tiempo de fin debe ser posterior al tiempo de inicio');
+    }
+
+    // Store old values for audit
+    const oldValues = {
+        realStartTime: existing.realStartTime,
+        realEndTime: existing.realEndTime,
+        pausedDuration: existing.pausedDuration,
+    };
+
+    // Build update object
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
+    if (input.realStartTime !== undefined) updateData['realStartTime'] = input.realStartTime;
+    if (input.realEndTime !== undefined) updateData['realEndTime'] = input.realEndTime;
+    if (input.pausedDuration !== undefined) updateData['pausedDuration'] = input.pausedDuration;
+
+    const [updated] = await db
+        .update(appointments)
+        .set(updateData)
+        .where(eq(appointments.id, id))
+        .returning();
+
+    // Create audit log
+    await db.insert(auditLogs).values({
+        clinicId: existing.clinicId,
+        userId: adminUserId,
+        action: 'UPDATE',
+        entityType: 'appointment',
+        entityId: id,
+        oldValues,
+        newValues: {
+            realStartTime: input.realStartTime ?? existing.realStartTime,
+            realEndTime: input.realEndTime ?? existing.realEndTime,
+            pausedDuration: input.pausedDuration ?? existing.pausedDuration,
+        },
+        metadata: { adminAction: 'edit_real_time' },
+    });
+
+    return updated!;
+};
+
+/**
+ * Reset real time fields (Admin only)
+ * Clears realStartTime, realEndTime, pausedDuration, reverts status to SCHEDULED
+ * Also cancels any pending rating requests
+ */
+export const resetRealTime = async (
+    id: string,
+    adminUserId: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    // Only allow reset if appointment was started (has realStartTime)
+    if (!existing.realStartTime) {
+        throw new BadRequestError('Esta cita no tiene tiempo real registrado para resetear');
+    }
+
+    // Store old values for audit
+    const oldValues = {
+        status: existing.status,
+        realStartTime: existing.realStartTime,
+        realEndTime: existing.realEndTime,
+        pausedDuration: existing.pausedDuration,
+        startedById: existing.startedById,
+    };
+
+    // Clean up pause markers from notes if any
+    const cleanNotes = existing.notes?.replace(/\n?\[PAUSED:[^\]]+\]/g, '') || null;
+
+    // Reset all real time fields and status
+    const [updated] = await db
+        .update(appointments)
+        .set({
+            status: 'SCHEDULED',
+            realStartTime: null,
+            realEndTime: null,
+            pausedDuration: 0,
+            startedById: null,
+            notes: cleanNotes,
+            updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, id))
+        .returning();
+
+    // Cancel any pending rating request for this appointment
+    await db
+        .update(ratingRequests)
+        .set({ status: 'EXPIRED' })
+        .where(and(
+            eq(ratingRequests.appointmentId, id),
+            sql`${ratingRequests.status} IN ('PENDING', 'SENT')`
+        ));
+
+    // Create audit log
+    await db.insert(auditLogs).values({
+        clinicId: existing.clinicId,
+        userId: adminUserId,
+        action: 'UPDATE',
+        entityType: 'appointment',
+        entityId: id,
+        oldValues,
+        newValues: {
+            status: 'SCHEDULED',
+            realStartTime: null,
+            realEndTime: null,
+            pausedDuration: 0,
+            startedById: null,
+        },
+        metadata: { adminAction: 'reset_real_time' },
+    });
+
+    return updated!;
+};
+
+/**
+ * Cancel an active (IN_PROGRESS) appointment
+ * Clears realStartTime, realEndTime, pausedDuration and sets status to CANCELLED
+ */
+export const cancelActiveAppointment = async (
+    id: string,
+    cancelledById: string,
+    tenantContext: TenantContext
+): Promise<AppointmentType_> => {
+    const existing = await getAppointmentById(id, tenantContext);
+    if (!existing) {
+        throw new NotFoundError('Appointment not found');
+    }
+
+    // Only allow cancellation of active appointments
+    if (existing.status !== 'IN_PROGRESS') {
+        throw new BadRequestError('Solo se pueden cancelar citas que están en curso');
+    }
+
+    // Store old values for audit
+    const oldValues = {
+        status: existing.status,
+        realStartTime: existing.realStartTime,
+        realEndTime: existing.realEndTime,
+        pausedDuration: existing.pausedDuration,
+        startedById: existing.startedById,
+    };
+
+    // Clean up pause markers from notes if any
+    const cleanNotes = existing.notes?.replace(/\n?\[PAUSED:[^\]]+\]/g, '') || null;
+
+    // Clear real time data and set status to CANCELLED
+    const [updated] = await db
+        .update(appointments)
+        .set({
+            status: 'CANCELLED',
+            realStartTime: null,
+            realEndTime: null,
+            pausedDuration: 0,
+            startedById: null,
+            notes: cleanNotes,
+            updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, id))
+        .returning();
+
+    // Create audit log
+    await db.insert(auditLogs).values({
+        clinicId: existing.clinicId,
+        userId: cancelledById,
+        action: 'UPDATE',
+        entityType: 'appointment',
+        entityId: id,
+        oldValues,
+        newValues: {
+            status: 'CANCELLED',
+            realStartTime: null,
+            realEndTime: null,
+            pausedDuration: 0,
+            startedById: null,
+        },
+        metadata: { action: 'cancel_active_appointment' },
+    });
+
+    return updated!;
 };

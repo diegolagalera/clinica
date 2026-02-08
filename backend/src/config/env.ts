@@ -50,6 +50,9 @@ const envSchema = z.object({
 
     // Logging
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+
+    // Support
+    SUPPORT_EMAIL: z.string().email().default('soporte@cuspia.com'),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -124,5 +127,9 @@ export const config = {
 
     logging: {
         level: env.LOG_LEVEL,
+    },
+
+    support: {
+        email: env.SUPPORT_EMAIL,
     },
 } as const;

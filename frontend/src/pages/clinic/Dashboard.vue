@@ -189,7 +189,7 @@ onMounted(() => {
     </div>
 
     <!-- Quick actions -->
-    <div class="grid md:grid-cols-3 gap-4">
+    <div class="grid md:grid-cols-2 gap-4">
       <RouterLink 
         to="/clinic/patients" 
         class="card p-6 hover:shadow-glow transition-shadow group"
@@ -206,15 +206,6 @@ onMounted(() => {
         <CalendarDaysIcon class="w-8 h-8 text-accent-500 mb-3" />
         <h3 class="font-semibold text-surface-900 group-hover:text-accent-600">Calendario</h3>
         <p class="text-sm text-surface-500 mt-1">Gestionar citas</p>
-      </RouterLink>
-      
-      <RouterLink 
-        to="/clinic/radiographs" 
-        class="card p-6 hover:shadow-glow transition-shadow group"
-      >
-        <ChartBarIcon class="w-8 h-8 text-warning-500 mb-3" />
-        <h3 class="font-semibold text-surface-900 group-hover:text-warning-600">Radiografías</h3>
-        <p class="text-sm text-surface-500 mt-1">Análisis con IA</p>
       </RouterLink>
     </div>
   </div>

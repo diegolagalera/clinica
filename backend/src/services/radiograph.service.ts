@@ -25,6 +25,7 @@ export interface CreateRadiographInput {
     };
     radiographType?: string;
     notes?: string;
+    skipAnalysis?: boolean; // If true, don't auto-analyze with AI
 }
 
 export interface UpdateRadiographNotesInput {
@@ -46,7 +47,7 @@ const ensureUploadDir = async () => {
 export const createRadiograph = async (
     input: CreateRadiographInput,
     tenantContext: TenantContext
-): Promise<{ radiograph: RadiographType; aiResult: RadiographAiResultType }> => {
+): Promise<{ radiograph: RadiographType; aiResult: RadiographAiResultType | null }> => {
     // Validate file type
     const allowedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg'];
     if (!allowedMimeTypes.includes(input.file.mimetype)) {
@@ -86,21 +87,26 @@ export const createRadiograph = async (
         })
         .returning();
 
-    // Create AI result record with PENDING status
-    const [aiResult] = await db
-        .insert(radiographAiResults)
-        .values({
-            radiographId: radiograph!.id,
-            status: 'PENDING',
-        })
-        .returning();
+    let aiResult: RadiographAiResultType | null = null;
 
-    // Start async AI analysis
-    processAiAnalysis(radiograph!.id, input.file.buffer, input.file.mimetype).catch((err) => {
-        logger.error('Background AI analysis failed:', err);
-    });
+    // Only create AI result and start analysis if not skipped
+    if (!input.skipAnalysis) {
+        const [result] = await db
+            .insert(radiographAiResults)
+            .values({
+                radiographId: radiograph!.id,
+                status: 'PENDING',
+            })
+            .returning();
+        aiResult = result!;
 
-    return { radiograph: radiograph!, aiResult: aiResult! };
+        // Start async AI analysis
+        processAiAnalysis(radiograph!.id, input.file.buffer, input.file.mimetype).catch((err) => {
+            logger.error('Background AI analysis failed:', err);
+        });
+    }
+
+    return { radiograph: radiograph!, aiResult: aiResult };
 };
 
 /**
@@ -232,7 +238,9 @@ export const getRadiographById = async (
 };
 
 /**
- * Retry AI analysis for a failed radiograph
+ * Start or retry AI analysis for a radiograph
+ * If no AI result exists (skipAnalysis was true on upload), creates one
+ * If AI result exists and is not processing, retries the analysis
  */
 export const retryAiAnalysis = async (
     radiographId: string,
@@ -243,33 +251,44 @@ export const retryAiAnalysis = async (
         throw new NotFoundError('Radiografía no encontrada');
     }
 
-    const currentResult = radiograph.aiResult;
-    if (!currentResult) {
-        throw new BadRequestError('No existe un resultado de análisis previo');
-    }
+    let aiResult = radiograph.aiResult;
 
-    if (currentResult.status === 'PROCESSING') {
-        throw new BadRequestError('El análisis ya está en proceso');
-    }
+    // If no AI result exists, create one (for radiographs uploaded with skipAnalysis=true)
+    if (!aiResult) {
+        const [newResult] = await db
+            .insert(radiographAiResults)
+            .values({
+                radiographId: radiograph.id,
+                status: 'PENDING',
+            })
+            .returning();
+        aiResult = newResult!;
+    } else {
+        // AI result exists - check if we can retry
+        if (aiResult.status === 'PROCESSING') {
+            throw new BadRequestError('El análisis ya está en proceso');
+        }
 
-    // Reset to PENDING
-    const [updatedResult] = await db
-        .update(radiographAiResults)
-        .set({
-            status: 'PENDING',
-            errorMessage: null,
-            updatedAt: new Date(),
-        })
-        .where(eq(radiographAiResults.radiographId, radiographId))
-        .returning();
+        // Reset to PENDING
+        const [updatedResult] = await db
+            .update(radiographAiResults)
+            .set({
+                status: 'PENDING',
+                errorMessage: null,
+                updatedAt: new Date(),
+            })
+            .where(eq(radiographAiResults.radiographId, radiographId))
+            .returning();
+        aiResult = updatedResult!;
+    }
 
     // Read file and start analysis
     const fileBuffer = await fs.readFile(radiograph.storageKey);
     processAiAnalysis(radiographId, fileBuffer, radiograph.mimeType).catch((err) => {
-        logger.error('Retry AI analysis failed:', err);
+        logger.error('AI analysis failed:', err);
     });
 
-    return updatedResult!;
+    return aiResult;
 };
 
 /**

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '@/services/api'
+import { toast } from '@/composables/useToast'
 import type { ApiResponse, PaginatedResponse } from '@/types'
+import BarcodeScanner from '@/components/BarcodeScanner.vue'
 import {
   MagnifyingGlassIcon,
   PlusIcon,
@@ -21,6 +23,9 @@ import {
   ArchiveBoxIcon,
   InformationCircleIcon,
   SparklesIcon,
+  QrCodeIcon,
+  BuildingStorefrontIcon,
+  ChartBarIcon,
 } from '@heroicons/vue/24/outline'
 
 interface InventoryItem {
@@ -35,6 +40,7 @@ interface InventoryItem {
   maxStock: number | null
   costPrice: string | null
   sellPrice: string | null
+  supplierId: string | null
   supplier: string | null
   supplierCode: string | null
   expirationDate: string | null
@@ -54,9 +60,15 @@ interface StockSummary {
   byCategory: { category: string; count: number; totalValue: string }[]
 }
 
+interface SimpleSupplier {
+  id: string
+  name: string
+}
+
 // State
 const items = ref<InventoryItem[]>([])
 const categories = ref<string[]>([])
+const suppliers = ref<SimpleSupplier[]>([])
 const summary = ref<StockSummary | null>(null)
 const total = ref(0)
 const page = ref(1)
@@ -65,6 +77,7 @@ const limit = ref(20)
 // Filters
 const searchQuery = ref('')
 const selectedCategory = ref('')
+const selectedSupplier = ref('')
 const showLowStock = ref(false)
 
 // UI State
@@ -86,6 +99,7 @@ const form = ref({
   maxStock: 0,
   costPrice: '',
   sellPrice: '',
+  supplierId: '' as string | null,
   supplier: '',
   supplierCode: '',
   expirationDate: '',
@@ -97,6 +111,7 @@ const adjustForm = ref({
   type: 'IN' as 'IN' | 'OUT' | 'ADJUSTMENT' | 'EXPIRED',
   quantity: 1,
   reason: '',
+  unitCost: null as number | null,
 })
 
 // Image upload
@@ -106,6 +121,25 @@ const imagePreview = ref<string | null>(null)
 // AI Image generation
 const isGeneratingImage = ref(false)
 const generatedImageUrl = ref<string | null>(null)
+
+// Barcode scanner
+const showBarcodeScanner = ref(false)
+const lastScannedBarcode = ref<{ code: string; format: string } | null>(null)
+
+// Handle barcode scan result
+function handleBarcodeScanned(code: string, format: string) {
+  lastScannedBarcode.value = { code, format }
+  showBarcodeScanner.value = false
+  
+  // Auto-fill SKU field with the barcode
+  form.value.sku = code
+}
+
+// Saving state
+const isSaving = ref(false)
+
+// Image lightbox
+const lightboxImage = ref<string | null>(null)
 
 // Computed
 const totalPages = computed(() => Math.ceil(total.value / limit.value))
@@ -120,12 +154,13 @@ async function loadItems() {
     })
     if (searchQuery.value) params.append('search', searchQuery.value)
     if (selectedCategory.value) params.append('category', selectedCategory.value)
+    if (selectedSupplier.value) params.append('supplierId', selectedSupplier.value)
     if (showLowStock.value) params.append('lowStock', 'true')
 
     const data = await api.get<ApiResponse<PaginatedResponse<InventoryItem>>>(`/stock/items?${params}`)
     if (data.success && data.data) {
       items.value = data.data.data
-      total.value = data.data.total
+      total.value = data.data.pagination.total
     }
   } catch (error) {
     console.error('Error loading items:', error)
@@ -146,6 +181,18 @@ async function loadCategories() {
   }
 }
 
+// Load suppliers for dropdown
+async function loadSuppliers() {
+  try {
+    const data = await api.get<ApiResponse<SimpleSupplier[]>>('/stock/suppliers/all')
+    if (data.success && data.data) {
+      suppliers.value = data.data
+    }
+  } catch (error) {
+    console.error('Error loading suppliers:', error)
+  }
+}
+
 // Load summary
 async function loadSummary() {
   try {
@@ -160,6 +207,7 @@ async function loadSummary() {
 
 // Create item
 async function createItem() {
+  isSaving.value = true
   try {
     const payload = {
       ...form.value,
@@ -190,7 +238,9 @@ async function createItem() {
     }
   } catch (error) {
     console.error('Error creating item:', error)
-    alert('Error al crear el item')
+    toast.error('Error al crear el item')
+  } finally {
+    isSaving.value = false
   }
 }
 
@@ -198,6 +248,7 @@ async function createItem() {
 async function updateItem() {
   if (!currentItem.value) return
   
+  isSaving.value = true
   try {
     const payload = {
       ...form.value,
@@ -228,7 +279,9 @@ async function updateItem() {
     }
   } catch (error) {
     console.error('Error updating item:', error)
-    alert('Error al actualizar el item')
+    toast.error('Error al actualizar el item')
+  } finally {
+    isSaving.value = false
   }
 }
 
@@ -258,7 +311,7 @@ async function deleteItem(item: InventoryItem) {
     loadSummary()
   } catch (error) {
     console.error('Error deleting item:', error)
-    alert('Error al eliminar el item')
+    toast.error('Error al eliminar el item')
   }
 }
 
@@ -273,7 +326,7 @@ async function adjustStock() {
     loadSummary()
   } catch (error: any) {
     console.error('Error adjusting stock:', error)
-    alert(error.response?.data?.message || 'Error al ajustar el stock')
+    toast.error(error.response?.data?.message || 'Error al ajustar el stock')
   }
 }
 
@@ -299,6 +352,7 @@ function openEditModal(item: InventoryItem) {
     maxStock: item.maxStock || 0,
     costPrice: item.costPrice || '',
     sellPrice: item.sellPrice || '',
+    supplierId: item.supplierId || '',
     supplier: item.supplier || '',
     supplierCode: item.supplierCode || '',
     expirationDate: item.expirationDate ? item.expirationDate.split('T')[0] : '',
@@ -315,6 +369,7 @@ function openAdjustModal(item: InventoryItem) {
     type: 'IN',
     quantity: 1,
     reason: '',
+    unitCost: item.costPrice ? parseFloat(item.costPrice) : null,
   }
   showAdjustModal.value = true
 }
@@ -345,6 +400,7 @@ function resetForm() {
     maxStock: 0,
     costPrice: '',
     sellPrice: '',
+    supplierId: '',
     supplier: '',
     supplierCode: '',
     expirationDate: '',
@@ -368,7 +424,7 @@ function handleImageSelect(event: Event) {
 // AI Image generation
 async function generateAIImage() {
   if (!form.value.name.trim()) {
-    alert('Por favor, introduce el nombre del producto primero')
+    toast.error('Por favor, introduce el nombre del producto primero')
     return
   }
   
@@ -385,11 +441,11 @@ async function generateAIImage() {
       // Clear any selected file since we're using AI image
       selectedImage.value = null
     } else {
-      alert(response.errors?.[0] || 'Error al generar la imagen')
+      toast.error(response.errors?.[0] || 'Error al generar la imagen')
     }
   } catch (error: any) {
     console.error('Error generating AI image:', error)
-    alert(error.response?.data?.error || 'Error al generar la imagen. Asegúrate de que el nombre sea de un producto médico/dental.')
+    toast.error(error.response?.data?.error || 'Error al generar la imagen. Asegúrate de que el nombre sea de un producto médico/dental.')
   } finally {
     isGeneratingImage.value = false
   }
@@ -407,11 +463,6 @@ function formatCurrency(value: string | null) {
   return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(parseFloat(value))
 }
 
-function formatDate(date: string | null) {
-  if (!date) return '-'
-  return new Date(date).toLocaleDateString('es-ES')
-}
-
 // Debounced search
 let searchTimeout: number | undefined
 watch(searchQuery, () => {
@@ -422,7 +473,7 @@ watch(searchQuery, () => {
   }, 300)
 })
 
-watch([selectedCategory, showLowStock], () => {
+watch([selectedCategory, selectedSupplier, showLowStock], () => {
   page.value = 1
   loadItems()
 })
@@ -430,6 +481,7 @@ watch([selectedCategory, showLowStock], () => {
 onMounted(() => {
   loadItems()
   loadCategories()
+  loadSuppliers()
   loadSummary()
 })
 </script>
@@ -443,6 +495,14 @@ onMounted(() => {
         <p class="text-surface-500">Gestión de stock y materiales</p>
       </div>
       <div class="flex gap-2">
+        <router-link to="/clinic/stock-analytics" class="btn-secondary">
+          <ChartBarIcon class="w-5 h-5" />
+          Analíticas
+        </router-link>
+        <router-link to="/clinic/suppliers" class="btn-secondary">
+          <BuildingStorefrontIcon class="w-5 h-5" />
+          Proveedores
+        </router-link>
         <router-link to="/clinic/stock-packs" class="btn-secondary">
           <ArchiveBoxIcon class="w-5 h-5" />
           Ver Packs
@@ -510,13 +570,18 @@ onMounted(() => {
           <input
             v-model="searchQuery"
             type="text"
-            placeholder="Buscar por nombre, SKU o proveedor..."
+            placeholder="Buscar por nombre o SKU..."
             class="input pl-10 w-full"
           />
         </div>
         <select v-model="selectedCategory" class="input w-full sm:w-48">
           <option value="">Todas las categorías</option>
           <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+        </select>
+        <select v-model="selectedSupplier" class="input w-full sm:w-48">
+          <option value="">Todos los proveedores</option>
+          <option value="none">Sin proveedor</option>
+          <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
         <label class="flex items-center gap-2 cursor-pointer">
           <input v-model="showLowStock" type="checkbox" class="rounded text-primary-600" />
@@ -532,6 +597,29 @@ onMounted(() => {
 
     <!-- Items Table -->
     <div v-else-if="items.length > 0" class="card overflow-hidden">
+      <!-- Top Pagination -->
+      <div v-if="totalPages > 1" class="flex items-center justify-between p-4 border-b border-surface-200 bg-surface-50">
+        <p class="text-sm text-surface-500">
+          Mostrando {{ (page - 1) * limit + 1 }} - {{ Math.min(page * limit, total) }} de {{ total }} items
+        </p>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-surface-500">Página {{ page }} de {{ totalPages }}</span>
+          <button 
+            @click="page--; loadItems()" 
+            :disabled="page === 1"
+            class="btn-secondary p-2"
+          >
+            <ChevronLeftIcon class="w-5 h-5" />
+          </button>
+          <button 
+            @click="page++; loadItems()" 
+            :disabled="page >= totalPages"
+            class="btn-secondary p-2"
+          >
+            <ChevronRightIcon class="w-5 h-5" />
+          </button>
+        </div>
+      </div>
       <div class="overflow-x-auto">
         <table class="w-full">
           <thead class="bg-surface-50 border-b border-surface-200">
@@ -550,7 +638,8 @@ onMounted(() => {
                 <div class="flex items-center gap-3">
                   <div 
                     v-if="item.imageUrl" 
-                    class="w-10 h-10 rounded-lg bg-surface-100 overflow-hidden"
+                    class="w-10 h-10 rounded-lg bg-surface-100 overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all"
+                    @click="lightboxImage = `/api/v1/stock/items/${item.id}/image`"
                   >
                     <img :src="`/api/v1/stock/items/${item.id}/image`" class="w-full h-full object-cover" />
                   </div>
@@ -616,12 +705,13 @@ onMounted(() => {
         </table>
       </div>
 
-      <!-- Pagination -->
-      <div v-if="totalPages > 1" class="flex items-center justify-between p-4 border-t border-surface-200">
+      <!-- Bottom Pagination -->
+      <div v-if="totalPages > 1" class="flex items-center justify-between p-4 border-t border-surface-200 bg-surface-50">
         <p class="text-sm text-surface-500">
-          Mostrando {{ (page - 1) * limit + 1 }} - {{ Math.min(page * limit, total) }} de {{ total }}
+          Mostrando {{ (page - 1) * limit + 1 }} - {{ Math.min(page * limit, total) }} de {{ total }} items
         </p>
-        <div class="flex gap-2">
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-surface-500">Página {{ page }} de {{ totalPages }}</span>
           <button 
             @click="page--; loadItems()" 
             :disabled="page === 1"
@@ -654,210 +744,239 @@ onMounted(() => {
     <!-- Create/Edit Modal -->
     <Teleport to="body">
       <div v-if="showModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <div class="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div class="flex items-center justify-between p-6 border-b border-surface-200">
-          <h2 class="text-xl font-display font-bold text-surface-900">
-            {{ isEditing ? 'Editar Item' : 'Nuevo Item' }}
-          </h2>
-          <button @click="closeModal" class="p-2 hover:bg-surface-100 rounded-lg">
-            <XMarkIcon class="w-5 h-5" />
-          </button>
-        </div>
+        <div class="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+          <!-- Header (sticky) -->
+          <div class="flex items-center justify-between p-6 border-b border-surface-200 flex-shrink-0">
+            <h2 class="text-xl font-display font-bold text-surface-900">
+              {{ isEditing ? 'Editar Item' : 'Nuevo Item' }}
+            </h2>
+            <div class="flex items-center gap-2">
+              <!-- Barcode Scanner Button -->
+              <button 
+                v-if="!isEditing"
+                type="button" 
+                @click="showBarcodeScanner = true" 
+                class="btn-secondary p-2"
+                title="Escanear código de barras"
+              >
+                <QrCodeIcon class="w-5 h-5" />
+              </button>
+              <button @click="closeModal" class="p-2 hover:bg-surface-100 rounded-lg">
+                <XMarkIcon class="w-5 h-5" />
+              </button>
+            </div>
+          </div>
 
-        <form @submit.prevent="isEditing ? updateItem() : createItem()" class="p-6 space-y-6">
-          <!-- Image Upload -->
-          <div class="flex items-center gap-6">
-            <div class="w-24 h-24 rounded-xl bg-surface-100 overflow-hidden flex items-center justify-center relative">
-              <img v-if="imagePreview" :src="imagePreview" class="w-full h-full object-cover" />
-              <PhotoIcon v-else class="w-10 h-10 text-surface-400" />
-              <div v-if="isGeneratingImage" class="absolute inset-0 bg-white/80 flex items-center justify-center">
-                <ArrowPathIcon class="w-8 h-8 text-primary-600 animate-spin" />
+          <!-- Scrollable content -->
+          <form @submit.prevent="isEditing ? updateItem() : createItem()" class="flex flex-col flex-1 overflow-hidden">
+            <div class="flex-1 overflow-y-auto p-6 space-y-6">
+              <!-- Image Upload -->
+              <div class="flex items-center gap-6">
+                <div class="w-24 h-24 rounded-xl bg-surface-100 overflow-hidden flex items-center justify-center relative">
+                  <img v-if="imagePreview" :src="imagePreview" class="w-full h-full object-cover" />
+                  <PhotoIcon v-else class="w-10 h-10 text-surface-400" />
+                  <div v-if="isGeneratingImage" class="absolute inset-0 bg-white/80 flex items-center justify-center">
+                    <ArrowPathIcon class="w-8 h-8 text-primary-600 animate-spin" />
+                  </div>
+                </div>
+                <div class="space-y-2">
+                  <div class="flex items-center gap-2">
+                    <label class="btn-secondary cursor-pointer">
+                      <PhotoIcon class="w-5 h-5" />
+                      Subir imagen
+                      <input type="file" accept="image/*" class="hidden" @change="handleImageSelect" />
+                    </label>
+                    <button
+                      type="button"
+                      @click="generateAIImage"
+                      :disabled="isGeneratingImage || !form.name.trim()"
+                      class="btn-secondary gap-1"
+                      :class="{ 'opacity-50 cursor-not-allowed': isGeneratingImage || !form.name.trim() }"
+                      :title="!form.name.trim() ? 'Introduce el nombre del producto primero' : 'Generar imagen con IA'"
+                    >
+                      <SparklesIcon class="w-5 h-5" />
+                      <span v-if="isGeneratingImage">Generando...</span>
+                      <span v-else>IA</span>
+                    </button>
+                  </div>
+                  <p class="text-xs text-surface-500">JPG, PNG o WebP. Max 5MB. O genera con IA ✨</p>
+                  <p v-if="generatedImageUrl" class="text-xs text-primary-600">✓ Imagen generada por IA</p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="md:col-span-2">
+                  <label class="label flex items-center gap-1">
+                    Nombre *
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Nombre del producto o material</span>
+                    </span>
+                  </label>
+                  <input v-model="form.name" type="text" class="input" required />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    SKU
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Código único interno para identificar el producto</span>
+                    </span>
+                  </label>
+                  <input v-model="form.sku" type="text" class="input" placeholder="Código único" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Categoría
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Agrupa productos similares (texto libre)</span>
+                    </span>
+                  </label>
+                  <input v-model="form.category" type="text" class="input" list="categories" />
+                  <datalist id="categories">
+                    <option v-for="cat in categories" :key="cat" :value="cat" />
+                  </datalist>
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Unidad
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cómo se mide o cuenta el producto</span>
+                    </span>
+                  </label>
+                  <select v-model="form.unit" class="input">
+                    <option value="unidades">Unidades</option>
+                    <option value="ml">Mililitros (ml)</option>
+                    <option value="g">Gramos (g)</option>
+                    <option value="cajas">Cajas</option>
+                    <option value="paquetes">Paquetes</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Stock Actual
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cantidad disponible ahora mismo</span>
+                    </span>
+                  </label>
+                  <input v-model.number="form.currentStock" type="number" min="0" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Stock Mínimo
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cantidad bajo la cual se muestra alerta</span>
+                    </span>
+                  </label>
+                  <input v-model.number="form.minStock" type="number" min="0" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Stock Máximo
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cantidad ideal máxima para evitar exceso</span>
+                    </span>
+                  </label>
+                  <input v-model.number="form.maxStock" type="number" min="0" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Precio Costo (€)
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Lo que pagas al proveedor</span>
+                    </span>
+                  </label>
+                  <input v-model="form.costPrice" type="number" step="0.01" min="0" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Precio Venta (€)
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Lo que cobras al paciente (si aplica)</span>
+                    </span>
+                  </label>
+                  <input v-model="form.sellPrice" type="number" step="0.01" min="0" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Proveedor
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Selecciona un proveedor registrado</span>
+                    </span>
+                  </label>
+                  <select v-model="form.supplierId" class="input">
+                    <option value="">Sin proveedor</option>
+                    <option v-for="s in suppliers" :key="s.id" :value="s.id">
+                      {{ s.name }}
+                    </option>
+                  </select>
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Código Proveedor
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Referencia del producto en el catálogo del proveedor</span>
+                    </span>
+                  </label>
+                  <input v-model="form.supplierCode" type="text" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Fecha Caducidad
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Para productos que expiran</span>
+                    </span>
+                  </label>
+                  <input v-model="form.expirationDate" type="date" class="input" />
+                </div>
+                <div>
+                  <label class="label flex items-center gap-1">
+                    Ubicación
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Dónde guardas el producto en la clínica</span>
+                    </span>
+                  </label>
+                  <input v-model="form.location" type="text" class="input" placeholder="Ej: Armario A, Estante 2" />
+                </div>
+                <div class="md:col-span-2">
+                  <label class="label flex items-center gap-1">
+                    Descripción
+                    <span class="relative group">
+                      <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
+                      <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Notas adicionales sobre el producto</span>
+                    </span>
+                  </label>
+                  <textarea v-model="form.description" rows="2" class="input"></textarea>
+                </div>
               </div>
             </div>
-            <div class="space-y-2">
-              <div class="flex items-center gap-2">
-                <label class="btn-secondary cursor-pointer">
-                  <PhotoIcon class="w-5 h-5" />
-                  Subir imagen
-                  <input type="file" accept="image/*" class="hidden" @change="handleImageSelect" />
-                </label>
-                <button
-                  type="button"
-                  @click="generateAIImage"
-                  :disabled="isGeneratingImage || !form.name.trim()"
-                  class="btn-secondary gap-1"
-                  :class="{ 'opacity-50 cursor-not-allowed': isGeneratingImage || !form.name.trim() }"
-                  :title="!form.name.trim() ? 'Introduce el nombre del producto primero' : 'Generar imagen con IA'"
-                >
-                  <SparklesIcon class="w-5 h-5" />
-                  <span v-if="isGeneratingImage">Generando...</span>
-                  <span v-else>IA</span>
-                </button>
-              </div>
-              <p class="text-xs text-surface-500">JPG, PNG o WebP. Max 5MB. O genera con IA ✨</p>
-              <p v-if="generatedImageUrl" class="text-xs text-primary-600">✓ Imagen generada por IA</p>
-            </div>
-          </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="md:col-span-2">
-              <label class="label flex items-center gap-1">
-                Nombre *
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Nombre del producto o material</span>
+            <!-- Footer (sticky) -->
+            <div class="flex justify-end gap-3 px-6 py-4 border-t border-surface-200 flex-shrink-0 bg-white rounded-b-xl">
+              <button type="button" @click="closeModal" class="btn-secondary" :disabled="isSaving">Cancelar</button>
+              <button type="submit" class="btn-primary" :disabled="isSaving">
+                <span v-if="isSaving" class="flex items-center gap-2">
+                  <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Guardando...
                 </span>
-              </label>
-              <input v-model="form.name" type="text" class="input" required />
+                <span v-else>{{ isEditing ? 'Guardar cambios' : 'Crear item' }}</span>
+              </button>
             </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                SKU
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Código único interno para identificar el producto</span>
-                </span>
-              </label>
-              <input v-model="form.sku" type="text" class="input" placeholder="Código único" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Categoría
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Agrupa productos similares (texto libre)</span>
-                </span>
-              </label>
-              <input v-model="form.category" type="text" class="input" list="categories" />
-              <datalist id="categories">
-                <option v-for="cat in categories" :key="cat" :value="cat" />
-              </datalist>
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Unidad
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cómo se mide o cuenta el producto</span>
-                </span>
-              </label>
-              <select v-model="form.unit" class="input">
-                <option value="unidades">Unidades</option>
-                <option value="ml">Mililitros (ml)</option>
-                <option value="g">Gramos (g)</option>
-                <option value="cajas">Cajas</option>
-                <option value="paquetes">Paquetes</option>
-              </select>
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Stock Actual
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cantidad disponible ahora mismo</span>
-                </span>
-              </label>
-              <input v-model.number="form.currentStock" type="number" min="0" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Stock Mínimo
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cantidad bajo la cual se muestra alerta</span>
-                </span>
-              </label>
-              <input v-model.number="form.minStock" type="number" min="0" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Stock Máximo
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Cantidad ideal máxima para evitar exceso</span>
-                </span>
-              </label>
-              <input v-model.number="form.maxStock" type="number" min="0" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Precio Costo (€)
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Lo que pagas al proveedor</span>
-                </span>
-              </label>
-              <input v-model="form.costPrice" type="number" step="0.01" min="0" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Precio Venta (€)
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Lo que cobras al paciente (si aplica)</span>
-                </span>
-              </label>
-              <input v-model="form.sellPrice" type="number" step="0.01" min="0" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Proveedor
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Nombre de la empresa proveedora</span>
-                </span>
-              </label>
-              <input v-model="form.supplier" type="text" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Código Proveedor
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Referencia del producto en el catálogo del proveedor</span>
-                </span>
-              </label>
-              <input v-model="form.supplierCode" type="text" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Fecha Caducidad
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Para productos que expiran</span>
-                </span>
-              </label>
-              <input v-model="form.expirationDate" type="date" class="input" />
-            </div>
-            <div>
-              <label class="label flex items-center gap-1">
-                Ubicación
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Dónde guardas el producto en la clínica</span>
-                </span>
-              </label>
-              <input v-model="form.location" type="text" class="input" placeholder="Ej: Armario A, Estante 2" />
-            </div>
-            <div class="md:col-span-2">
-              <label class="label flex items-center gap-1">
-                Descripción
-                <span class="relative group">
-                  <InformationCircleIcon class="w-4 h-4 text-surface-400 cursor-help" />
-                  <span class="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-2 py-1 text-xs text-white bg-surface-800 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10">Notas adicionales sobre el producto</span>
-                </span>
-              </label>
-              <textarea v-model="form.description" rows="2" class="input"></textarea>
-            </div>
-          </div>
-
-          <div class="flex justify-end gap-3 pt-4 border-t border-surface-200">
-            <button type="button" @click="closeModal" class="btn-secondary">Cancelar</button>
-            <button type="submit" class="btn-primary">
-              {{ isEditing ? 'Guardar cambios' : 'Crear item' }}
-            </button>
-          </div>
-        </form>
+          </form>
         </div>
       </div>
     </Teleport>
@@ -929,6 +1048,22 @@ onMounted(() => {
             <input v-model.number="adjustForm.quantity" type="number" min="1" class="input" required />
           </div>
 
+          <!-- Unit Cost field - only for IN movements -->
+          <div v-if="adjustForm.type === 'IN'">
+            <label class="label">
+              Precio unitario de compra (€)
+              <span class="text-surface-400 font-normal">- para calcular coste promedio</span>
+            </label>
+            <input 
+              v-model.number="adjustForm.unitCost" 
+              type="number" 
+              min="0" 
+              step="0.01" 
+              class="input" 
+              :placeholder="currentItem?.costPrice ? `Precio actual: ${currentItem.costPrice}€` : 'Precio por unidad'"
+            />
+          </div>
+
           <div>
             <label class="label">Razón (opcional)</label>
             <input v-model="adjustForm.reason" type="text" class="input" placeholder="Ej: Inventario inicial, Rotura..." />
@@ -942,4 +1077,32 @@ onMounted(() => {
       </div>
     </div>
   </div>
+
+    <!-- Barcode Scanner Modal -->
+    <BarcodeScanner 
+      v-if="showBarcodeScanner" 
+      @scanned="handleBarcodeScanned"
+      @close="showBarcodeScanner = false"
+    />
+
+    <!-- Image Lightbox -->
+    <Teleport to="body">
+      <div 
+        v-if="lightboxImage" 
+        class="fixed inset-0 bg-black/90 flex items-center justify-center z-[70] p-4 cursor-pointer"
+        @click="lightboxImage = null"
+      >
+        <button 
+          class="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors"
+          @click.stop="lightboxImage = null"
+        >
+          <XMarkIcon class="w-6 h-6 text-white" />
+        </button>
+        <img 
+          :src="lightboxImage" 
+          class="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+          @click.stop
+        />
+      </div>
+    </Teleport>
 </template>

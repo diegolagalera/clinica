@@ -16,6 +16,9 @@ router.get('/', appointmentController.listAppointments);
 // Get today's appointments
 router.get('/today', appointmentController.getTodayAppointments);
 
+// Get active appointments for current user (must be before /:id)
+router.get('/active', appointmentController.getActiveAppointments);
+
 // Get patient's appointments
 router.get('/patient/:patientId', appointmentController.getPatientAppointments);
 
@@ -35,6 +38,35 @@ router.put('/:id', appointmentController.updateAppointment);
 router.delete('/:id', appointmentController.cancelAppointment);
 
 // ============================================================================
+// ACTIVE APPOINTMENT MANAGEMENT
+// ============================================================================
+
+// Start an appointment
+router.post('/:id/start', appointmentController.startAppointment);
+
+// Pause an appointment
+router.post('/:id/pause', appointmentController.pauseAppointment);
+
+// Resume an appointment
+router.post('/:id/resume', appointmentController.resumeAppointment);
+
+// Complete an appointment
+router.post('/:id/complete', appointmentController.completeAppointment);
+
+// Cancel an active appointment (clears real time data)
+router.post('/:id/cancel-active', appointmentController.cancelActiveAppointment);
+
+// ============================================================================
+// ADMIN: REAL TIME MANAGEMENT
+// ============================================================================
+
+// Update real time fields (Admin only)
+router.put('/:id/real-time', appointmentController.updateRealTime);
+
+// Reset real time fields (Admin only)
+router.post('/:id/reset-time', appointmentController.resetRealTime);
+
+// ============================================================================
 // APPOINTMENT STOCK USAGE
 // ============================================================================
 
@@ -50,8 +82,11 @@ router.post('/:appointmentId/stock/bulk', appointmentStockController.addBulkStoc
 // Apply a stock pack to an appointment
 router.post('/:appointmentId/stock/pack/:packId', appointmentStockController.applyPackToAppointment);
 
-// Remove stock usage (and restore inventory)
+// Remove stock usage (only restores inventory if confirmed)
 router.delete('/:appointmentId/stock/:usageId', appointmentStockController.removeStockUsage);
+
+// Confirm all pending stock (called when completing appointment)
+router.post('/:appointmentId/stock/confirm', appointmentStockController.confirmAppointmentStock);
 
 export default router;
 

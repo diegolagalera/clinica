@@ -1,8 +1,9 @@
 import { eq, and, ilike, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { clinics, patients, appointments, users } from '../db/schema.js';
+import { clinics, patients, appointments, users, workerClinics } from '../db/schema.js';
 import { NotFoundError, ConflictError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 export interface CreateClinicInput {
     organizationId: string;
@@ -155,6 +156,29 @@ export const createClinic = async (
             timezone: input.timezone || 'Europe/Madrid',
         })
         .returning();
+
+    // Auto-assign all organization admins to the new clinic
+    try {
+        const orgAdmins = await db.query.users.findMany({
+            where: and(
+                eq(users.organizationId, input.organizationId),
+                eq(users.role, 'ADMIN'),
+                eq(users.isActive, true)
+            ),
+        });
+
+        for (const admin of orgAdmins) {
+            await db.insert(workerClinics).values({
+                userId: admin.id,
+                clinicId: clinic!.id,
+                role: 'Administrador',
+            }).onConflictDoNothing();
+        }
+
+        logger.info(`Auto-assigned ${orgAdmins.length} admins to new clinic ${clinic!.name}`);
+    } catch (error) {
+        logger.warn('Failed to auto-assign admins to clinic', { clinicId: clinic!.id, error });
+    }
 
     return { success: true, data: clinic! };
 };

@@ -315,3 +315,198 @@ export const getWorkerSchedule = asyncHandler(async (req: AuthenticatedRequest, 
 
     res.json(success(schedule));
 });
+
+// ============================================================================
+// ACTIVE APPOINTMENT MANAGEMENT
+// ============================================================================
+
+/**
+ * GET /appointments/active
+ * Get all active (IN_PROGRESS) appointments for the current user
+ */
+export const getActiveAppointments = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.tenantContext.clinicId) {
+        throw new BadRequestError('Clinic context required');
+    }
+
+    const activeAppointments = await appointmentService.getActiveAppointments(
+        req.tenantContext.clinicId,
+        req.user.userId
+    );
+
+    res.json(success(activeAppointments));
+});
+
+/**
+ * POST /appointments/:id/start
+ * Start an appointment (set status to IN_PROGRESS)
+ */
+export const startAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.tenantContext.clinicId) {
+        throw new BadRequestError('Clinic context required');
+    }
+
+    const { id } = req.params;
+
+    const result = await appointmentService.startAppointment(
+        id!,
+        req.user.userId,
+        req.tenantContext
+    );
+
+    res.json(success(result, 'Cita iniciada'));
+});
+
+/**
+ * POST /appointments/:id/pause
+ * Pause an active appointment
+ */
+export const pauseAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+
+    const result = await appointmentService.pauseAppointment(id!, req.tenantContext);
+
+    res.json(success(result, 'Cita pausada'));
+});
+
+/**
+ * POST /appointments/:id/resume
+ * Resume a paused appointment
+ */
+export const resumeAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+
+    const result = await appointmentService.resumeAppointment(id!, req.tenantContext);
+
+    res.json(success(result, 'Cita reanudada'));
+});
+
+/**
+ * POST /appointments/:id/complete
+ * Complete an active appointment (validates stock requirement)
+ */
+export const completeAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.tenantContext.clinicId) {
+        throw new BadRequestError('Clinic context required');
+    }
+
+    const { id } = req.params;
+
+    // Check if clinic requires stock on completion
+    const [clinic] = await db
+        .select({ settings: clinics.settings })
+        .from(clinics)
+        .where(eq(clinics.id, req.tenantContext.clinicId));
+
+    if (clinic?.settings && typeof clinic.settings === 'object' &&
+        'requireStockOnCompletion' in clinic.settings &&
+        clinic.settings.requireStockOnCompletion === true) {
+        // Check if any stock has been used
+        const usageCount = await db
+            .select({ count: count() })
+            .from(appointmentStockUsage)
+            .where(and(
+                eq(appointmentStockUsage.appointmentId, id!),
+                eq(appointmentStockUsage.clinicId, req.tenantContext.clinicId)
+            ));
+
+        if (!usageCount?.[0]?.count || usageCount[0].count === 0) {
+            throw new BadRequestError('Debe registrar el stock utilizado antes de completar la cita');
+        }
+    }
+
+    const result = await appointmentService.completeAppointment(id!, req.tenantContext);
+
+    // Create rating request after completion
+    if (result) {
+        ratingService.createRatingRequest(
+            id!,
+            req.tenantContext.clinicId,
+            result.patientId
+        ).catch((err: Error) => logger.error(`Failed to create rating request: ${err.message}`));
+    }
+
+    res.json(success(result, 'Cita completada'));
+});
+
+// ============================================================================
+// ADMIN: REAL TIME MANAGEMENT
+// ============================================================================
+
+const updateRealTimeSchema = z.object({
+    realStartTime: z.string().transform(s => new Date(s)).optional(),
+    realEndTime: z.string().transform(s => new Date(s)).optional(),
+    pausedDuration: z.number().min(0).optional(),
+});
+
+/**
+ * PUT /appointments/:id/real-time
+ * Update real time fields (Admin only)
+ */
+export const updateRealTime = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    // Only ADMIN can update real time
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'SUPERADMIN') {
+        throw new BadRequestError('Solo los administradores pueden editar el tiempo real');
+    }
+
+    const { id } = req.params;
+    const input = updateRealTimeSchema.parse(req.body);
+
+    const result = await appointmentService.updateRealTime(
+        id!,
+        input,
+        req.user.userId,
+        req.tenantContext
+    );
+
+    res.json(success(result, 'Tiempo real actualizado'));
+});
+
+/**
+ * POST /appointments/:id/reset-time
+ * Reset real time fields and revert status to SCHEDULED (Admin only)
+ */
+export const resetRealTime = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    // Only ADMIN can reset time
+    if (req.user.role !== 'ADMIN' && req.user.role !== 'SUPERADMIN') {
+        throw new BadRequestError('Solo los administradores pueden resetear el tiempo real');
+    }
+
+    const { id } = req.params;
+
+    const result = await appointmentService.resetRealTime(
+        id!,
+        req.user.userId,
+        req.tenantContext
+    );
+
+    res.json(success(result, 'Tiempo real reseteado. La cita vuelve a estado Programada'));
+});
+
+/**
+ * POST /appointments/:id/cancel-active
+ * Cancel an active (IN_PROGRESS) appointment
+ * Clears real time data and sets status to CANCELLED
+ */
+export const cancelActiveAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+
+    const result = await appointmentService.cancelActiveAppointment(
+        id!,
+        req.user.userId,
+        req.tenantContext
+    );
+
+    // Cancel any pending notifications
+    if (result && req.tenantContext.clinicId) {
+        cancelPendingNotification(id!).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
+        notificationService.sendAppointmentNotification({
+            appointmentId: id!,
+            clinicId: req.tenantContext.clinicId,
+            patientId: result.patientId,
+            type: 'APPOINTMENT_CANCELLED',
+        }).catch(err => logger.error(`Failed to send cancellation notification: ${err.message}`));
+    }
+
+    res.json(success(result, 'Cita cancelada'));
+});

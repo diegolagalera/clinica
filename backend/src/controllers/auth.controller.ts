@@ -166,3 +166,40 @@ export const getCurrentUser = asyncHandler(async (req: AuthenticatedRequest, res
         clinicId: req.user.clinicId,
     }));
 });
+
+// Schemas for profile updates
+export const updateMyInfoSchema = z.object({
+    firstName: z.string().min(1).max(100).optional(),
+    lastName: z.string().min(1).max(100).optional(),
+    phone: z.string().max(50).optional(),
+});
+
+export const changePasswordSchema = z.object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8).max(100),
+});
+
+/**
+ * PUT /auth/me
+ * Update current user's basic info
+ */
+export const updateMyInfo = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const data = updateMyInfoSchema.parse(req.body);
+
+    const updated = await authService.updateUserInfo(req.user.userId, data);
+
+    res.json(success(updated, 'Información actualizada'));
+});
+
+/**
+ * PUT /auth/change-password
+ * Change current user's password
+ */
+export const changePassword = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+
+    await authService.changePassword(req.user.userId, currentPassword, newPassword);
+
+    res.json(success(null, 'Contraseña cambiada correctamente'));
+});
+

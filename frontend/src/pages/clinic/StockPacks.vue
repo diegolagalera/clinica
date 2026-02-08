@@ -12,6 +12,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CubeIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/vue/24/outline'
 
 interface InventoryItem {
@@ -65,6 +66,11 @@ const showModal = ref(false)
 const isEditing = ref(false)
 const currentPack = ref<StockPack | null>(null)
 
+// Delete modal state
+const showDeleteModal = ref(false)
+const packToDelete = ref<StockPack | null>(null)
+const isDeleting = ref(false)
+
 // Form data
 const form = ref({
   name: '',
@@ -76,6 +82,8 @@ const form = ref({
 // Item search for adding to pack
 const itemSearch = ref('')
 const showItemDropdown = ref(false)
+const itemInputRef = ref<HTMLElement | null>(null)
+const dropdownPosition = ref({ top: 0, left: 0, width: 0 })
 
 const totalPages = computed(() => Math.ceil(total.value / limit.value))
 
@@ -89,6 +97,22 @@ const filteredItems = computed(() => {
     )
     .slice(0, 10)
 })
+
+function updateDropdownPosition() {
+  if (itemInputRef.value) {
+    const rect = itemInputRef.value.getBoundingClientRect()
+    dropdownPosition.value = {
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+    }
+  }
+}
+
+function openItemDropdown() {
+  updateDropdownPosition()
+  showItemDropdown.value = true
+}
 
 // Get item details by ID
 function getItemById(id: string): InventoryItem | undefined {
@@ -197,16 +221,26 @@ async function updatePack() {
   }
 }
 
+// Open delete modal
+function openDeleteModal(pack: StockPack) {
+  packToDelete.value = pack
+  showDeleteModal.value = true
+}
+
 // Delete pack
-async function deletePack(pack: StockPack) {
-  if (!confirm(`¿Eliminar el pack "${pack.name}"?`)) return
+async function confirmDeletePack() {
+  if (!packToDelete.value) return
   
+  isDeleting.value = true
   try {
-    await api.delete(`/stock/packs/${pack.id}`)
+    await api.delete(`/stock/packs/${packToDelete.value.id}`)
+    showDeleteModal.value = false
+    packToDelete.value = null
     loadPacks()
   } catch (error) {
     console.error('Error deleting pack:', error)
-    alert('Error al eliminar el pack')
+  } finally {
+    isDeleting.value = false
   }
 }
 
@@ -367,7 +401,7 @@ onMounted(() => {
               <PencilIcon class="w-4 h-4" />
             </button>
             <button 
-              @click="deletePack(pack)" 
+              @click="openDeleteModal(pack)" 
               class="p-2 text-surface-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
             >
               <TrashIcon class="w-4 h-4" />
@@ -423,8 +457,9 @@ onMounted(() => {
 
     <!-- Create/Edit Modal -->
     <div v-if="showModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div class="flex items-center justify-between p-6 border-b border-surface-200">
+      <div class="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+        <!-- Header (sticky) -->
+        <div class="flex items-center justify-between p-6 border-b border-surface-200 flex-shrink-0">
           <h2 class="text-xl font-display font-bold text-surface-900">
             {{ isEditing ? 'Editar Pack' : 'Nuevo Pack' }}
           </h2>
@@ -433,102 +468,110 @@ onMounted(() => {
           </button>
         </div>
 
-        <form @submit.prevent="isEditing ? updatePack() : createPack()" class="p-6 space-y-6">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div class="md:col-span-2">
-              <label class="label">Nombre del pack *</label>
-              <input v-model="form.name" type="text" class="input" required placeholder="Ej: Pack Limpieza Dental" />
-            </div>
-            <div>
-              <label class="label">Categoría</label>
-              <input v-model="form.category" type="text" class="input" list="pack-categories" placeholder="Ej: Procedimientos" />
-              <datalist id="pack-categories">
-                <option v-for="cat in categories" :key="cat" :value="cat" />
-              </datalist>
-            </div>
-            <div class="md:col-span-2">
-              <label class="label">Descripción</label>
-              <textarea v-model="form.description" rows="2" class="input" placeholder="Descripción opcional..."></textarea>
-            </div>
-          </div>
-
-          <!-- Items Section -->
-          <div>
-            <label class="label">Items del pack</label>
-            
-            <!-- Item Search -->
-            <div class="relative">
-              <input 
-                v-model="itemSearch"
-                type="text"
-                placeholder="Buscar item para añadir..."
-                class="input w-full"
-                @focus="showItemDropdown = true"
-              />
-              
-              <!-- Dropdown -->
-              <div 
-                v-if="showItemDropdown && filteredItems.length > 0" 
-                class="absolute top-full left-0 right-0 bg-white border border-surface-200 rounded-lg shadow-lg mt-1 z-10 max-h-48 overflow-y-auto"
-              >
-                <button
-                  v-for="item in filteredItems"
-                  :key="item.id"
-                  type="button"
-                  class="w-full px-4 py-2 text-left hover:bg-surface-50 flex items-center justify-between"
-                  @click="addItemToPack(item)"
-                >
-                  <span>
-                    <span class="font-medium">{{ item.name }}</span>
-                    <span v-if="item.sku" class="text-xs text-surface-400 ml-2">{{ item.sku }}</span>
-                  </span>
-                  <span class="text-xs text-surface-500">{{ item.currentStock }} {{ item.unit }}</span>
-                </button>
+        <!-- Scrollable content -->
+        <form @submit.prevent="isEditing ? updatePack() : createPack()" class="flex flex-col flex-1 overflow-hidden">
+          <div class="flex-1 overflow-y-auto p-6 space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="md:col-span-2">
+                <label class="label">Nombre del pack *</label>
+                <input v-model="form.name" type="text" class="input" required placeholder="Ej: Pack Limpieza Dental" />
+              </div>
+              <div>
+                <label class="label">Categoría</label>
+                <input v-model="form.category" type="text" class="input" list="pack-categories" placeholder="Ej: Procedimientos" />
+                <datalist id="pack-categories">
+                  <option v-for="cat in categories" :key="cat" :value="cat" />
+                </datalist>
+              </div>
+              <div class="md:col-span-2">
+                <label class="label">Descripción</label>
+                <textarea v-model="form.description" rows="2" class="input" placeholder="Descripción opcional..."></textarea>
               </div>
             </div>
 
-            <!-- Selected Items -->
-            <div v-if="form.items.length > 0" class="mt-4 space-y-2">
-              <div 
-                v-for="packItem in form.items" 
-                :key="packItem.itemId"
-                class="flex items-center justify-between p-3 bg-surface-50 rounded-lg"
-              >
-                <div class="flex items-center gap-3">
-                  <CubeIcon class="w-5 h-5 text-surface-400" />
-                  <div>
-                    <p class="font-medium text-surface-900">
-                      {{ getItemById(packItem.itemId)?.name || 'Item' }}
-                    </p>
-                    <p class="text-xs text-surface-500">
-                      {{ getItemById(packItem.itemId)?.unit }}
-                    </p>
-                  </div>
-                </div>
-                <div class="flex items-center gap-3">
-                  <input 
-                    v-model.number="packItem.quantity" 
-                    type="number" 
-                    min="1" 
-                    class="input w-20 text-center"
-                  />
-                  <button 
+            <!-- Items Section -->
+            <div>
+              <label class="label">Items del pack</label>
+              
+              <!-- Item Search -->
+              <div ref="itemInputRef" class="relative">
+                <input 
+                  v-model="itemSearch"
+                  type="text"
+                  placeholder="Buscar item para añadir..."
+                  class="input w-full"
+                  @focus="openItemDropdown"
+                />
+              </div>
+              
+              <!-- Dropdown via Teleport -->
+              <Teleport to="body">
+                <div v-if="showItemDropdown" class="fixed inset-0 z-[60]" @click="showItemDropdown = false"></div>
+                <div 
+                  v-if="showItemDropdown && filteredItems.length > 0" 
+                  class="fixed bg-white border border-surface-200 rounded-lg shadow-xl z-[70] max-h-48 overflow-y-auto"
+                  :style="{ top: dropdownPosition.top + 'px', left: dropdownPosition.left + 'px', width: dropdownPosition.width + 'px' }"
+                >
+                  <button
+                    v-for="item in filteredItems"
+                    :key="item.id"
                     type="button"
-                    @click="removeItemFromPack(packItem.itemId)"
-                    class="p-1 text-red-500 hover:bg-red-50 rounded"
+                    class="w-full px-4 py-2 text-left hover:bg-surface-50 flex items-center justify-between"
+                    @click="addItemToPack(item)"
                   >
-                    <XMarkIcon class="w-4 h-4" />
+                    <span>
+                      <span class="font-medium">{{ item.name }}</span>
+                      <span v-if="item.sku" class="text-xs text-surface-400 ml-2">{{ item.sku }}</span>
+                    </span>
+                    <span class="text-xs text-surface-500">{{ item.currentStock }} {{ item.unit }}</span>
                   </button>
                 </div>
-              </div>
-            </div>
+              </Teleport>
 
-            <p v-else class="text-sm text-surface-400 mt-2">
-              No hay items en este pack. Usa la búsqueda de arriba para añadirlos.
-            </p>
+              <!-- Selected Items -->
+              <div v-if="form.items.length > 0" class="mt-4 space-y-2">
+                <div 
+                  v-for="packItem in form.items" 
+                  :key="packItem.itemId"
+                  class="flex items-center justify-between p-3 bg-surface-50 rounded-lg"
+                >
+                  <div class="flex items-center gap-3">
+                    <CubeIcon class="w-5 h-5 text-surface-400" />
+                    <div>
+                      <p class="font-medium text-surface-900">
+                        {{ getItemById(packItem.itemId)?.name || 'Item' }}
+                      </p>
+                      <p class="text-xs text-surface-500">
+                        {{ getItemById(packItem.itemId)?.unit }}
+                      </p>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <input 
+                      v-model.number="packItem.quantity" 
+                      type="number" 
+                      min="1" 
+                      class="input w-20 text-center"
+                    />
+                    <button 
+                      type="button"
+                      @click="removeItemFromPack(packItem.itemId)"
+                      class="p-1 text-red-500 hover:bg-red-50 rounded"
+                    >
+                      <XMarkIcon class="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <p v-else class="text-sm text-surface-400 mt-2">
+                No hay items en este pack. Usa la búsqueda de arriba para añadirlos.
+              </p>
+            </div>
           </div>
 
-          <div class="flex justify-end gap-3 pt-4 border-t border-surface-200">
+          <!-- Footer (sticky) -->
+          <div class="flex justify-end gap-3 px-6 py-4 border-t border-surface-200 flex-shrink-0 bg-white rounded-b-xl">
             <button type="button" @click="closeModal" class="btn-secondary">Cancelar</button>
             <button type="submit" class="btn-primary" :disabled="form.items.length === 0">
               {{ isEditing ? 'Guardar cambios' : 'Crear pack' }}
@@ -538,7 +581,44 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Click outside to close dropdown -->
-    <div v-if="showItemDropdown" class="fixed inset-0 z-5" @click="showItemDropdown = false"></div>
+    <!-- Delete Confirmation Modal -->
+    <Teleport to="body">
+      <div v-if="showDeleteModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-surface-900/50" @click="showDeleteModal = false"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md animate-scale-in">
+          <div class="p-6">
+            <!-- Warning Icon -->
+            <div class="w-12 h-12 rounded-full bg-danger-100 flex items-center justify-center mx-auto mb-4">
+              <ExclamationTriangleIcon class="w-6 h-6 text-danger-600" />
+            </div>
+            
+            <h2 class="text-lg font-semibold text-surface-900 text-center mb-2">
+              ¿Eliminar pack?
+            </h2>
+            
+            <p class="text-surface-600 text-center text-sm mb-6">
+              ¿Estás seguro de eliminar el pack <strong>"{{ packToDelete?.name }}"</strong>? 
+              Esta acción no se puede deshacer.
+            </p>
+            
+            <div class="flex gap-3">
+              <button 
+                @click="showDeleteModal = false" 
+                class="btn-secondary flex-1"
+              >
+                Cancelar
+              </button>
+              <button 
+                @click="confirmDeletePack"
+                :disabled="isDeleting"
+                class="flex-1 px-4 py-2 rounded-xl font-medium transition-all bg-danger-600 text-white hover:bg-danger-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {{ isDeleting ? 'Eliminando...' : 'Eliminar' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

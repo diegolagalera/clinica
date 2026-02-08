@@ -16,6 +16,7 @@ export interface AccessTokenPayload {
 export interface RefreshTokenPayload {
     userId: string;
     tokenVersion: number;
+    jti?: string; // Unique JWT ID to prevent duplicate tokens
 }
 
 // Multi-tenant context attached to requests

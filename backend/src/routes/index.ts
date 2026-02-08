@@ -13,6 +13,9 @@ import notificationRoutes from './notification.routes.js';
 import smsRoutes from './sms.routes.js';
 import ratingRoutes from './rating.routes.js';
 import stockRoutes from './stock.routes.js';
+import marketingRoutes from './marketing.routes.js';
+import assistantRoutes from './assistant.routes.js';
+import feedbackRoutes from './feedback.routes.js';
 
 const router = Router();
 
@@ -45,7 +48,11 @@ router.use('/notifications', notificationRoutes);
 router.use('/sms', smsRoutes);
 router.use('/ratings', ratingRoutes);
 router.use('/stock', stockRoutes);
+router.use('/marketing', marketingRoutes);
+router.use('/assistant', assistantRoutes);
+router.use('/feedback', feedbackRoutes);
 
 export default router;
+
 
 

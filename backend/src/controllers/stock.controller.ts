@@ -25,6 +25,7 @@ export const createItemSchema = z.object({
     maxStock: z.number().int().min(0).optional(),
     costPrice: z.union([z.string(), z.number()]).transform(v => v?.toString()).optional(),
     sellPrice: z.union([z.string(), z.number()]).transform(v => v?.toString()).optional(),
+    supplierId: z.string().transform(v => v === '' ? null : v).pipe(z.string().uuid().optional().nullable()).optional().nullable(),
     supplier: z.string().max(255).optional(),
     supplierCode: z.string().max(100).optional(),
     expirationDate: z.string().transform(s => new Date(s)).optional(),
@@ -40,6 +41,7 @@ export const adjustStockSchema = z.object({
     quantity: z.number().int().min(1),
     reason: z.string().optional(),
     reference: z.string().max(255).optional(),
+    unitCost: z.number().min(0).optional(), // Cost per unit for IN movements
 });
 
 /**
@@ -54,6 +56,7 @@ export const listItems = asyncHandler(async (req: AuthenticatedRequest, res: Res
     const params = parsePaginationParams(req.query);
     const search = req.query['search'] as string | undefined;
     const category = req.query['category'] as string | undefined;
+    const supplierId = req.query['supplierId'] as string | undefined;
     const lowStock = req.query['lowStock'] === 'true';
     const isActive = req.query['isActive'] !== 'false'; // Default to active items
 
@@ -68,17 +71,24 @@ export const listItems = asyncHandler(async (req: AuthenticatedRequest, res: Res
         conditions.push(eq(inventoryItems.category, category));
     }
 
+    if (supplierId) {
+        if (supplierId === 'none') {
+            conditions.push(sql`${inventoryItems.supplierId} IS NULL`);
+        } else {
+            conditions.push(eq(inventoryItems.supplierId, supplierId));
+        }
+    }
+
     if (lowStock) {
         conditions.push(lte(inventoryItems.currentStock, inventoryItems.minStock));
     }
 
-    // Search by name, sku, or supplier
+    // Search by name or sku
     let whereClause = and(...conditions);
     if (search) {
         const searchConditions = or(
             ilike(inventoryItems.name, `%${search}%`),
-            ilike(inventoryItems.sku, `%${search}%`),
-            ilike(inventoryItems.supplier, `%${search}%`)
+            ilike(inventoryItems.sku, `%${search}%`)
         );
         whereClause = and(whereClause, searchConditions);
     }
@@ -171,6 +181,7 @@ export const createItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
             maxStock: input.maxStock ?? null,
             costPrice: input.costPrice ?? null,
             sellPrice: input.sellPrice ?? null,
+            supplierId: input.supplierId ?? null,
             supplier: input.supplier ?? null,
             supplierCode: input.supplierCode ?? null,
             expirationDate: input.expirationDate ?? null,
@@ -219,6 +230,7 @@ export const updateItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
     if (input.maxStock !== undefined) updateData.maxStock = input.maxStock ?? null;
     if (input.costPrice !== undefined) updateData.costPrice = input.costPrice ?? null;
     if (input.sellPrice !== undefined) updateData.sellPrice = input.sellPrice ?? null;
+    if (input.supplierId !== undefined) updateData.supplierId = input.supplierId ?? null;
     if (input.supplier !== undefined) updateData.supplier = input.supplier ?? null;
     if (input.supplierCode !== undefined) updateData.supplierCode = input.supplierCode ?? null;
     if (input.expirationDate !== undefined) updateData.expirationDate = input.expirationDate ?? null;
@@ -295,8 +307,18 @@ export const adjustStock = asyncHandler(async (req: AuthenticatedRequest, res: R
 
     // Calculate new stock
     let newStock = item.currentStock;
+    let newCostPrice = item.costPrice ? parseFloat(item.costPrice) : 0;
+
     if (input.type === 'IN') {
         newStock += input.quantity;
+
+        // Calculate weighted average cost if unitCost is provided
+        if (input.unitCost !== undefined && input.unitCost > 0) {
+            const currentValue = item.currentStock * (item.costPrice ? parseFloat(item.costPrice) : 0);
+            const newValue = input.quantity * input.unitCost;
+            const totalUnits = newStock;
+            newCostPrice = totalUnits > 0 ? (currentValue + newValue) / totalUnits : input.unitCost;
+        }
     } else if (input.type === 'OUT' || input.type === 'EXPIRED') {
         newStock -= input.quantity;
         if (newStock < 0) {
@@ -313,6 +335,7 @@ export const adjustStock = asyncHandler(async (req: AuthenticatedRequest, res: R
         itemId: id!,
         type: input.type,
         quantity: input.quantity,
+        unitCost: input.unitCost?.toString() ?? null,
         previousStock: item.currentStock,
         newStock,
         reason: input.reason ?? null,
@@ -320,10 +343,20 @@ export const adjustStock = asyncHandler(async (req: AuthenticatedRequest, res: R
         performedById: req.user!.userId,
     });
 
-    // Update item stock
+    // Update item stock and cost price (if it changed)
+    const updateData: Record<string, unknown> = {
+        currentStock: newStock,
+        updatedAt: new Date(),
+    };
+
+    // Only update costPrice for IN movements with a new cost
+    if (input.type === 'IN' && input.unitCost !== undefined && input.unitCost > 0) {
+        updateData.costPrice = newCostPrice.toFixed(2);
+    }
+
     const [updated] = await db
         .update(inventoryItems)
-        .set({ currentStock: newStock, updatedAt: new Date() })
+        .set(updateData)
         .where(eq(inventoryItems.id, id!))
         .returning();
 

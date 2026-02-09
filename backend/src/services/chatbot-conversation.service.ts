@@ -3,6 +3,7 @@ import {
     chatConversations,
     chatMessages,
     chatLeads,
+    chatAiLogs,
     whatsappSettings,
     patients,
     chatConversationNotes,
@@ -119,6 +120,24 @@ export class ChatbotConversationService {
         return conversation || null;
     }
 
+    /**
+     * Delete a conversation and all related data (messages, notes, AI logs).
+     */
+    static async deleteConversation(conversationId: string, clinicId: string) {
+        // Verify ownership
+        const conversation = await this.getConversation(conversationId, clinicId);
+        if (!conversation) throw new Error('Conversation not found');
+
+        // Delete in dependency order
+        await db.delete(chatConversationNotes).where(eq(chatConversationNotes.conversationId, conversationId));
+        await db.delete(chatAiLogs).where(eq(chatAiLogs.conversationId, conversationId));
+        await db.delete(chatMessages).where(eq(chatMessages.conversationId, conversationId));
+        await db.delete(chatConversations).where(eq(chatConversations.id, conversationId));
+
+        logger.info({ conversationId, clinicId }, 'Conversation deleted');
+        return true;
+    }
+
     static async getConversationMessages(conversationId: string, clinicId: string, limit = 50, offset = 0) {
         return db
             .select()
@@ -232,17 +251,49 @@ export class ChatbotConversationService {
                 ).catch(() => { });
             }
 
-            // 5. If media message → bypass AI, switch to HUMAN mode (data protection)
+            // 5. Handle Audio Messages separately (for AI Transcription)
+            if (message.messageType === 'audio' && conversation.controlMode === 'AI') {
+                try {
+                    const mediaBuffer = await WhatsAppService.downloadMedia(
+                        { phoneNumberId: settingsForRead!.phoneNumberId, accessToken: settingsForRead!.accessToken },
+                        message.mediaId!
+                    );
+
+                    if (mediaBuffer) {
+                        const transcription = await ChatbotAiService.transcribeAudio(mediaBuffer.buffer, mediaBuffer.mimeType);
+
+                        if (transcription) {
+                            logger.info({ conversationId: conversation.id, transcription }, 'Audio transcribed successfully');
+
+                            // Update the message content with transcription
+                            const transcribedContent = `[Transcripción de Audio]: ${transcription}`;
+                            await db.update(chatMessages)
+                                .set({ content: transcribedContent })
+                                .where(eq(chatMessages.id, savedMessage.id));
+
+                            // Proceed to AI response with transcribed text
+                            if (settingsForRead?.autoReplyEnabled) {
+                                await this.handleAiResponse(conversation.id, clinicId, transcription, settingsForRead);
+                            }
+                            return { conversation, message: { ...savedMessage, content: transcribedContent } };
+                        }
+                    }
+                } catch (err) {
+                    logger.error({ err, conversationId: conversation.id }, 'Failed to process audio message for AI');
+                    // Fall through to standard media handling (switch to HUMAN)
+                }
+            }
+
+            // 6. Handle other Media Messages (Images, Documents, etc.) OR failed Audio
             if (isMediaMessage) {
                 if (conversation.controlMode === 'AI') {
                     await this.switchControlMode(conversation.id, clinicId, 'HUMAN');
-                    logger.info({ conversationId: conversation.id }, 'Auto-switched to HUMAN mode — media received (data protection)');
+                    logger.info({ conversationId: conversation.id }, 'Auto-switched to HUMAN mode — media received');
                 }
-                // DO NOT pass media to AI
                 return { conversation, message: savedMessage };
             }
 
-            // 6. If in AI mode, generate and send response (text only)
+            // 6. If in AI mode (Text), generate and send response
             if (conversation.controlMode === 'AI' && settingsForRead?.autoReplyEnabled) {
                 await this.handleAiResponse(conversation.id, clinicId, message.text || '', settingsForRead);
             }
@@ -426,10 +477,11 @@ export class ChatbotConversationService {
                 })
                 .from(chatMessages)
                 .where(eq(chatMessages.conversationId, conversationId))
-                .orderBy(chatMessages.createdAt)
+                .orderBy(desc(chatMessages.createdAt))
                 .limit(20);
 
             const conversationHistory = history
+                .reverse() // Reverse to get chronological order (oldest -> newest) for AI context
                 .filter(m => m.content)
                 .map(m => ({
                     role: m.direction === 'INBOUND' ? 'user' : 'assistant',
@@ -878,5 +930,71 @@ export class ChatbotConversationService {
         }
 
         return updated;
+    }
+
+    /**
+     * Send a template message to initiate a conversation.
+     */
+    static async sendTemplateMessage(
+        clinicId: string,
+        userId: string,
+        phone: string,
+        templateName: string,
+        languageCode: string = 'es',
+        components: any[] = [],
+        templateBody?: string,
+    ) {
+        const settings = await this.getSettingsRaw(clinicId);
+        if (!settings?.accessToken || !settings.phoneNumberId) {
+            throw new Error('WhatsApp not configured for this clinic');
+        }
+
+        // Find or create conversation for this phone
+        const conversation = (await this.findOrCreateConversation(clinicId, phone, null))!;
+
+        // Send template via WhatsApp API
+        const result = await WhatsAppService.sendTemplateMessage(
+            { phoneNumberId: settings.phoneNumberId, accessToken: settings.accessToken },
+            phone,
+            templateName,
+            languageCode,
+            components
+        );
+
+        if (!result.success) {
+            throw new Error(result.error || 'Failed to send template message');
+        }
+
+        // Build a readable preview of the template for the message content
+        const content = templateBody || `📋 Plantilla: ${templateName}`;
+
+        // Save the outbound message
+        const [message] = await db.insert(chatMessages).values({
+            conversationId: conversation.id,
+            clinicId,
+            direction: 'OUTBOUND',
+            content,
+            messageType: 'template',
+            wamid: result.wamid || null,
+            status: 'SENT',
+            isFromAi: false,
+            sentById: userId,
+            metadata: { templateName, languageCode, components },
+        }).returning();
+
+        // Switch to HUMAN mode and update timestamps
+        await db.update(chatConversations).set({
+            controlMode: 'HUMAN',
+            lastMessageAt: new Date(),
+            updatedAt: new Date(),
+        }).where(eq(chatConversations.id, conversation.id));
+
+        logger.info({
+            conversationId: conversation.id,
+            templateName,
+            phone,
+        }, 'Template message sent');
+
+        return { conversation, message };
     }
 }

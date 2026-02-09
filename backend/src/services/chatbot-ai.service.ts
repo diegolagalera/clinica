@@ -171,4 +171,42 @@ export class ChatbotAiService {
             };
         }
     }
+    /**
+     * Transcribe audio using OpenAI Whisper.
+     */
+    static async transcribeAudio(
+        audioBuffer: Buffer,
+        mimeType: string = 'audio/ogg'
+    ): Promise<string> {
+        try {
+            const apiKey = config.openai.apiKey;
+            if (!apiKey) throw new Error('OPENAI_API_KEY is not configured');
+
+            const formData = new FormData();
+            // Append file with filename and correct mime type
+            const blob = new Blob([audioBuffer], { type: mimeType });
+            formData.append('file', blob, 'audio.ogg');
+            formData.append('model', 'whisper-1');
+            formData.append('language', 'es'); // Force Spanish for better accuracy
+
+            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                },
+                body: formData,
+            });
+
+            const data = await response.json() as any;
+
+            if (!response.ok) {
+                throw new Error(`OpenAI Whisper error: ${data.error?.message || response.status}`);
+            }
+
+            return data.text || '';
+        } catch (error) {
+            logger.error({ error }, 'Failed to transcribe audio');
+            return ''; // Return empty string on failure to avoid crashing flow
+        }
+    }
 }

@@ -238,10 +238,10 @@ export class WhatsAppService {
                             contactName: contact?.profile?.name || null,
                             wamid: msg.id,
                             timestamp: msg.timestamp,
-                            messageType: msg.type || 'text',
+                            messageType: (msg.type === 'voice' ? 'audio' : msg.type) || 'text',
                             text: msg.text?.body || null,
-                            mediaId: msg.image?.id || msg.document?.id || msg.audio?.id || msg.video?.id || null,
-                            mimeType: msg.image?.mime_type || msg.document?.mime_type || msg.audio?.mime_type || null,
+                            mediaId: msg.image?.id || msg.document?.id || msg.audio?.id || msg.voice?.id || msg.video?.id || null,
+                            mimeType: msg.image?.mime_type || msg.document?.mime_type || msg.audio?.mime_type || msg.voice?.mime_type || null,
                             caption: msg.image?.caption || msg.document?.caption || null,
                         });
                     }
@@ -427,6 +427,53 @@ export class WhatsAppService {
             '✅ Conexión WhatsApp verificada correctamente desde Cuspia.'
         );
         return { success: result.success, error: result.error };
+    }
+
+    /**
+     * Get WhatsApp Business Account ID from Phone Number ID.
+     */
+
+
+    /**
+     * Get approved message templates from Meta's API.
+     */
+    static async getMessageTemplates(
+        accessToken: string,
+        businessAccountId: string
+    ): Promise<{ templates: any[]; error?: string }> {
+        try {
+            const token = decrypt(accessToken);
+            const url = `${GRAPH_API_BASE}/${businessAccountId}/message_templates?status=APPROVED&limit=100`;
+
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                },
+            });
+
+            const data = await response.json() as any;
+
+            if (!response.ok) {
+                logger.error({ status: response.status, data }, 'Failed to fetch WhatsApp templates');
+                return { templates: [], error: data.error?.message || `HTTP ${response.status}` };
+            }
+
+            const templates = (data.data || []).map((t: any) => ({
+                id: t.id,
+                name: t.name,
+                language: t.language,
+                category: t.category,
+                status: t.status,
+                components: t.components || [],
+            }));
+
+            logger.info({ count: templates.length }, 'Fetched WhatsApp templates');
+            return { templates };
+        } catch (error) {
+            logger.error({ error }, 'Failed to fetch WhatsApp templates');
+            return { templates: [], error: String(error) };
+        }
     }
 }
 

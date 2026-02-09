@@ -152,6 +152,8 @@ router.put('/settings', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
+
+
 // POST /api/v1/chatbot/settings/test
 router.post('/settings/test', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -179,6 +181,68 @@ router.post('/settings/test', async (req: Request, res: Response): Promise<void>
     } catch (error) {
         logger.error({ error }, 'Failed to test WhatsApp connection');
         res.status(500).json({ error: 'Test failed' });
+    }
+});
+
+// ============================================================================
+// MESSAGE TEMPLATES
+// ============================================================================
+
+// GET /api/v1/chatbot/templates — List approved templates from Meta
+router.get('/templates', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        const settings = await ChatbotConversationService.getSettingsRaw(clinicId);
+
+        if (!settings?.accessToken || !settings.businessAccountId) {
+            res.status(400).json({ error: 'WhatsApp not configured or missing Business Account ID' });
+            return;
+        }
+
+        const { WhatsAppService } = await import('../services/whatsapp.service.js');
+        const result = await WhatsAppService.getMessageTemplates(
+            settings.accessToken,
+            settings.businessAccountId
+        );
+
+        if (result.error) {
+            res.status(502).json({ error: result.error });
+            return;
+        }
+
+        res.json({ data: result.templates });
+    } catch (error) {
+        logger.error({ error }, 'Failed to fetch templates');
+        res.status(500).json({ error: 'Failed to fetch templates' });
+    }
+});
+
+// POST /api/v1/chatbot/conversations/send-template — Send template to start/continue conversation
+router.post('/conversations/send-template', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        const userId = (req as any).user?.id as string;
+        const { phone, templateName, languageCode, components, templateBody } = req.body;
+
+        if (!phone || !templateName) {
+            res.status(400).json({ error: 'phone and templateName are required' });
+            return;
+        }
+
+        const result = await ChatbotConversationService.sendTemplateMessage(
+            clinicId,
+            userId,
+            phone,
+            templateName,
+            languageCode || 'es',
+            components || [],
+            templateBody
+        );
+
+        res.json({ data: result });
+    } catch (error: any) {
+        logger.error({ error }, 'Failed to send template message');
+        res.status(500).json({ error: error.message || 'Failed to send template' });
     }
 });
 
@@ -379,6 +443,26 @@ router.put('/conversations/:id/read', async (req: Request, res: Response): Promi
     } catch (error) {
         logger.error({ error }, 'Failed to mark as read');
         res.status(500).json({ error: 'Failed to mark as read' });
+    }
+});
+
+// ============================================================================
+// DELETE CONVERSATION
+// ============================================================================
+
+// DELETE /api/v1/chatbot/conversations/:id
+router.delete('/conversations/:id', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        await ChatbotConversationService.deleteConversation(req.params.id, clinicId);
+        res.json({ success: true });
+    } catch (error: any) {
+        if (error.message === 'Conversation not found') {
+            res.status(404).json({ error: 'Conversación no encontrada' });
+            return;
+        }
+        logger.error({ error }, 'Failed to delete conversation');
+        res.status(500).json({ error: 'Failed to delete conversation' });
     }
 });
 

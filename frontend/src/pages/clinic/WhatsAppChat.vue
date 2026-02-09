@@ -17,11 +17,14 @@ import {
   ArrowPathIcon,
   CheckIcon,
   EllipsisVerticalIcon,
-  PencilSquareIcon,
+
   PhoneIcon,
   PaperClipIcon,
   DocumentIcon,
   ClockIcon,
+  PlusIcon,
+  ChatBubbleLeftEllipsisIcon,
+  TrashIcon,
 } from '@heroicons/vue/24/outline'
 import {
   ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon,
@@ -40,9 +43,6 @@ const filterMode = ref('')
 const loadingMessages = ref(false)
 const sendingMessage = ref(false)
 const switchingMode = ref(false)
-const showNotes = ref(false)
-const notes = ref<any[]>([])
-const newNote = ref('')
 const quickReplies = ref<any[]>([])
 const showQuickReplies = ref(false)
 const showMobileChat = ref(false)
@@ -51,6 +51,17 @@ const fileInput = ref<HTMLInputElement>()
 const sendingMedia = ref(false)
 const mediaPreviewUrl = ref('')
 const showMediaPreview = ref(false)
+const showDeleteConfirm = ref(false)
+const deletingConversation = ref(false)
+
+// Template modal state
+const showTemplateModal = ref(false)
+const templates = ref<any[]>([])
+const loadingTemplates = ref(false)
+const selectedTemplate = ref<any>(null)
+const templatePhone = ref('')
+const templateVariables = ref<string[]>([])
+const sendingTemplate = ref(false)
 
 // Computed
 const filteredConversations = computed(() => {
@@ -241,26 +252,7 @@ const switchMode = async (mode: string) => {
 
 
 
-const fetchNotes = async () => {
-  if (!selectedConversation.value) return
-  try {
-    const res = await api.get<any>(`/chatbot/conversations/${selectedConversation.value.id}/notes`)
-    notes.value = res.data || []
-  } catch (err: any) {
-    console.error('Failed to load notes', err)
-  }
-}
 
-const addNote = async () => {
-  if (!newNote.value.trim() || !selectedConversation.value) return
-  try {
-    const res = await api.post<any>(`/chatbot/conversations/${selectedConversation.value.id}/notes`, { content: newNote.value.trim() })
-    notes.value.unshift(res.data)
-    newNote.value = ''
-  } catch (err: any) {
-    toast.error('Error añadiendo nota')
-  }
-}
 
 const loadQuickReplies = async () => {
   try {
@@ -337,6 +329,28 @@ const getModeLabel = (mode: string) => {
 }
 
 // ============================================================================
+// Delete Conversation
+// ============================================================================
+
+async function deleteConversation() {
+  if (!selectedConversation.value) return
+  deletingConversation.value = true
+  try {
+    await api.delete(`/chatbot/conversations/${selectedConversation.value.id}`)
+    toast.success('Conversación eliminada')
+    showDeleteConfirm.value = false
+    selectedConversation.value = null
+    messages.value = []
+    showMobileChat.value = false
+    await fetchConversations()
+  } catch (err) {
+    toast.error('Error al eliminar la conversación')
+  } finally {
+    deletingConversation.value = false
+  }
+}
+
+// ============================================================================
 // WebSocket Handlers (real-time, no polling)
 // ============================================================================
 
@@ -401,6 +415,90 @@ const handleVisibilityChange = () => {
 }
 
 // ============================================================================
+// Template methods
+// ============================================================================
+
+const openTemplateModal = async () => {
+  showTemplateModal.value = true
+  selectedTemplate.value = null
+  templatePhone.value = ''
+  templateVariables.value = []
+  loadingTemplates.value = true
+  try {
+    const res = await api.get<any>('/chatbot/templates')
+    templates.value = res.data || []
+  } catch (err: any) {
+    toast.error('Error cargando plantillas')
+    templates.value = []
+  } finally {
+    loadingTemplates.value = false
+  }
+}
+
+const selectTemplate = (tpl: any) => {
+  selectedTemplate.value = tpl
+  // Count variables in BODY component
+  const bodyComp = tpl.components?.find((c: any) => c.type === 'BODY')
+  const bodyText = bodyComp?.text || ''
+  const matches = bodyText.match(/\{\{\d+\}\}/g) || []
+  templateVariables.value = Array(matches.length).fill('')
+}
+
+const getTemplatePreview = (tpl: any) => {
+  const bodyComp = tpl.components?.find((c: any) => c.type === 'BODY')
+  return bodyComp?.text || tpl.name
+}
+
+const getFilledPreview = () => {
+  if (!selectedTemplate.value) return ''
+  let text = getTemplatePreview(selectedTemplate.value)
+  templateVariables.value.forEach((val, i) => {
+    text = text.replace(`{{${i + 1}}}`, val || `{{${i + 1}}}`)
+  })
+  return text
+}
+
+const sendTemplateMessage = async () => {
+  if (!templatePhone.value || !selectedTemplate.value) return
+
+  sendingTemplate.value = true
+  try {
+    // Build components array for Meta API
+    const components: any[] = []
+    if (templateVariables.value.length > 0) {
+      components.push({
+        type: 'body',
+        parameters: templateVariables.value.map(v => ({
+          type: 'text',
+          text: v
+        }))
+      })
+    }
+
+    // Clean phone number
+    const phone = templatePhone.value.replace(/[^\d+]/g, '')
+
+    await api.post<any>('/chatbot/conversations/send-template', {
+      phone,
+      templateName: selectedTemplate.value.name,
+      languageCode: selectedTemplate.value.language || 'es',
+      components,
+      templateBody: getFilledPreview()
+    })
+
+    toast.success('Plantilla enviada correctamente')
+    showTemplateModal.value = false
+
+    // Refresh conversations to show the new/updated one
+    await fetchConversations()
+  } catch (err: any) {
+    toast.error(err.response?.data?.error || 'Error enviando plantilla')
+  } finally {
+    sendingTemplate.value = false
+  }
+}
+
+// ============================================================================
 // Lifecycle
 // ============================================================================
 
@@ -443,6 +541,13 @@ watch(filterMode, () => fetchConversations())
         </div>
       </div>
       <div class="flex items-center gap-2">
+        <button
+          @click="openTemplateModal"
+          class="btn-primary text-sm gap-1.5 px-3 py-1.5"
+        >
+          <PlusIcon class="w-4 h-4" />
+          <span class="hidden sm:inline">Nueva conversación</span>
+        </button>
         <span class="hidden lg:flex items-center gap-1 text-xs text-surface-400 bg-surface-100 px-2.5 py-1 rounded-full" title="Los mensajes con más de 2 meses se eliminan automáticamente, conservando los últimos 100 por conversación">
           <ClockIcon class="w-3.5 h-3.5" />
           Retención: 2 meses
@@ -614,10 +719,9 @@ watch(filterMode, () => fetchConversations())
                 <PauseIcon class="w-4 h-4" />
               </button>
               <div class="w-px h-6 bg-surface-200 mx-1"></div>
-              <button @click="showNotes = !showNotes; if(showNotes) fetchNotes()" class="mode-btn" title="Notas">
-                <PencilSquareIcon class="w-4 h-4" />
+              <button @click="showDeleteConfirm = true" class="mode-btn text-red-500 hover:bg-red-50" title="Eliminar conversación">
+                <TrashIcon class="w-4 h-4" />
               </button>
-
             </div>
           </div>
 
@@ -707,25 +811,6 @@ watch(filterMode, () => fetchConversations())
             </template>
           </div>
 
-          <!-- Notes Sidebar -->
-          <div v-if="showNotes" class="notes-sidebar">
-            <div class="p-3 border-b border-surface-200 flex items-center justify-between">
-              <h4 class="font-semibold text-sm text-surface-800">Notas internas</h4>
-              <button @click="showNotes = false" class="p-1 hover:bg-surface-100 rounded">
-                <XMarkIcon class="w-4 h-4 text-surface-400" />
-              </button>
-            </div>
-            <div class="p-3">
-              <div class="flex gap-2 mb-3">
-                <input v-model="newNote" class="input flex-1 text-sm h-9" placeholder="Añadir nota..." @keyup.enter="addNote" />
-                <button @click="addNote" class="btn-primary text-sm py-2 px-3">Añadir</button>
-              </div>
-              <div v-for="note in notes" :key="note.id" class="p-2 bg-amber-50 rounded-lg text-sm mb-2">
-                <p class="text-surface-700 whitespace-pre-wrap">{{ note.content }}</p>
-                <p class="text-[10px] text-surface-400 mt-1">{{ formatTime(note.createdAt) }}</p>
-              </div>
-            </div>
-          </div>
 
           <!-- Input area -->
           <div class="chat-input-area">
@@ -800,6 +885,134 @@ watch(filterMode, () => fetchConversations())
         <img :src="mediaPreviewUrl" alt="Preview" class="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl" />
       </div>
     </Teleport>
+
+    <!-- Template Selector Modal -->
+    <Teleport to="body">
+      <div v-if="showTemplateModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" @click.self="showTemplateModal = false">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[85vh] flex flex-col">
+          <!-- Header -->
+          <div class="flex items-center justify-between p-5 border-b border-surface-200">
+            <div class="flex items-center gap-2">
+              <ChatBubbleLeftEllipsisIcon class="w-5 h-5 text-green-500" />
+              <h3 class="text-lg font-semibold text-surface-900">Nueva conversación</h3>
+            </div>
+            <button @click="showTemplateModal = false" class="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+              <XMarkIcon class="w-5 h-5 text-surface-500" />
+            </button>
+          </div>
+
+          <!-- Content -->
+          <div class="flex-1 overflow-y-auto p-5 space-y-4">
+            <!-- Phone -->
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">Teléfono del paciente</label>
+              <input
+                v-model="templatePhone"
+                type="tel"
+                placeholder="+34612345678"
+                class="input w-full"
+              />
+              <p class="text-xs text-surface-400 mt-1">Formato internacional con prefijo (ej. +34...)</p>
+            </div>
+
+            <!-- Template selector -->
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">Selecciona una plantilla</label>
+              <div v-if="loadingTemplates" class="text-center py-4 text-surface-400 text-sm">Cargando plantillas...</div>
+              <div v-else-if="templates.length === 0" class="text-center py-4 text-surface-400 text-sm">
+                No hay plantillas aprobadas. Crea plantillas en Meta Business Suite.
+              </div>
+              <div v-else class="space-y-2 max-h-48 overflow-y-auto">
+                <button
+                  v-for="tpl in templates"
+                  :key="tpl.id"
+                  @click="selectTemplate(tpl)"
+                  :class="[
+                    'w-full text-left p-3 rounded-lg border transition-all',
+                    selectedTemplate?.id === tpl.id
+                      ? 'border-green-500 bg-green-50 ring-1 ring-green-500'
+                      : 'border-surface-200 hover:border-surface-300 hover:bg-surface-50'
+                  ]"
+                >
+                  <div class="flex items-center justify-between">
+                    <span class="font-medium text-sm text-surface-800">{{ tpl.name }}</span>
+                    <span class="text-xs text-surface-400 uppercase">{{ tpl.category }}</span>
+                  </div>
+                  <p class="text-xs text-surface-500 mt-1 line-clamp-2">{{ getTemplatePreview(tpl) }}</p>
+                </button>
+              </div>
+            </div>
+
+            <!-- Variables -->
+            <div v-if="selectedTemplate && templateVariables.length > 0">
+              <label class="block text-sm font-medium text-surface-700 mb-1">Variables</label>
+              <div class="space-y-2">
+                <div v-for="(_, i) in templateVariables" :key="i">
+                  <label class="text-xs text-surface-500 mb-0.5 block">Variable {{ i + 1 }}</label>
+                  <input
+                    v-model="templateVariables[i]"
+                    type="text"
+                    :placeholder="`Valor para {{${i + 1}}}`"
+                    class="input w-full text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Preview -->
+            <div v-if="selectedTemplate" class="bg-green-50 rounded-lg p-3">
+              <p class="text-xs font-medium text-green-700 mb-1">Vista previa:</p>
+              <p class="text-sm text-surface-700 whitespace-pre-wrap">{{ getFilledPreview() }}</p>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="p-5 border-t border-surface-200">
+            <button
+              @click="sendTemplateMessage"
+              :disabled="!templatePhone || !selectedTemplate || sendingTemplate"
+              class="btn-primary w-full justify-center gap-2"
+            >
+              <PaperAirplaneIcon class="w-4 h-4" />
+              {{ sendingTemplate ? 'Enviando...' : 'Enviar plantilla' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Delete Confirmation Modal -->
+    <Teleport to="body">
+      <div v-if="showDeleteConfirm" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-sm w-full mx-4 overflow-hidden">
+          <div class="p-6 text-center">
+            <div class="w-14 h-14 mx-auto rounded-full bg-red-100 flex items-center justify-center mb-4">
+              <TrashIcon class="w-7 h-7 text-red-600" />
+            </div>
+            <h3 class="text-lg font-bold text-surface-900">¿Eliminar conversación?</h3>
+            <p class="text-sm text-surface-500 mt-2">
+              Se eliminarán todos los mensajes y notas de esta conversación.
+              <strong class="text-surface-700">Esta acción no se puede deshacer.</strong>
+            </p>
+          </div>
+          <div class="flex border-t border-surface-200">
+            <button
+              @click="showDeleteConfirm = false"
+              class="flex-1 py-3 text-sm font-medium text-surface-600 hover:bg-surface-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              @click="deleteConversation"
+              :disabled="deletingConversation"
+              class="flex-1 py-3 text-sm font-bold text-red-600 hover:bg-red-50 transition-colors border-l border-surface-200"
+            >
+              {{ deletingConversation ? 'Eliminando...' : 'Eliminar' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -871,9 +1084,5 @@ watch(filterMode, () => fetchConversations())
 
 .mode-btn-active-paused {
   @apply bg-amber-100 text-amber-700 hover:bg-amber-200;
-}
-
-.notes-sidebar {
-  @apply w-72 border-l border-surface-200 bg-white flex-shrink-0 overflow-y-auto hidden lg:block;
 }
 </style>

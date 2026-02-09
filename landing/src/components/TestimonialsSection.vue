@@ -91,20 +91,7 @@ const testimonials = [
         </article>
       </div>
 
-      <!-- More Social Proof -->
-      <div class="mt-16 text-center">
-        <p class="text-surface-400 mb-6">
-          Únete a las más de <span class="text-white font-semibold">500 clínicas</span> que ya usan Cuspia
-        </p>
-        <div class="flex flex-wrap items-center justify-center gap-8 opacity-50">
-          <!-- Placeholder for logos - using text for now -->
-          <span class="text-surface-500 text-sm">Clínica Dental Norte</span>
-          <span class="text-surface-500 text-sm">Dentix Premium</span>
-          <span class="text-surface-500 text-sm">Sonrisas Barcelona</span>
-          <span class="text-surface-500 text-sm">Policlínica Madrid</span>
-          <span class="text-surface-500 text-sm">Centro Odontológico Sur</span>
-        </div>
-      </div>
+
     </div>
   </section>
 </template>

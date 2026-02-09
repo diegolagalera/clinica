@@ -57,6 +57,11 @@ const fetchSettings = async () => {
 }
 
 const saveSettings = async () => {
+  if (form.value.isEnabled && !form.value.businessAccountId) {
+    toast.error('El Business Account ID es obligatorio para habilitar el chatbot')
+    return
+  }
+
   saving.value = true
   try {
     const res = await api.put<any>('/chatbot/settings', form.value)
@@ -85,6 +90,8 @@ const testConnection = async () => {
     testing.value = false
   }
 }
+
+
 
 onMounted(fetchSettings)
 </script>
@@ -150,13 +157,21 @@ onMounted(fetchSettings)
             <p class="text-xs text-surface-400 mt-1">Token permanente de tu app de Meta. Se almacena encriptado.</p>
           </div>
           <div>
-            <label class="block text-sm font-medium text-surface-700 mb-1">Business Account ID <span class="text-surface-400">(Opcional)</span></label>
+            <label class="block text-sm font-medium text-surface-700 mb-1">Business Account ID (WABA ID)</label>
             <input v-model="form.businessAccountId" type="text" class="input w-full" placeholder="Ej: 987654321098765" />
+            <p class="text-xs text-surface-400 mt-1">
+              Es el <strong>WhatsApp Business Account ID</strong>, NO el del Business Manager. 
+              <a href="https://business.facebook.com/settings/whatsapp-business-accounts" target="_blank" class="text-primary-600 hover:underline">Ver en Meta</a>.
+            </p>
           </div>
           <div>
             <label class="block text-sm font-medium text-surface-700 mb-1">Webhook Verify Token</label>
             <input v-model="form.webhookVerifyToken" type="text" class="input w-full" placeholder="Token secreto para verificar webhooks" />
             <p class="text-xs text-surface-400 mt-1">Debe coincidir con el que configures en Meta → Webhook Settings.</p>
+            <div class="mt-2 text-xs bg-surface-50 border border-surface-200 rounded p-2 text-surface-600">
+              <span class="block mb-1 font-semibold">Callback URL (Producción):</span>
+              <code class="font-mono bg-white px-2 py-1 rounded border border-surface-100 block w-full select-all">https://cuspia.com/api/v1/whatsapp/webhook</code>
+            </div>
           </div>
         </div>
       </div>

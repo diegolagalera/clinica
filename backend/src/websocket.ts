@@ -28,11 +28,19 @@ interface AuthenticatedSocket extends Socket {
 export function initializeWebSocket(httpServer: HttpServer): Server {
     io = new Server(httpServer, {
         cors: {
-            origin: [
-                config.frontend.url,
-                'http://localhost:5173',
-                'http://localhost:5174',
-            ],
+            origin: (origin, callback) => {
+                const allowedOrigins = [
+                    config.frontend.url,
+                    'http://localhost:5173',
+                    'http://localhost:5174',
+                ];
+                // Allow no-origin requests (mobile apps, curl, etc.)
+                if (!origin) return callback(null, true);
+                if (allowedOrigins.includes(origin)) return callback(null, true);
+                // Allow ngrok tunnels
+                if (origin.endsWith('.ngrok-free.app')) return callback(null, true);
+                callback(new Error('Not allowed by CORS'));
+            },
             credentials: true,
         },
         pingTimeout: 60000,
@@ -79,15 +87,21 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
         const userRoom = `user:${userId}`;
         socket.join(userRoom);
 
-        // Join organization room for general notifications (optional, can remove if not needed)
+        // Join organization room for general notifications
         const orgRoom = `org:${organizationId}`;
         socket.join(orgRoom);
+
+        // Join clinic room for clinic-specific events (e.g. WhatsApp chatbot)
+        const clinicId = socket.clinicId;
+        const clinicRoom = clinicId ? `clinic:${clinicId}` : null;
+        if (clinicRoom) socket.join(clinicRoom);
 
         logger.info({
             socketId: socket.id,
             userId,
             organizationId,
-            rooms: [userRoom, orgRoom],
+            clinicId,
+            rooms: [userRoom, orgRoom, clinicRoom].filter(Boolean),
         }, '🔌 WebSocket client connected');
 
         // Handle joining an appointment room for real-time stock updates
@@ -209,6 +223,21 @@ export function emitToUsers(userIds: string[], event: string, data: unknown): vo
     }
 
     logger.debug({ userIds, event }, 'Emitted WebSocket event to specific users');
+}
+
+/**
+ * Emit event to all users in a specific clinic room
+ */
+export function emitToClinic(clinicId: string, event: string, data: unknown): void {
+    if (!io) {
+        logger.warn({ clinicId, event }, 'WebSocket not initialized, cannot emit');
+        return;
+    }
+
+    const roomName = `clinic:${clinicId}`;
+    io.to(roomName).emit(event, data);
+
+    logger.debug({ clinicId, event, room: roomName }, 'Emitted WebSocket event to clinic room');
 }
 
 /**

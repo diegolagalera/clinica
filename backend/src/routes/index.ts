@@ -16,6 +16,8 @@ import stockRoutes from './stock.routes.js';
 import marketingRoutes from './marketing.routes.js';
 import assistantRoutes from './assistant.routes.js';
 import feedbackRoutes from './feedback.routes.js';
+import chatbotRoutes from '../controllers/chatbot.controller.js';
+import webhookRoutes from '../controllers/webhook.controller.js';
 
 const router = Router();
 
@@ -51,6 +53,8 @@ router.use('/stock', stockRoutes);
 router.use('/marketing', marketingRoutes);
 router.use('/assistant', assistantRoutes);
 router.use('/feedback', feedbackRoutes);
+router.use('/chatbot', chatbotRoutes);
+router.use('/whatsapp', webhookRoutes);
 
 export default router;
 

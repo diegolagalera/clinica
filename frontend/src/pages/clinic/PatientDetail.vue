@@ -1377,6 +1377,9 @@ const isSavingNotes = ref(false)
 const editingNotesId = ref<string | null>(null)
 const editingNotesContent = ref('')
 const radiographError = ref('')
+const showDeleteRadiographModal = ref(false)
+const radiographToDelete = ref<Radiograph | null>(null)
+const isDeletingRadiograph = ref(false)
 // Polling for AI analysis status
 let pollingInterval: ReturnType<typeof setInterval> | null = null
 
@@ -1605,6 +1608,32 @@ const saveNotes = async (radiographId: string) => {
 const cancelEditingNotes = () => {
   editingNotesId.value = null
   editingNotesContent.value = ''
+}
+
+// Delete radiograph
+const confirmDeleteRadiograph = (radiograph: Radiograph) => {
+  radiographToDelete.value = radiograph
+  showDeleteRadiographModal.value = true
+}
+
+const deleteRadiograph = async () => {
+  if (!radiographToDelete.value) return
+  isDeletingRadiograph.value = true
+  const deletingId = radiographToDelete.value.id
+  try {
+    await api.delete(`/radiographs/${deletingId}`)
+    // Close detail modal if the deleted radiograph was being viewed
+    if (selectedRadiograph.value?.id === deletingId) {
+      selectedRadiograph.value = null
+    }
+    showDeleteRadiographModal.value = false
+    radiographToDelete.value = null
+    await loadRadiographs()
+  } catch (err: any) {
+    radiographError.value = err.response?.data?.message || 'Error al eliminar la radiografía'
+  } finally {
+    isDeletingRadiograph.value = false
+  }
 }
 
 // Get AI status label
@@ -2344,7 +2373,7 @@ onUnmounted(() => {
           <div
             v-for="radiograph in radiographs"
             :key="radiograph.id"
-            class="card overflow-hidden hover:shadow-lg transition-shadow"
+            class="card overflow-hidden hover:shadow-lg transition-shadow group"
           >
             <!-- Image -->
             <div class="aspect-video bg-surface-100 relative cursor-pointer" @click="viewRadiograph(radiograph)">
@@ -2354,6 +2383,14 @@ onUnmounted(() => {
                 class="w-full h-full object-cover"
                 loading="lazy"
               />
+              <!-- Delete button -->
+              <button
+                @click.stop="confirmDeleteRadiograph(radiograph)"
+                class="absolute top-2 left-2 p-1.5 bg-red-500/80 hover:bg-red-600 text-white rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                title="Eliminar radiografía"
+              >
+                <TrashIcon class="w-4 h-4" />
+              </button>
               <!-- AI Status Badge -->
               <div v-if="radiograph.aiResult" class="absolute top-2 right-2">
                 <span :class="['px-2 py-1 rounded-full text-xs font-medium', getAiStatusClass(radiograph.aiResult.status)]">
@@ -2461,6 +2498,46 @@ onUnmounted(() => {
             Subir primera radiografía
           </button>
         </div>
+
+        <!-- Delete Radiograph Confirmation Modal -->
+        <Teleport to="body">
+          <div v-if="showDeleteRadiographModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div class="absolute inset-0 bg-surface-900/50" @click="showDeleteRadiographModal = false"></div>
+            <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-sm animate-scale-in">
+              <div class="p-6 text-center">
+                <div class="w-14 h-14 mx-auto mb-4 rounded-full bg-red-100 flex items-center justify-center">
+                  <TrashIcon class="w-7 h-7 text-red-600" />
+                </div>
+                <h3 class="text-lg font-semibold text-surface-900 mb-2">Eliminar radiografía</h3>
+                <p class="text-sm text-surface-600 mb-1">
+                  ¿Estás seguro de que deseas eliminar esta radiografía?
+                </p>
+                <p v-if="radiographToDelete" class="text-xs text-surface-400 mb-4 truncate">
+                  {{ radiographToDelete.originalFilename }}
+                </p>
+                <p class="text-xs text-red-500 mb-6">Esta acción no se puede deshacer.</p>
+                <div class="flex gap-3">
+                  <button
+                    type="button"
+                    @click="showDeleteRadiographModal = false"
+                    class="btn-secondary flex-1"
+                    :disabled="isDeletingRadiograph"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    @click="deleteRadiograph"
+                    :disabled="isDeletingRadiograph"
+                    class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
+                  >
+                    {{ isDeletingRadiograph ? 'Eliminando...' : 'Eliminar' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Teleport>
       </div>
 
       <!-- Tab: Odontogram -->

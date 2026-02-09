@@ -53,6 +53,11 @@ const envSchema = z.object({
 
     // Support
     SUPPORT_EMAIL: z.string().email().default('soporte@cuspia.com'),
+
+    // WhatsApp Chatbot
+    WHATSAPP_VERIFY_TOKEN: z.string().optional(),
+    ENCRYPTION_KEY: z.string().min(32).optional(),
+    NGROK_AUTHTOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -131,5 +136,17 @@ export const config = {
 
     support: {
         email: env.SUPPORT_EMAIL,
+    },
+
+    whatsapp: {
+        verifyToken: env.WHATSAPP_VERIFY_TOKEN,
+    },
+
+    encryption: {
+        key: env.ENCRYPTION_KEY,
+    },
+
+    ngrok: {
+        authtoken: env.NGROK_AUTHTOKEN,
     },
 } as const;

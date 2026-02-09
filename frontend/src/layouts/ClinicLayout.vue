@@ -25,6 +25,7 @@ import {
   ChevronRightIcon,
   EnvelopeIcon,
   PencilIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
@@ -98,6 +99,7 @@ const navigation = computed(() => {
     baseNav.push(
       { name: 'Personal', href: '/clinic/staff', icon: UsersIcon, adminOnly: true },
       { name: 'Marketing', href: '/clinic/marketing', icon: EnvelopeIcon, adminOnly: true },
+      { name: 'WhatsApp', href: '/clinic/whatsapp', icon: ChatBubbleLeftRightIcon, adminOnly: true },
       // { name: 'Facturación', href: '/clinic/invoices', icon: DocumentTextIcon, adminOnly: true }, // TODO: Enable when billing is developed
       { name: 'Valoraciones', href: '/clinic/ratings', icon: StarIcon, adminOnly: true },
       { name: 'Configuración', href: '/clinic/settings', icon: Cog6ToothIcon, adminOnly: true },

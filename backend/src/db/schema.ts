@@ -11,8 +11,28 @@ import {
     pgEnum,
     index,
     uniqueIndex,
+    customType,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
+
+// ============================================================================
+// CUSTOM TYPES (pgvector)
+// ============================================================================
+
+const vector = customType<{ data: number[]; driverData: string }>({
+    dataType() {
+        return 'vector(1536)';
+    },
+    toDriver(value: number[]): string {
+        return `[${value.join(',')}]`;
+    },
+    fromDriver(value: string): number[] {
+        return value
+            .slice(1, -1)
+            .split(',')
+            .map(Number);
+    },
+});
 
 // ============================================================================
 // ENUMS
@@ -1981,5 +2001,440 @@ export const bugReportsRelations = relations(bugReports, ({ one }) => ({
         fields: [bugReports.resolvedById],
         references: [users.id],
         relationName: 'bugReportResolvedBy',
+    }),
+}));
+
+// ============================================================================
+// WHATSAPP AI CHATBOT MODULE
+// ============================================================================
+
+// Enums
+export const chatConversationStatusEnum = pgEnum('chat_conversation_status', [
+    'ACTIVE',
+    'CLOSED',
+    'ARCHIVED',
+]);
+
+export const chatControlModeEnum = pgEnum('chat_control_mode', [
+    'AI',
+    'HUMAN',
+    'PAUSED',
+]);
+
+export const chatMessageDirectionEnum = pgEnum('chat_message_direction', [
+    'INBOUND',
+    'OUTBOUND',
+]);
+
+export const chatMessageStatusEnum = pgEnum('chat_message_status', [
+    'SENT',
+    'DELIVERED',
+    'READ',
+    'FAILED',
+]);
+
+export const leadStatusEnum = pgEnum('lead_status', [
+    'NEW',
+    'CONTACTED',
+    'QUALIFIED',
+    'CONVERTED',
+    'REJECTED',
+]);
+
+// WhatsApp Settings (per clinic — 1:1)
+export const whatsappSettings = pgTable('whatsapp_settings', {
+    id: uuid('id').defaultRandom().primaryKey(),
+    clinicId: uuid('clinic_id')
+        .notNull()
+        .unique()
+        .references(() => clinics.id, { onDelete: 'cascade' }),
+    phoneNumberId: varchar('phone_number_id', { length: 100 }),       // Meta Phone Number ID
+    accessToken: text('access_token'),                                 // Encrypted (AES-256-GCM)
+    businessAccountId: varchar('business_account_id', { length: 100 }),
+    webhookVerifyToken: varchar('webhook_verify_token', { length: 100 }),
+    systemPrompt: text('system_prompt'),                               // AI personality/instructions
+    autoReplyEnabled: boolean('auto_reply_enabled').default(true).notNull(),
+    inactivityTimeoutHours: integer('inactivity_timeout_hours').default(24).notNull(),
+    isEnabled: boolean('is_enabled').default(false).notNull(),
+    isConfigured: boolean('is_configured').default(false).notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// Chat Conversations
+export const chatConversations = pgTable(
+    'chat_conversations',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        patientId: uuid('patient_id').references(() => patients.id, { onDelete: 'set null' }),
+        leadId: uuid('lead_id'),  // References chat_leads (added after table def)
+        waContactPhone: varchar('wa_contact_phone', { length: 50 }).notNull(),   // E.164 format
+        waContactName: varchar('wa_contact_name', { length: 255 }),               // Push name from WhatsApp
+        status: chatConversationStatusEnum('status').default('ACTIVE').notNull(),
+        controlMode: chatControlModeEnum('control_mode').default('AI').notNull(),
+        assignedToId: uuid('assigned_to_id').references(() => users.id, { onDelete: 'set null' }),
+        lastMessageAt: timestamp('last_message_at'),
+        unreadCount: integer('unread_count').default(0).notNull(),
+        metadata: jsonb('metadata').default({}),
+        closedAt: timestamp('closed_at'),
+        closedById: uuid('closed_by_id').references(() => users.id, { onDelete: 'set null' }),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdx: index('chat_conversations_clinic_idx').on(table.clinicId),
+        patientIdx: index('chat_conversations_patient_idx').on(table.patientId),
+        phoneIdx: index('chat_conversations_phone_idx').on(table.waContactPhone),
+        statusIdx: index('chat_conversations_status_idx').on(table.status),
+        controlModeIdx: index('chat_conversations_control_mode_idx').on(table.controlMode),
+        lastMessageIdx: index('chat_conversations_last_message_idx').on(table.lastMessageAt),
+        // One active conversation per phone per clinic
+        activePhoneIdx: uniqueIndex('chat_conversations_active_phone_idx')
+            .on(table.clinicId, table.waContactPhone)
+            .where(sql`status = 'ACTIVE'`),
+    })
+);
+
+// Chat Messages
+export const chatMessages = pgTable(
+    'chat_messages',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        conversationId: uuid('conversation_id')
+            .notNull()
+            .references(() => chatConversations.id, { onDelete: 'cascade' }),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        direction: chatMessageDirectionEnum('direction').notNull(),
+        content: text('content'),                                        // Message text
+        messageType: varchar('message_type', { length: 20 }).default('text').notNull(), // text, image, document, audio, etc.
+        mediaUrl: varchar('media_url', { length: 500 }),                 // URL for media messages
+        wamid: varchar('wamid', { length: 255 }),                        // WhatsApp Message ID from Meta
+        status: chatMessageStatusEnum('status').default('SENT'),
+        isFromAi: boolean('is_from_ai').default(false).notNull(),        // true if AI generated
+        sentById: uuid('sent_by_id').references(() => users.id, { onDelete: 'set null' }), // null for inbound & AI
+        errorMessage: text('error_message'),
+        metadata: jsonb('metadata').default({}),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        conversationIdx: index('chat_messages_conversation_idx').on(table.conversationId),
+        clinicIdx: index('chat_messages_clinic_idx').on(table.clinicId),
+        wamidIdx: uniqueIndex('chat_messages_wamid_idx').on(table.wamid),
+        createdAtIdx: index('chat_messages_created_at_idx').on(table.createdAt),
+    })
+);
+
+// Chat Knowledge Bases (collections)
+export const chatKnowledgeBases = pgTable(
+    'chat_knowledge_bases',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        name: varchar('name', { length: 255 }).notNull(),               // e.g. "Información General", "Precios"
+        description: text('description'),
+        icon: varchar('icon', { length: 50 }).default('📚'),
+        isActive: boolean('is_active').default(true).notNull(),
+        createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdx: index('chat_knowledge_bases_clinic_idx').on(table.clinicId),
+    })
+);
+
+// Chat Knowledge Articles
+export const chatKnowledgeArticles = pgTable(
+    'chat_knowledge_articles',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        knowledgeBaseId: uuid('knowledge_base_id')
+            .notNull()
+            .references(() => chatKnowledgeBases.id, { onDelete: 'cascade' }),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        title: varchar('title', { length: 255 }).notNull(),
+        originalContent: text('original_content').notNull(),             // Full raw text / PDF extracted
+        sourceType: varchar('source_type', { length: 20 }).default('text').notNull(), // text, pdf
+        sourceFilename: varchar('source_filename', { length: 255 }),     // Original PDF filename
+        chunkCount: integer('chunk_count').default(0).notNull(),         // Number of generated chunks
+        isProcessed: boolean('is_processed').default(false).notNull(),   // Embedding generation complete
+        createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        knowledgeBaseIdx: index('chat_knowledge_articles_kb_idx').on(table.knowledgeBaseId),
+        clinicIdx: index('chat_knowledge_articles_clinic_idx').on(table.clinicId),
+    })
+);
+
+// Chat Knowledge Chunks (with pgvector embeddings for semantic search)
+export const chatKnowledgeChunks = pgTable(
+    'chat_knowledge_chunks',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        articleId: uuid('article_id')
+            .notNull()
+            .references(() => chatKnowledgeArticles.id, { onDelete: 'cascade' }),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        content: text('content').notNull(),                              // Chunk text (~500 tokens)
+        chunkIndex: integer('chunk_index').notNull(),                     // Position within article
+        embedding: vector('embedding'),                                   // pgvector 1536-dim
+        tokenCount: integer('token_count'),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        articleIdx: index('chat_knowledge_chunks_article_idx').on(table.articleId),
+        clinicIdx: index('chat_knowledge_chunks_clinic_idx').on(table.clinicId),
+    })
+);
+
+// Chat Leads (potential new patients from WhatsApp)
+export const chatLeads = pgTable(
+    'chat_leads',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        phone: varchar('phone', { length: 50 }).notNull(),              // E.164 format
+        firstName: varchar('first_name', { length: 100 }),
+        lastName: varchar('last_name', { length: 100 }),
+        email: varchar('email', { length: 255 }),
+        notes: text('notes'),
+        source: varchar('source', { length: 50 }).default('whatsapp').notNull(),
+        status: leadStatusEnum('status').default('NEW').notNull(),
+        convertedPatientId: uuid('converted_patient_id').references(() => patients.id, { onDelete: 'set null' }),
+        convertedById: uuid('converted_by_id').references(() => users.id, { onDelete: 'set null' }),
+        convertedAt: timestamp('converted_at'),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdx: index('chat_leads_clinic_idx').on(table.clinicId),
+        phoneIdx: index('chat_leads_phone_idx').on(table.phone),
+        statusIdx: index('chat_leads_status_idx').on(table.status),
+        clinicPhoneIdx: uniqueIndex('chat_leads_clinic_phone_idx').on(table.clinicId, table.phone),
+    })
+);
+
+// Chat Conversation Notes (internal staff notes)
+export const chatConversationNotes = pgTable(
+    'chat_conversation_notes',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        conversationId: uuid('conversation_id')
+            .notNull()
+            .references(() => chatConversations.id, { onDelete: 'cascade' }),
+        createdById: uuid('created_by_id')
+            .notNull()
+            .references(() => users.id, { onDelete: 'cascade' }),
+        content: text('content').notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        conversationIdx: index('chat_conversation_notes_conv_idx').on(table.conversationId),
+    })
+);
+
+// Chat Quick Replies (predefined responses per clinic)
+export const chatQuickReplies = pgTable(
+    'chat_quick_replies',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        title: varchar('title', { length: 100 }).notNull(),             // Short label
+        content: text('content').notNull(),                              // Full response text
+        category: varchar('category', { length: 50 }),
+        sortOrder: integer('sort_order').default(0).notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdx: index('chat_quick_replies_clinic_idx').on(table.clinicId),
+    })
+);
+
+// Chat AI Logs (detailed AI interaction tracking)
+export const chatAiLogs = pgTable(
+    'chat_ai_logs',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        conversationId: uuid('conversation_id')
+            .notNull()
+            .references(() => chatConversations.id, { onDelete: 'cascade' }),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        messageId: uuid('message_id').references(() => chatMessages.id, { onDelete: 'set null' }),
+        promptTokens: integer('prompt_tokens'),
+        completionTokens: integer('completion_tokens'),
+        totalTokens: integer('total_tokens'),
+        model: varchar('model', { length: 50 }),
+        latencyMs: integer('latency_ms'),
+        ragChunksUsed: integer('rag_chunks_used').default(0),
+        ragContext: text('rag_context'),                                 // The context retrieved
+        errorMessage: text('error_message'),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        conversationIdx: index('chat_ai_logs_conversation_idx').on(table.conversationId),
+        clinicIdx: index('chat_ai_logs_clinic_idx').on(table.clinicId),
+        createdAtIdx: index('chat_ai_logs_created_at_idx').on(table.createdAt),
+    })
+);
+
+// ============================================================================
+// WHATSAPP CHATBOT RELATIONS
+// ============================================================================
+
+export const whatsappSettingsRelations = relations(whatsappSettings, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [whatsappSettings.clinicId],
+        references: [clinics.id],
+    }),
+}));
+
+export const chatConversationsRelations = relations(chatConversations, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [chatConversations.clinicId],
+        references: [clinics.id],
+    }),
+    patient: one(patients, {
+        fields: [chatConversations.patientId],
+        references: [patients.id],
+    }),
+    lead: one(chatLeads, {
+        fields: [chatConversations.leadId],
+        references: [chatLeads.id],
+    }),
+    assignedTo: one(users, {
+        fields: [chatConversations.assignedToId],
+        references: [users.id],
+        relationName: 'conversationAssignee',
+    }),
+    closedBy: one(users, {
+        fields: [chatConversations.closedById],
+        references: [users.id],
+        relationName: 'conversationCloser',
+    }),
+    messages: many(chatMessages),
+    notes: many(chatConversationNotes),
+    aiLogs: many(chatAiLogs),
+}));
+
+export const chatMessagesRelations = relations(chatMessages, ({ one }) => ({
+    conversation: one(chatConversations, {
+        fields: [chatMessages.conversationId],
+        references: [chatConversations.id],
+    }),
+    clinic: one(clinics, {
+        fields: [chatMessages.clinicId],
+        references: [clinics.id],
+    }),
+    sentBy: one(users, {
+        fields: [chatMessages.sentById],
+        references: [users.id],
+    }),
+}));
+
+export const chatKnowledgeBasesRelations = relations(chatKnowledgeBases, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [chatKnowledgeBases.clinicId],
+        references: [clinics.id],
+    }),
+    createdBy: one(users, {
+        fields: [chatKnowledgeBases.createdById],
+        references: [users.id],
+    }),
+    articles: many(chatKnowledgeArticles),
+}));
+
+export const chatKnowledgeArticlesRelations = relations(chatKnowledgeArticles, ({ one, many }) => ({
+    knowledgeBase: one(chatKnowledgeBases, {
+        fields: [chatKnowledgeArticles.knowledgeBaseId],
+        references: [chatKnowledgeBases.id],
+    }),
+    clinic: one(clinics, {
+        fields: [chatKnowledgeArticles.clinicId],
+        references: [clinics.id],
+    }),
+    createdBy: one(users, {
+        fields: [chatKnowledgeArticles.createdById],
+        references: [users.id],
+    }),
+    chunks: many(chatKnowledgeChunks),
+}));
+
+export const chatKnowledgeChunksRelations = relations(chatKnowledgeChunks, ({ one }) => ({
+    article: one(chatKnowledgeArticles, {
+        fields: [chatKnowledgeChunks.articleId],
+        references: [chatKnowledgeArticles.id],
+    }),
+    clinic: one(clinics, {
+        fields: [chatKnowledgeChunks.clinicId],
+        references: [clinics.id],
+    }),
+}));
+
+export const chatLeadsRelations = relations(chatLeads, ({ one, many }) => ({
+    clinic: one(clinics, {
+        fields: [chatLeads.clinicId],
+        references: [clinics.id],
+    }),
+    convertedPatient: one(patients, {
+        fields: [chatLeads.convertedPatientId],
+        references: [patients.id],
+    }),
+    convertedBy: one(users, {
+        fields: [chatLeads.convertedById],
+        references: [users.id],
+    }),
+    conversations: many(chatConversations),
+}));
+
+export const chatConversationNotesRelations = relations(chatConversationNotes, ({ one }) => ({
+    conversation: one(chatConversations, {
+        fields: [chatConversationNotes.conversationId],
+        references: [chatConversations.id],
+    }),
+    createdBy: one(users, {
+        fields: [chatConversationNotes.createdById],
+        references: [users.id],
+    }),
+}));
+
+export const chatQuickRepliesRelations = relations(chatQuickReplies, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [chatQuickReplies.clinicId],
+        references: [clinics.id],
+    }),
+}));
+
+export const chatAiLogsRelations = relations(chatAiLogs, ({ one }) => ({
+    conversation: one(chatConversations, {
+        fields: [chatAiLogs.conversationId],
+        references: [chatConversations.id],
+    }),
+    clinic: one(clinics, {
+        fields: [chatAiLogs.clinicId],
+        references: [clinics.id],
+    }),
+    message: one(chatMessages, {
+        fields: [chatAiLogs.messageId],
+        references: [chatMessages.id],
     }),
 }));

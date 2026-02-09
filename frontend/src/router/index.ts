@@ -49,6 +49,12 @@ const BirthdaySettings = () => import('@/pages/clinic/BirthdaySettings.vue')
 const CampaignEditor = () => import('@/pages/clinic/CampaignEditor.vue')
 const AudienceBuilder = () => import('@/pages/clinic/AudienceBuilder.vue')
 
+// WhatsApp Chatbot pages
+const WhatsAppChat = () => import('@/pages/clinic/WhatsAppChat.vue')
+const WhatsAppSettings = () => import('@/pages/clinic/WhatsAppSettings.vue')
+const KnowledgeBase = () => import('@/pages/clinic/KnowledgeBase.vue')
+const WhatsAppLeads = () => import('@/pages/clinic/WhatsAppLeads.vue')
+
 // Patient pages
 const PatientDashboard = () => import('@/pages/patient/Dashboard.vue')
 const PatientAppointments = () => import('@/pages/patient/Appointments.vue')
@@ -203,6 +209,32 @@ const routes: RouteRecordRaw[] = [
                 path: 'marketing/segments/:id/edit',
                 name: 'clinic-marketing-segment-edit',
                 component: AudienceBuilder,
+                meta: { roles: [Role.ADMIN] }
+            },
+
+            // WhatsApp Chatbot routes
+            {
+                path: 'whatsapp',
+                name: 'clinic-whatsapp',
+                component: WhatsAppChat,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'whatsapp/settings',
+                name: 'clinic-whatsapp-settings',
+                component: WhatsAppSettings,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'whatsapp/knowledge',
+                name: 'clinic-whatsapp-knowledge',
+                component: KnowledgeBase,
+                meta: { roles: [Role.ADMIN] }
+            },
+            {
+                path: 'whatsapp/leads',
+                name: 'clinic-whatsapp-leads',
+                component: WhatsAppLeads,
                 meta: { roles: [Role.ADMIN] }
             },
         ],

@@ -10,6 +10,7 @@ import { errorHandler, notFoundHandler } from './middleware/index.js';
 import routes from './routes/index.js';
 import { startReminderScheduler } from './jobs/reminder-scheduler.js';
 import { startRatingScheduler } from './jobs/rating-scheduler.js';
+import { startCleanupScheduler } from './jobs/cleanup-scheduler.js';
 import { initializeWebSocket } from './websocket.js';
 
 const app = express();
@@ -27,11 +28,19 @@ const allowedOrigins = [
     'http://localhost:5173',
     'http://localhost:5174',
 ];
+
+// Allow webhook requests from Meta (no CORS restriction)
+app.use('/api/v1/whatsapp', cors());
+
 app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps, curl, etc.)
         if (!origin) return callback(null, true);
         if (allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        // Allow ngrok tunnel domains for demo/testing
+        if (origin.endsWith('.ngrok-free.app')) {
             return callback(null, true);
         }
         return callback(new Error('Not allowed by CORS'));
@@ -73,6 +82,12 @@ app.use((req, _res, next) => {
 });
 
 // ============================================================================
+// STATIC FILES (media uploads)
+// ============================================================================
+
+app.use('/uploads', express.static('uploads'));
+
+// ============================================================================
 // API ROUTES
 // ============================================================================
 
@@ -108,6 +123,9 @@ const start = async () => {
 
             // Start rating scheduler
             startRatingScheduler();
+
+            // Start message & media cleanup scheduler
+            startCleanupScheduler();
         });
 
         // Graceful shutdown

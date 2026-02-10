@@ -11,6 +11,7 @@ import { logger } from '../utils/logger.js';
 import { config } from '../config/env.js';
 import { ChatbotKnowledgeService } from './chatbot-knowledge.service.js';
 import { decrypt } from '../utils/encryption.js';
+import { AiUsageService } from './ai-usage.service.js';
 
 const DEFAULT_SYSTEM_PROMPT = `Eres un asistente virtual profesional de una clínica dental. Tu objetivo es:
 1. Responder preguntas sobre la clínica, servicios, horarios y precios de manera clara y amigable.
@@ -40,10 +41,25 @@ export class ChatbotAiService {
         userMessage: string,
         conversationHistory: { role: string; content: string }[],
         systemPrompt?: string | null,
-    ): Promise<{ response: string; ragChunksUsed: number; ragContext: string; tokens: { prompt: number; completion: number; total: number } }> {
+    ): Promise<{ response: string; ragChunksUsed: number; ragContext: string; tokens: { prompt: number; completion: number; total: number }; quotaBlocked?: boolean; quotaReason?: string }> {
         const startTime = Date.now();
 
         try {
+            // Enforce AI quota — if blocked, signal caller to skip sending
+            try {
+                await AiUsageService.enforceQuota(clinicId);
+            } catch (quotaError: any) {
+                logger.warn({ clinicId, error: quotaError.message }, 'AI quota blocked for chatbot');
+                return {
+                    response: '',
+                    ragChunksUsed: 0,
+                    ragContext: '',
+                    tokens: { prompt: 0, completion: 0, total: 0 },
+                    quotaBlocked: true,
+                    quotaReason: quotaError.message,
+                };
+            }
+
             // 1. Retrieve relevant knowledge via RAG
             const relevantChunks = await ChatbotKnowledgeService.searchRelevantChunks(
                 clinicId,
@@ -137,6 +153,9 @@ export class ChatbotAiService {
                 ragContext: ragContext || null,
             });
 
+            // 7. Log AI usage for billing
+            await AiUsageService.logUsage(clinicId, 'chatbot', 'gpt-4o-mini', tokens, { conversationId });
+
             logger.info({
                 conversationId,
                 tokens: tokens.total,
@@ -176,11 +195,17 @@ export class ChatbotAiService {
      */
     static async transcribeAudio(
         audioBuffer: Buffer,
-        mimeType: string = 'audio/ogg'
+        mimeType: string = 'audio/ogg',
+        clinicId?: string
     ): Promise<string> {
         try {
             const apiKey = config.openai.apiKey;
             if (!apiKey) throw new Error('OPENAI_API_KEY is not configured');
+
+            // Enforce AI quota for WhatsApp audio transcription
+            if (clinicId) {
+                await AiUsageService.enforceQuota(clinicId);
+            }
 
             const formData = new FormData();
             // Append file with filename and correct mime type
@@ -203,7 +228,14 @@ export class ChatbotAiService {
                 throw new Error(`OpenAI Whisper error: ${data.error?.message || response.status}`);
             }
 
-            return data.text || '';
+            const transcription = data.text || '';
+
+            // Log whisper usage (estimate ~750 tokens per minute of audio)
+            if (clinicId && transcription) {
+                await AiUsageService.logUsage(clinicId, 'chatbot', 'whisper-1', { prompt: 750, completion: 0, total: 750 });
+            }
+
+            return transcription;
         } catch (error) {
             logger.error({ error }, 'Failed to transcribe audio');
             return ''; // Return empty string on failure to avoid crashing flow

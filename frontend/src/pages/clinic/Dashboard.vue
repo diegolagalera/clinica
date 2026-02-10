@@ -11,6 +11,8 @@ import {
   ChartBarIcon,
   PlusIcon,
   ArrowRightIcon,
+  CpuChipIcon,
+  ExclamationCircleIcon,
 } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
@@ -25,6 +27,25 @@ const stats = ref({
 })
 const todayAppointments = ref<Appointment[]>([])
 const isLoading = ref(true)
+
+// AI Usage state (admin only)
+const aiUsage = ref<any>(null)
+const aiStatus = ref<{ active: boolean; aiEnabled: boolean; reason: string | null }>({ active: true, aiEnabled: true, reason: null })
+
+const featureLabels: Record<string, string> = {
+  chatbot: 'Chatbot WhatsApp',
+  assistant: 'Asistente FAQ',
+  radiograph: 'Radiografías',
+  transcription: 'Transcripción',
+  voice_notes: 'Notas de Voz',
+  email_template: 'Email',
+  stock_image: 'Imágenes',
+}
+
+const featureIcons: Record<string, string> = {
+  chatbot: '💬', assistant: '✨', radiograph: '🦷', transcription: '🎤',
+  voice_notes: '🗒️', email_template: '📧', stock_image: '🖼️',
+}
 
 // Load dashboard data
 const loadDashboard = async () => {
@@ -81,7 +102,48 @@ const getStatusLabel = (status: string) => {
 
 onMounted(() => {
   loadDashboard()
+  if (authStore.isAdmin) loadAiUsage()
 })
+
+// AI usage loader
+const loadAiUsage = async () => {
+  try {
+    const statusRes = await api.get<any>('/chatbot/ai-status')
+    if (statusRes.data) {
+      aiStatus.value = statusRes.data
+    }
+    // Always load usage data regardless of AI status
+    const now = new Date()
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const usageRes = await api.get<any>('/chatbot/ai-usage', { params: { month } })
+    if (usageRes.success && usageRes.data) {
+      aiUsage.value = usageRes.data
+    }
+  } catch { /* ignore */ }
+}
+
+const formatTokenCount = (count: number): string => {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`
+  return count.toString()
+}
+
+const formatCost = (cost: string | number): string => {
+  const n = typeof cost === 'string' ? parseFloat(cost) : cost
+  if (n < 0.01) return `$${n.toFixed(4)}`
+  return `$${n.toFixed(2)}`
+}
+
+const usagePercent = () => {
+  if (!aiUsage.value) return 0
+  return Math.round((aiUsage.value.totals.totalTokens / aiUsage.value.tokenLimit) * 100)
+}
+
+const getUsageColor = (percent: number): string => {
+  if (percent >= 90) return 'bg-danger-500'
+  if (percent >= 70) return 'bg-warning-500'
+  return 'bg-accent-500'
+}
 </script>
 
 <template>
@@ -142,6 +204,80 @@ onMounted(() => {
         </div>
         <p class="stat-value">{{ stats.totalPatients }}</p>
         <p class="stat-label">Pacientes</p>
+      </div>
+    </div>
+
+    <!-- AI Usage Card (Admin only) -->
+    <div v-if="authStore.isAdmin" class="card overflow-hidden">
+      <div class="card-header flex items-center gap-3">
+        <div class="p-2 rounded-xl bg-primary-100">
+          <CpuChipIcon class="w-5 h-5 text-primary-600" />
+        </div>
+        <h2 class="font-semibold text-surface-900">Inteligencia Artificial</h2>
+      </div>
+
+      <!-- AI Disabled Banner -->
+      <div v-if="!aiStatus.aiEnabled" class="mx-5 mt-5 flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+        <ExclamationCircleIcon class="w-5 h-5 text-amber-500 flex-shrink-0" />
+        <p class="text-sm font-medium text-amber-800">IA desactivada</p>
+      </div>
+
+      <!-- AI Usage Data -->
+      <div v-if="aiUsage && aiUsage.totals.totalTokens > 0" class="p-5 space-y-4">
+        <!-- Summary row -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-primary-50 rounded-xl p-3 text-center">
+            <p class="text-lg font-bold text-primary-700">{{ formatTokenCount(aiUsage.totals.totalTokens) }}</p>
+            <p class="text-[10px] text-primary-500 font-medium">TOKENS</p>
+          </div>
+          <div class="bg-surface-50 rounded-xl p-3 text-center">
+            <p class="text-lg font-bold text-surface-700">{{ aiUsage.totals.requestCount }}</p>
+            <p class="text-[10px] text-surface-500 font-medium">PETICIONES</p>
+          </div>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs text-surface-500">
+            <span>{{ formatTokenCount(aiUsage.totals.totalTokens) }} / {{ formatTokenCount(aiUsage.tokenLimit) }}</span>
+            <span>{{ usagePercent() }}%</span>
+          </div>
+          <div class="w-full bg-surface-100 rounded-full h-2 overflow-hidden">
+            <div 
+              :class="getUsageColor(usagePercent())"
+              class="h-full rounded-full transition-all duration-500"
+              :style="{ width: `${Math.min(usagePercent(), 100)}%` }"
+            ></div>
+          </div>
+        </div>
+
+        <!-- Top features -->
+        <div v-if="aiUsage.byFeature.length > 0">
+          <p class="text-xs font-medium text-surface-500 mb-2">Uso por funcionalidad</p>
+          <div class="flex flex-wrap gap-2">
+            <span 
+              v-for="feat in aiUsage.byFeature.slice(0, 4)" 
+              :key="feat.feature"
+              class="inline-flex items-center gap-1.5 text-xs bg-surface-50 text-surface-700 px-2.5 py-1.5 rounded-lg"
+            >
+              <span>{{ featureIcons[feat.feature] || '⚡' }}</span>
+              {{ featureLabels[feat.feature] || feat.feature }}
+              <span class="font-semibold">{{ formatTokenCount(feat.totalTokens) }}</span>
+            </span>
+          </div>
+        </div>
+
+        <p class="text-[10px] text-surface-400 text-center">Consumo del mes actual · Se reinicia mensualmente</p>
+      </div>
+
+      <!-- No usage and AI disabled -->
+      <div v-else-if="!aiStatus.aiEnabled && (!aiUsage || aiUsage.totals.totalTokens === 0)" class="p-5 text-center">
+        <p class="text-sm text-surface-400">Sin consumo de IA este mes</p>
+      </div>
+
+      <!-- Loading -->
+      <div v-else-if="aiStatus.aiEnabled && !aiUsage" class="p-6 flex justify-center">
+        <div class="animate-spin w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full"></div>
       </div>
     </div>
 

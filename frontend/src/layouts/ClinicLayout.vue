@@ -88,21 +88,21 @@ const toggleSidebar = () => {
 
 const navigation = computed(() => {
   const baseNav = [
-    { name: 'Dashboard', href: '/clinic/dashboard', icon: HomeIcon, adminOnly: false },
-    { name: 'Agenda', href: '/clinic/calendar', icon: CalendarDaysIcon, adminOnly: false },
-    { name: 'Pacientes', href: '/clinic/patients', icon: UserGroupIcon, adminOnly: false },
-    { name: 'Inventario', href: '/clinic/inventory', icon: CubeIcon, adminOnly: false },
+    { name: 'Dashboard', href: '/clinic/dashboard', icon: HomeIcon, adminOnly: false, disabled: false },
+    { name: 'Agenda', href: '/clinic/calendar', icon: CalendarDaysIcon, adminOnly: false, disabled: false },
+    { name: 'Pacientes', href: '/clinic/patients', icon: UserGroupIcon, adminOnly: false, disabled: false },
+    { name: 'Inventario', href: '/clinic/inventory', icon: CubeIcon, adminOnly: false, disabled: false },
   ]
 
   // Admin-only items
   if (authStore.isAdmin) {
     baseNav.push(
-      { name: 'Personal', href: '/clinic/staff', icon: UsersIcon, adminOnly: true },
-      { name: 'Marketing', href: '/clinic/marketing', icon: EnvelopeIcon, adminOnly: true },
-      { name: 'WhatsApp', href: '/clinic/whatsapp', icon: ChatBubbleLeftRightIcon, adminOnly: true },
+      { name: 'Personal', href: '/clinic/staff', icon: UsersIcon, adminOnly: true, disabled: false },
+      { name: 'Marketing', href: '/clinic/marketing', icon: EnvelopeIcon, adminOnly: true, disabled: true },
+      { name: 'WhatsApp', href: '/clinic/whatsapp', icon: ChatBubbleLeftRightIcon, adminOnly: true, disabled: false },
       // { name: 'Facturación', href: '/clinic/invoices', icon: DocumentTextIcon, adminOnly: true }, // TODO: Enable when billing is developed
-      { name: 'Valoraciones', href: '/clinic/ratings', icon: StarIcon, adminOnly: true },
-      { name: 'Configuración', href: '/clinic/settings', icon: Cog6ToothIcon, adminOnly: true },
+      { name: 'Valoraciones', href: '/clinic/ratings', icon: StarIcon, adminOnly: true, disabled: false },
+      { name: 'Configuración', href: '/clinic/settings', icon: Cog6ToothIcon, adminOnly: true, disabled: false },
     )
   }
 
@@ -309,20 +309,35 @@ const changePassword = async () => {
 
       <!-- Navigation -->
       <nav class="p-2 space-y-1 overflow-y-auto" style="max-height: calc(100vh - 180px);">
-        <RouterLink
-          v-for="item in navigation"
-          :key="item.name"
-          :to="item.href"
-          :class="[
-            isActiveRoute(item.href) ? 'nav-item-active' : 'nav-item-inactive',
-            sidebarCollapsed ? 'justify-center px-2' : ''
-          ]"
-          :title="sidebarCollapsed ? item.name : undefined"
-        >
-          <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
-          <span v-if="!sidebarCollapsed">{{ item.name }}</span>
-          <span v-if="item.adminOnly && !sidebarCollapsed" class="ml-auto badge badge-primary text-[10px]">Admin</span>
-        </RouterLink>
+        <template v-for="item in navigation" :key="item.name">
+          <!-- Disabled item -->
+          <div
+            v-if="item.disabled"
+            :class="[
+              'nav-item-inactive opacity-50 cursor-not-allowed',
+              sidebarCollapsed ? 'justify-center px-2' : ''
+            ]"
+            :title="sidebarCollapsed ? `${item.name} (Próximamente)` : undefined"
+          >
+            <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
+            <span v-if="!sidebarCollapsed">{{ item.name }}</span>
+            <span v-if="!sidebarCollapsed" class="ml-auto text-[9px] font-semibold text-surface-400 bg-surface-100 px-1.5 py-0.5 rounded-full">Próximamente</span>
+          </div>
+          <!-- Normal item -->
+          <RouterLink
+            v-else
+            :to="item.href"
+            :class="[
+              isActiveRoute(item.href) ? 'nav-item-active' : 'nav-item-inactive',
+              sidebarCollapsed ? 'justify-center px-2' : ''
+            ]"
+            :title="sidebarCollapsed ? item.name : undefined"
+          >
+            <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
+            <span v-if="!sidebarCollapsed">{{ item.name }}</span>
+            <span v-if="item.adminOnly && !sidebarCollapsed" class="ml-auto badge badge-primary text-[10px]">Admin</span>
+          </RouterLink>
+        </template>
       </nav>
 
       <!-- Collapse toggle button (desktop only) -->

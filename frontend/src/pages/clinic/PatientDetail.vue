@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveAppointmentsStore } from '@/stores/activeAppointments'
+import { toast } from '@/composables/useToast'
 import { api } from '@/services/api'
 import { onSocketEvent, joinAppointmentRoom, leaveAppointmentRoom } from '@/services/websocket'
 import type { Patient, Appointment, ApiResponse, User, Radiograph } from '@/types'
@@ -587,7 +588,7 @@ const transcribeAudioFile = async (audioBlob: Blob) => {
     const formData = new FormData()
     formData.append('audio', audioBlob, 'recording.webm')
     
-    const response = await api.postFormData<any>('/clinical-records/transcribe-audio', formData)
+    const response = await api.postFormData<any>('/clinical-records/transcribe-audio', formData, { _silentError: true } as any)
     
     if (response.success && response.data) {
       recordForm.value.title = response.data.title || ''
@@ -598,7 +599,15 @@ const transcribeAudioFile = async (audioBlob: Blob) => {
       error.value = response.message || 'Error al procesar el audio'
     }
   } catch (err: any) {
-    error.value = err.response?.data?.message || 'Error al transcribir el audio'
+    const message = err.response?.data?.message || err.message || ''
+    
+    if (message.includes('no está habilitada') || message.includes('not enabled')) {
+      toast.warning('La IA no está habilitada para esta clínica. Contacte con el administrador para activarla.')
+    } else if (message.includes('límite mensual') || message.includes('token limit')) {
+      toast.warning('Se ha superado el límite mensual de tokens de IA. Contacte con el administrador para ampliar el límite.')
+    } else {
+      toast.error('Error al transcribir el audio. Intente de nuevo más tarde.')
+    }
   } finally {
     isTranscribing.value = false
   }
@@ -1500,13 +1509,23 @@ const handleRadiographFileChange = async (event: Event) => {
 // Retry AI analysis
 const retryAnalysis = async (radiographId: string) => {
   try {
-    const response = await api.post<ApiResponse<unknown>>(`/radiographs/${radiographId}/retry-analysis`)
+    const response = await api.post<ApiResponse<unknown>>(`/radiographs/${radiographId}/retry-analysis`, {}, { _silentError: true } as any)
     if (response.success) {
+      toast.success('Análisis de IA iniciado')
       await loadRadiographs()
     }
   } catch (err: any) {
     console.error('Error retrying analysis:', err)
-    radiographError.value = 'Error al reintentar el análisis'
+    const message = err.response?.data?.message || err.message || ''
+    
+    // Check for specific AI-related errors
+    if (message.includes('no está habilitada') || message.includes('not enabled')) {
+      toast.warning('La IA no está habilitada para esta clínica. Contacte con el administrador para activarla.')
+    } else if (message.includes('límite mensual') || message.includes('token limit')) {
+      toast.warning('Se ha superado el límite mensual de tokens de IA. Contacte con el administrador para ampliar el límite.')
+    } else {
+      toast.error('Error al analizar la radiografía. Intente de nuevo más tarde.')
+    }
   }
 }
 

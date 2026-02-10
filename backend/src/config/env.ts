@@ -21,12 +21,11 @@ const envSchema = z.object({
     JWT_ACCESS_EXPIRY: z.string().default('15m'),
     JWT_REFRESH_EXPIRY: z.string().default('7d'),
 
-    // S3
+    // S3 / MinIO
     S3_ENDPOINT: z.string().url(),
     S3_ACCESS_KEY: z.string(),
     S3_SECRET_KEY: z.string(),
-    S3_BUCKET_RADIOGRAPHS: z.string().default('radiographs'),
-    S3_BUCKET_DOCUMENTS: z.string().default('documents'),
+    S3_BUCKET: z.string().default('cuspia'),
     S3_REGION: z.string().default('us-east-1'),
 
     // Email
@@ -97,10 +96,7 @@ export const config = {
         endpoint: env.S3_ENDPOINT,
         accessKey: env.S3_ACCESS_KEY,
         secretKey: env.S3_SECRET_KEY,
-        buckets: {
-            radiographs: env.S3_BUCKET_RADIOGRAPHS,
-            documents: env.S3_BUCKET_DOCUMENTS,
-        },
+        bucket: env.S3_BUCKET,
         region: env.S3_REGION,
     },
 

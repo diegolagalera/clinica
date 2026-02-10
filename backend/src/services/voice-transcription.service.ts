@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { AiUsageService } from './ai-usage.service.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -45,7 +46,8 @@ Responde SIEMPRE en formato JSON con esta estructura:
  */
 export const transcribeAudio = async (
     audioBuffer: Buffer,
-    filename: string = 'audio.webm'
+    filename: string = 'audio.webm',
+    clinicId?: string
 ): Promise<string> => {
     const startTime = Date.now();
 
@@ -65,6 +67,11 @@ export const transcribeAudio = async (
         const processingTime = Date.now() - startTime;
         logger.info(`Audio transcription completed in ${processingTime}ms`);
 
+        // Log whisper usage
+        if (clinicId) {
+            await AiUsageService.logUsage(clinicId, 'voice_notes', 'whisper-1', { prompt: 750, completion: 0, total: 750 });
+        }
+
         return response;
     } catch (error: any) {
         logger.error('Whisper transcription failed:', { error: error.message });
@@ -76,7 +83,8 @@ export const transcribeAudio = async (
  * Extract structured fields from transcription using GPT-4
  */
 export const extractFieldsFromTranscription = async (
-    transcription: string
+    transcription: string,
+    clinicId?: string
 ): Promise<TranscriptionResult> => {
     const startTime = Date.now();
 
@@ -127,6 +135,16 @@ export const extractFieldsFromTranscription = async (
         const processingTime = Date.now() - startTime;
         logger.info(`Field extraction completed in ${processingTime}ms`);
 
+        // Log GPT-4o usage for extraction
+        if (clinicId) {
+            const tokens = {
+                prompt: response.usage?.prompt_tokens || 200,
+                completion: response.usage?.completion_tokens || 300,
+                total: response.usage?.total_tokens || 500,
+            };
+            await AiUsageService.logUsage(clinicId, 'voice_notes', 'gpt-4o', tokens);
+        }
+
         return {
             ...parsedResult,
             rawTranscription: transcription,
@@ -142,17 +160,23 @@ export const extractFieldsFromTranscription = async (
  */
 export const processVoiceRecording = async (
     audioBuffer: Buffer,
-    filename: string = 'audio.webm'
+    filename: string = 'audio.webm',
+    clinicId?: string
 ): Promise<TranscriptionResult> => {
+    // Enforce AI quota
+    if (clinicId) {
+        await AiUsageService.enforceQuota(clinicId);
+    }
+
     // Step 1: Transcribe audio to text
-    const transcription = await transcribeAudio(audioBuffer, filename);
+    const transcription = await transcribeAudio(audioBuffer, filename, clinicId);
 
     if (!transcription || transcription.trim().length === 0) {
         throw new Error('No se pudo transcribir el audio. Por favor intente de nuevo.');
     }
 
     // Step 2: Extract structured fields
-    const result = await extractFieldsFromTranscription(transcription);
+    const result = await extractFieldsFromTranscription(transcription, clinicId);
 
     return result;
 };

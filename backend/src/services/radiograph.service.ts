@@ -5,9 +5,11 @@ import { NotFoundError, BadRequestError, ForbiddenError } from '../utils/errors.
 import { analyzeRadiograph, type RadiographAnalysisResult } from './openai.service.js';
 import { logger } from '../utils/logger.js';
 import type { TenantContext } from '../types/index.js';
-import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
+import * as storage from './storage.service.js';
+import { clinics } from '../db/schema.js';
+import { AiUsageService } from './ai-usage.service.js';
 
 // Types
 export type RadiographType = typeof radiographs.$inferSelect;
@@ -32,13 +34,13 @@ export interface UpdateRadiographNotesInput {
     notes?: string;
     annotations?: unknown;
 }
-
-// Upload directory configuration
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'radiographs');
-
-// Ensure upload directory exists
-const ensureUploadDir = async () => {
-    await fs.mkdir(UPLOAD_DIR, { recursive: true });
+// Helper to get organizationId from clinicId
+const getOrgIdForClinic = async (clinicId: string): Promise<string> => {
+    const clinic = await db.query.clinics.findFirst({
+        where: eq(clinics.id, clinicId),
+        columns: { organizationId: true },
+    });
+    return clinic?.organizationId || 'unknown';
 };
 
 /**
@@ -59,16 +61,16 @@ export const createRadiograph = async (
         throw new ForbiddenError('No tiene acceso a esta clínica');
     }
 
-    await ensureUploadDir();
+    const orgId = await getOrgIdForClinic(input.clinicId);
 
     // Generate unique filename
     const fileExtension = path.extname(input.file.originalname).toLowerCase();
     const uniqueId = crypto.randomUUID();
     const filename = `${uniqueId}${fileExtension}`;
-    const storageKey = path.join(UPLOAD_DIR, filename);
+    const storageKey = storage.buildKey(orgId, input.clinicId, 'radiographs', filename);
 
-    // Save file to disk
-    await fs.writeFile(storageKey, input.file.buffer);
+    // Upload to MinIO
+    await storage.uploadFile(storageKey, input.file.buffer, input.file.mimetype);
 
     // Create radiograph record
     const [radiograph] = await db
@@ -101,7 +103,7 @@ export const createRadiograph = async (
         aiResult = result!;
 
         // Start async AI analysis
-        processAiAnalysis(radiograph!.id, input.file.buffer, input.file.mimetype).catch((err) => {
+        processAiAnalysis(radiograph!.id, input.file.buffer, input.file.mimetype, input.clinicId).catch((err) => {
             logger.error('Background AI analysis failed:', err);
         });
     }
@@ -115,7 +117,8 @@ export const createRadiograph = async (
 const processAiAnalysis = async (
     radiographId: string,
     fileBuffer: Buffer,
-    mimeType: string
+    mimeType: string,
+    clinicId?: string
 ): Promise<void> => {
     const startTime = Date.now();
 
@@ -130,7 +133,7 @@ const processAiAnalysis = async (
         const base64Image = fileBuffer.toString('base64');
 
         // Call OpenAI
-        const result = await analyzeRadiograph(base64Image, mimeType);
+        const result = await analyzeRadiograph(base64Image, mimeType, clinicId);
 
         const processingTime = Date.now() - startTime;
 
@@ -251,6 +254,9 @@ export const retryAiAnalysis = async (
         throw new NotFoundError('Radiografía no encontrada');
     }
 
+    // Enforce AI quota — return specific error immediately
+    await AiUsageService.enforceQuota(radiograph.clinicId);
+
     let aiResult = radiograph.aiResult;
 
     // If no AI result exists, create one (for radiographs uploaded with skipAnalysis=true)
@@ -282,9 +288,9 @@ export const retryAiAnalysis = async (
         aiResult = updatedResult!;
     }
 
-    // Read file and start analysis
-    const fileBuffer = await fs.readFile(radiograph.storageKey);
-    processAiAnalysis(radiographId, fileBuffer, radiograph.mimeType).catch((err) => {
+    // Read file from MinIO and start analysis
+    const fileBuffer = await storage.getFileBuffer(radiograph.storageKey);
+    processAiAnalysis(radiographId, fileBuffer, radiograph.mimeType, radiograph.clinicId).catch((err) => {
         logger.error('AI analysis failed:', err);
     });
 
@@ -329,12 +335,8 @@ export const deleteRadiograph = async (
         throw new NotFoundError('Radiografía no encontrada');
     }
 
-    // Delete file from disk
-    try {
-        await fs.unlink(existing.storageKey);
-    } catch (err) {
-        logger.warn(`Failed to delete file ${existing.storageKey}:`, err);
-    }
+    // Delete file from MinIO
+    await storage.deleteFile(existing.storageKey);
 
     // Delete from database (cascade will delete AI result)
     await db.delete(radiographs).where(eq(radiographs.id, id));

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { AiUsageService } from './ai-usage.service.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -295,9 +296,22 @@ export interface ChatResponse {
  */
 export const chatWithAssistant = async (
     message: string,
-    conversationHistory: AssistantMessage[] = []
+    conversationHistory: AssistantMessage[] = [],
+    clinicId?: string
 ): Promise<ChatResponse> => {
     try {
+        // Enforce AI quota
+        if (clinicId) {
+            try {
+                await AiUsageService.enforceQuota(clinicId);
+            } catch (e: any) {
+                return {
+                    success: false,
+                    error: e.message,
+                };
+            }
+        }
+
         // Security check: reject data queries before sending to OpenAI
         if (isDataQuery(message)) {
             logger.info('Assistant rejected data query', { message: message.substring(0, 100) });
@@ -334,6 +348,16 @@ export const chatWithAssistant = async (
             userMessage: message.substring(0, 50),
             responseLength: assistantMessage.length
         });
+
+        // Log AI usage
+        if (clinicId) {
+            const tokens = {
+                prompt: response.usage?.prompt_tokens || 300,
+                completion: response.usage?.completion_tokens || 200,
+                total: response.usage?.total_tokens || 500,
+            };
+            await AiUsageService.logUsage(clinicId, 'assistant', 'gpt-4o-mini', tokens);
+        }
 
         return {
             success: true,

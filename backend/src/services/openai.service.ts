@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { AiUsageService } from './ai-usage.service.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -74,11 +75,17 @@ Responde SIEMPRE en formato JSON con la siguiente estructura:
  */
 export const analyzeRadiograph = async (
     imageBase64: string,
-    mimeType: string = 'image/png'
+    mimeType: string = 'image/png',
+    clinicId?: string
 ): Promise<RadiographAnalysisResult> => {
     const startTime = Date.now();
 
     try {
+        // Enforce AI quota
+        if (clinicId) {
+            await AiUsageService.enforceQuota(clinicId);
+        }
+
         logger.info('Starting radiograph AI analysis');
 
         const response = await openai.chat.completions.create({
@@ -134,6 +141,16 @@ export const analyzeRadiograph = async (
 
         const processingTime = Date.now() - startTime;
         logger.info(`Radiograph analysis completed in ${processingTime}ms`);
+
+        // Log AI usage
+        const tokens = {
+            prompt: response.usage?.prompt_tokens || 1000,
+            completion: response.usage?.completion_tokens || 500,
+            total: response.usage?.total_tokens || 1500,
+        };
+        if (clinicId) {
+            await AiUsageService.logUsage(clinicId, 'radiograph', 'gpt-4o', tokens);
+        }
 
         return {
             ...parsedResult,
@@ -219,11 +236,16 @@ export interface GeneratedImageResult {
  */
 export const generateStockItemImage = async (
     itemName: string,
-    itemDescription?: string
+    itemDescription?: string,
+    clinicId?: string
 ): Promise<GeneratedImageResult> => {
     const startTime = Date.now();
 
     try {
+        // Enforce AI quota
+        if (clinicId) {
+            await AiUsageService.enforceQuota(clinicId);
+        }
         // Validate the item is medical/dental related
         const isValid = isValidMedicalItem(itemName) ||
             (itemDescription && isValidMedicalItem(itemDescription));
@@ -277,6 +299,11 @@ El producto debe verse realista y profesional, como para un catálogo de suminis
 
         const processingTime = Date.now() - startTime;
         logger.info(`Stock item image generated in ${processingTime}ms`);
+
+        // Log AI usage (DALL-E: flat $0.04/image, use 1000 token-equivalent for proportional tracking)
+        if (clinicId) {
+            await AiUsageService.logUsage(clinicId, 'stock_image', 'dall-e-3', { prompt: 1000, completion: 0, total: 1000 });
+        }
 
         return {
             imageUrl,

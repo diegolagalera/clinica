@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import type { TemplateBlock } from './email-template.service.js';
+import { AiUsageService } from './ai-usage.service.js';
 
 // Initialize OpenAI client
 const openai = config.openai.apiKey
@@ -77,7 +78,8 @@ interface AITemplateResponse {
  * Generate email template blocks using AI
  */
 export const generateEmailTemplate = async (
-    userPrompt: string
+    userPrompt: string,
+    clinicId?: string
 ): Promise<{ success: true; data: AITemplateResponse } | { success: false; error: string; code: string }> => {
     // Check if OpenAI is configured
     if (!openai) {
@@ -87,6 +89,19 @@ export const generateEmailTemplate = async (
             error: 'La API de IA no está configurada. Contacta con el administrador.',
             code: 'API_KEY_MISSING'
         };
+    }
+
+    // Enforce AI quota
+    if (clinicId) {
+        try {
+            await AiUsageService.enforceQuota(clinicId);
+        } catch (e: any) {
+            return {
+                success: false,
+                error: e.message,
+                code: 'AI_QUOTA_EXCEEDED'
+            };
+        }
     }
 
     // Validate prompt is not empty
@@ -165,6 +180,16 @@ export const generateEmailTemplate = async (
         }));
 
         logger.info(`AI successfully generated ${normalizedBlocks.length} blocks`);
+
+        // Log AI usage
+        if (clinicId) {
+            const tokens = {
+                prompt: response.usage?.prompt_tokens || 500,
+                completion: response.usage?.completion_tokens || 1000,
+                total: response.usage?.total_tokens || 1500,
+            };
+            await AiUsageService.logUsage(clinicId, 'email_template', 'gpt-4o-mini', tokens);
+        }
 
         return {
             success: true,

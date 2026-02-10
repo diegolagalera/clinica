@@ -237,7 +237,7 @@ export const transcribeAudio = asyncHandler(async (req: AuthenticatedRequest, re
 
     try {
         // Process the audio file
-        const result = await processVoiceRecording(file.buffer, file.originalname);
+        const result = await processVoiceRecording(file.buffer, file.originalname, clinicId);
 
         res.json(success({
             title: result.title,

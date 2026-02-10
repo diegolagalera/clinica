@@ -3,8 +3,7 @@ import { db } from '../db/index.js';
 import { chatMessages, chatConversations } from '../db/schema.js';
 import { and, lt, sql, inArray, isNotNull, eq } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
-import fs from 'fs/promises';
-import path from 'path';
+import * as storage from '../services/storage.service.js';
 
 const RETENTION_MONTHS = 2;
 const MIN_MESSAGES_TO_KEEP = 100;
@@ -14,7 +13,7 @@ const MIN_MESSAGES_TO_KEEP = 100;
  * Rules:
  *  - Delete messages older than RETENTION_MONTHS
  *  - BUT always keep the last MIN_MESSAGES_TO_KEEP messages per conversation
- *  - Delete associated media files from disk for removed messages
+ *  - Delete associated media files from MinIO for removed messages
  */
 export const processCleanup = async () => {
     logger.info('🧹 Starting message & media cleanup...');
@@ -60,7 +59,7 @@ export const processCleanup = async () => {
                 // Messages must be BOTH older than 2 months AND outside the top 100
                 const effectiveCutoff = keepBoundary > cutoffDate ? keepBoundary : cutoffDate;
 
-                // Find messages to delete that have media files (so we can remove files from disk)
+                // Find messages to delete that have media files (so we can remove files from MinIO)
                 const mediaMessages = await db
                     .select({
                         id: chatMessages.id,
@@ -75,21 +74,15 @@ export const processCleanup = async () => {
                         )
                     );
 
-                // Delete media files from disk
+                // Delete media files from MinIO
                 for (const msg of mediaMessages) {
                     if (msg.mediaUrl) {
                         try {
-                            // mediaUrl is like /uploads/whatsapp-media/clinicId/convId/file.jpg
-                            // Remove leading slash to get relative path from project root
-                            const filePath = path.resolve(msg.mediaUrl.replace(/^\//, ''));
-                            await fs.unlink(filePath);
+                            await storage.deleteFile(msg.mediaUrl);
                             totalFilesDeleted++;
                         } catch (err: any) {
-                            // File might already be deleted or not exist
-                            if (err.code !== 'ENOENT') {
-                                logger.warn({ err, mediaUrl: msg.mediaUrl }, 'Failed to delete media file');
-                                totalFileErrors++;
-                            }
+                            logger.warn({ err, mediaUrl: msg.mediaUrl }, 'Failed to delete media file from MinIO');
+                            totalFileErrors++;
                         }
                     }
                 }

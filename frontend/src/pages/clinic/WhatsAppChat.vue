@@ -14,6 +14,8 @@ import {
   HandRaisedIcon,
   PauseIcon,
   XMarkIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
   ArrowPathIcon,
   CheckIcon,
   EllipsisVerticalIcon,
@@ -53,6 +55,9 @@ const mediaPreviewUrl = ref('')
 const showMediaPreview = ref(false)
 const showDeleteConfirm = ref(false)
 const deletingConversation = ref(false)
+
+// AI status banner
+const aiStatus = ref<{ active: boolean; reason: string | null }>({ active: true, reason: null })
 
 // Template modal state
 const showTemplateModal = ref(false)
@@ -211,13 +216,19 @@ const isImageMessage = (msg: any) => {
   return msg.messageType === 'image' || (msg.mediaUrl && /\.(jpg|jpeg|png|webp|gif)$/i.test(msg.mediaUrl))
 }
 
-const getBackendUrl = (relativePath: string) => {
-  if (!relativePath) return ''
-  if (relativePath.startsWith('http') || relativePath.startsWith('blob:')) return relativePath
-  // Relative path from backend → prepend API base origin
+const getBackendUrl = (mediaPath: string) => {
+  if (!mediaPath) return ''
+  if (mediaPath.startsWith('http') || mediaPath.startsWith('blob:')) return mediaPath
+  // Legacy: /uploads/... paths (backwards compat during migration)
+  if (mediaPath.startsWith('/uploads/')) {
+    const apiUrl = import.meta.env.VITE_API_URL || '/api/v1'
+    const base = apiUrl.replace('/api/v1', '')
+    return `${base}${mediaPath}`
+  }
+  // MinIO key → serve via /api/v1/media/{key}
   const apiUrl = import.meta.env.VITE_API_URL || '/api/v1'
   const base = apiUrl.replace('/api/v1', '')
-  return `${base}${relativePath}`
+  return `${base}/api/v1/media/${mediaPath}`
 }
 
 const openMediaPreview = (url: string) => {
@@ -504,14 +515,28 @@ const sendTemplateMessage = async () => {
 
 let unsubNewMessage: (() => void) | null = null
 let unsubConversationUpdated: (() => void) | null = null
+let unsubAiStatus: (() => void) | null = null
+
+const fetchAiStatus = async () => {
+  try {
+    const res = await api.get<any>('/chatbot/ai-status')
+    if (res.data) {
+      aiStatus.value = { active: res.data.active, reason: res.data.reason }
+    }
+  } catch { /* ignore */ }
+}
 
 onMounted(() => {
   fetchConversations()
   loadQuickReplies()
+  fetchAiStatus()
 
   // WebSocket listeners (no polling)
   unsubNewMessage = onSocketEvent('chatbot:new-message', handleNewMessage as (data: unknown) => void)
   unsubConversationUpdated = onSocketEvent('chatbot:conversation-updated', handleConversationUpdated as (data: unknown) => void)
+  unsubAiStatus = onSocketEvent('chatbot:ai-status', (data: any) => {
+    aiStatus.value = { active: data.active, reason: data.reason }
+  })
 
   // Resync on tab focus
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -520,6 +545,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (unsubNewMessage) unsubNewMessage()
   if (unsubConversationUpdated) unsubConversationUpdated()
+  if (unsubAiStatus) unsubAiStatus()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
@@ -548,10 +574,32 @@ watch(filterMode, () => fetchConversations())
           <PlusIcon class="w-4 h-4" />
           <span class="hidden sm:inline">Nueva conversación</span>
         </button>
-        <span class="hidden lg:flex items-center gap-1 text-xs text-surface-400 bg-surface-100 px-2.5 py-1 rounded-full" title="Los mensajes con más de 2 meses se eliminan automáticamente, conservando los últimos 100 por conversación">
-          <ClockIcon class="w-3.5 h-3.5" />
-          Retención: 2 meses
-        </span>
+        <div class="hidden lg:flex relative group">
+          <span class="flex items-center gap-1 text-xs text-surface-400 bg-surface-100 px-2.5 py-1 rounded-full cursor-help">
+            <ClockIcon class="w-3.5 h-3.5" />
+            Retención: 2 meses
+          </span>
+          <div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-56 bg-surface-800 text-white text-xs rounded-xl px-4 py-3 shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none">
+            <p class="font-semibold mb-1.5">Política de retención</p>
+            <p class="text-surface-300 leading-relaxed">Los mensajes con más de <span class="text-white font-medium">2 meses</span> se eliminan automáticamente, conservando los últimos <span class="text-white font-medium">100</span> por conversación.</p>
+            <div class="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+          </div>
+        </div>
+        <div class="hidden lg:flex relative group">
+          <span class="flex items-center gap-1 text-xs bg-blue-50 text-blue-500 px-2.5 py-1 rounded-full cursor-help">
+            <InformationCircleIcon class="w-3.5 h-3.5" />
+            IA: 7/2min · 60/día
+          </span>
+          <div class="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 bg-surface-800 text-white text-xs rounded-xl px-4 py-3 shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none">
+            <p class="font-semibold mb-1.5">Límites de IA por contacto</p>
+            <ul class="space-y-1 text-surface-300">
+              <li>• Máx. <span class="text-white font-medium">7 respuestas</span> cada 2 minutos</li>
+              <li>• Máx. <span class="text-white font-medium">60 respuestas</span> al día</li>
+            </ul>
+            <p class="mt-2 text-surface-400 text-[10px] leading-relaxed">Los mensajes que superen el límite no tendrán respuesta automática pero quedarán guardados para respuesta manual.</p>
+            <div class="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+          </div>
+        </div>
         <router-link to="/clinic/whatsapp/knowledge" class="btn-ghost text-surface-600 text-sm gap-1.5">
           <BookOpenIcon class="w-4 h-4" />
           <span class="hidden sm:inline">Base de Conocimiento</span>
@@ -565,6 +613,12 @@ watch(filterMode, () => fetchConversations())
           <span class="hidden sm:inline">Config</span>
         </router-link>
       </div>
+    </div>
+
+    <!-- AI Status Banner -->
+    <div v-if="!aiStatus.active" class="flex items-center gap-2 px-4 py-2 bg-red-50 border-b border-red-200 text-red-700 text-sm font-medium">
+      <ExclamationTriangleIcon class="w-5 h-5 text-red-500 flex-shrink-0" />
+      <span>{{ aiStatus.reason || 'La IA no está disponible. Los mensajes no se responderán automáticamente.' }}</span>
     </div>
 
     <div class="chat-layout">

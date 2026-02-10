@@ -7,6 +7,7 @@ import { db } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 import { encrypt } from '../utils/encryption.js';
 import { logger } from '../utils/logger.js';
+import { AiUsageService } from '../services/ai-usage.service.js';
 
 const router = Router();
 
@@ -62,6 +63,55 @@ const extractClinicId = (req: Request, res: Response, next: NextFunction): void 
 };
 
 router.use(extractClinicId);
+
+// ============================================================================
+// AI STATUS
+// ============================================================================
+
+// GET /api/v1/chatbot/ai-status
+router.get('/ai-status', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        const quota = await AiUsageService.checkQuota(clinicId);
+        res.json({
+            data: {
+                active: quota.allowed,
+                aiEnabled: quota.aiEnabled,
+                reason: !quota.aiEnabled
+                    ? 'La IA no está habilitada para esta clínica. Contacte con el administrador para activarla.'
+                    : !quota.allowed
+                        ? 'Se ha superado el límite mensual de tokens de IA. Contacte con el administrador para ampliar el límite.'
+                        : null,
+            },
+        });
+    } catch (error) {
+        logger.error({ error }, 'Failed to get AI status');
+        res.status(500).json({ error: 'Failed to get AI status' });
+    }
+});
+
+// GET /api/v1/chatbot/ai-usage?month=YYYY-MM
+router.get('/ai-usage', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        const month = req.query['month'] as string | undefined;
+
+        let monthDate: Date | undefined;
+        if (month) {
+            monthDate = new Date(`${month}-01`);
+            if (isNaN(monthDate.getTime())) {
+                res.status(400).json({ success: false, message: 'Invalid month format. Use YYYY-MM.' });
+                return;
+            }
+        }
+
+        const usageSummary = await AiUsageService.getUsageSummary(clinicId, monthDate);
+        res.json({ success: true, data: usageSummary });
+    } catch (error) {
+        logger.error({ error }, 'Failed to get AI usage');
+        res.status(500).json({ error: 'Failed to get AI usage' });
+    }
+});
 
 // ============================================================================
 // WHATSAPP SETTINGS
@@ -797,26 +847,26 @@ router.post('/leads/:id/convert', async (req: Request, res: Response): Promise<v
     try {
         const clinicId = (req as any).clinicId as string;
         const userId = (req as any).user?.id as string;
-        const { patientId } = req.body;
+        const { firstName, lastName, phone, email } = req.body;
 
-        if (!patientId) {
-            res.status(400).json({ error: 'patientId is required' });
+        if (!firstName || !lastName) {
+            res.status(400).json({ error: 'firstName and lastName are required' });
             return;
         }
 
-        const lead = await ChatbotConversationService.convertLead(
+        const result = await ChatbotConversationService.convertLead(
             req.params.id,
             clinicId,
-            patientId,
+            { firstName, lastName, phone, email },
             userId
         );
 
-        if (!lead) {
+        if (!result) {
             res.status(404).json({ error: 'Lead not found' });
             return;
         }
 
-        res.json({ data: lead });
+        res.json({ data: result });
     } catch (error) {
         res.status(500).json({ error: 'Failed to convert lead' });
     }

@@ -5,13 +5,19 @@ import { BadRequestError, NotFoundError } from '../utils/errors.js';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { db } from '../db/index.js';
-import { inventoryItems, stockMovements } from '../db/schema.js';
+import { inventoryItems, stockMovements, clinics } from '../db/schema.js';
 import { eq, and, ilike, or, sql, desc, asc, lt, lte } from 'drizzle-orm';
 import path from 'path';
-import fs from 'fs/promises';
+import * as storage from '../services/storage.service.js';
 
-// Upload directory for stock item images
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'stock');
+// Helper to get organizationId from clinicId
+const getOrgIdForClinic = async (clinicId: string): Promise<string> => {
+    const clinic = await db.query.clinics.findFirst({
+        where: eq(clinics.id, clinicId),
+        columns: { organizationId: true },
+    });
+    return clinic?.organizationId || 'unknown';
+};
 
 // Validation schemas
 export const createItemSchema = z.object({
@@ -430,30 +436,24 @@ export const uploadItemImage = asyncHandler(async (req: AuthenticatedRequest, re
         throw new NotFoundError('Item not found');
     }
 
-    // Ensure upload directory exists
-    await fs.mkdir(UPLOAD_DIR, { recursive: true });
-
-    // Generate filename
+    // Generate S3 key
+    const orgId = await getOrgIdForClinic(req.tenantContext.clinicId);
     const ext = path.extname(req.file.originalname) || '.jpg';
     const filename = `${id}${ext}`;
-    const filepath = path.join(UPLOAD_DIR, filename);
+    const storageKey = storage.buildKey(orgId, req.tenantContext.clinicId, 'stock-images', filename);
 
     // Delete old image if exists
     if (item.imageUrl) {
-        try {
-            await fs.unlink(item.imageUrl);
-        } catch (err) {
-            // Ignore if file doesn't exist
-        }
+        await storage.deleteFile(item.imageUrl);
     }
 
-    // Save file
-    await fs.writeFile(filepath, req.file.buffer);
+    // Upload to MinIO
+    await storage.uploadFile(storageKey, req.file.buffer, req.file.mimetype);
 
-    // Update item
+    // Update item with S3 key
     const [updated] = await db
         .update(inventoryItems)
-        .set({ imageUrl: filepath, updatedAt: new Date() })
+        .set({ imageUrl: storageKey, updatedAt: new Date() })
         .where(eq(inventoryItems.id, id!))
         .returning();
 
@@ -485,11 +485,7 @@ export const deleteItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     }
 
     if (item.imageUrl) {
-        try {
-            await fs.unlink(item.imageUrl);
-        } catch (err) {
-            // Ignore if file doesn't exist
-        }
+        await storage.deleteFile(item.imageUrl);
 
         await db
             .update(inventoryItems)
@@ -520,14 +516,10 @@ export const getItemImage = asyncHandler(async (req: Request, res: Response) => 
         throw new NotFoundError('Image not found');
     }
 
-    // Check if file exists
-    try {
-        await fs.access(item.imageUrl);
-    } catch {
-        throw new NotFoundError('Image file not found');
-    }
-
-    res.sendFile(item.imageUrl);
+    // Stream from MinIO
+    const { stream, contentType } = await storage.getFileStream(item.imageUrl);
+    res.setHeader('Content-Type', contentType);
+    stream.pipe(res);
 });
 
 // Validation schema for image generation
@@ -550,7 +542,7 @@ export const generateItemImage = asyncHandler(async (req: AuthenticatedRequest, 
     // Import the service dynamically to avoid circular dependencies
     const { generateStockItemImage } = await import('../services/openai.service.js');
 
-    const result = await generateStockItemImage(input.itemName, input.description);
+    const result = await generateStockItemImage(input.itemName, input.description, req.tenantContext.clinicId);
 
     res.json(success({
         imageUrl: result.imageUrl,
@@ -593,7 +585,7 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
     } else {
         // Generate a new image
         const { generateStockItemImage } = await import('../services/openai.service.js');
-        const result = await generateStockItemImage(item.name, item.description || undefined);
+        const result = await generateStockItemImage(item.name, item.description || undefined, req.tenantContext.clinicId);
         imageUrlToDownload = result.imageUrl;
         revisedPrompt = result.revisedPrompt;
     }
@@ -606,29 +598,23 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
 
     const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
 
-    // Ensure upload directory exists
-    await fs.mkdir(UPLOAD_DIR, { recursive: true });
-
-    // Generate filename
+    // Generate S3 key
+    const orgId = await getOrgIdForClinic(req.tenantContext.clinicId!);
     const filename = `${id}.png`;
-    const filepath = path.join(UPLOAD_DIR, filename);
+    const storageKey = storage.buildKey(orgId, req.tenantContext.clinicId!, 'stock-images', filename);
 
     // Delete old image if exists
     if (item.imageUrl) {
-        try {
-            await fs.unlink(item.imageUrl);
-        } catch {
-            // Ignore if file doesn't exist
-        }
+        await storage.deleteFile(item.imageUrl);
     }
 
-    // Save file
-    await fs.writeFile(filepath, imageBuffer);
+    // Upload to MinIO
+    await storage.uploadFile(storageKey, imageBuffer, 'image/png');
 
     // Update item
     const [updated] = await db
         .update(inventoryItems)
-        .set({ imageUrl: filepath, updatedAt: new Date() })
+        .set({ imageUrl: storageKey, updatedAt: new Date() })
         .where(eq(inventoryItems.id, id!))
         .returning();
 

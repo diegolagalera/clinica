@@ -13,6 +13,8 @@ const isOpen = ref(false)
 const message = ref('')
 const isLoading = ref(false)
 const messagesContainer = ref<HTMLElement | null>(null)
+const aiBlocked = ref(false)
+const aiBlockedReason = ref('')
 
 interface Message {
   role: 'user' | 'assistant'
@@ -22,14 +24,30 @@ interface Message {
 const messages = ref<Message[]>([])
 
 // Toggle chat panel
-const toggleChat = () => {
+const toggleChat = async () => {
   isOpen.value = !isOpen.value
-  if (isOpen.value && messages.value.length === 0) {
-    // Add welcome message
-    messages.value.push({
-      role: 'assistant',
-      content: '¡Hola! 👋 Soy el asistente de CUSPIA. Puedo ayudarte con preguntas sobre cómo usar la aplicación.\n\nPor ejemplo:\n• ¿Cómo creo un paciente?\n• ¿Cómo agendo una cita?\n• ¿Cómo uso el odontograma?\n\n¿En qué puedo ayudarte?'
-    })
+  if (isOpen.value) {
+    // Check AI status each time chat opens
+    try {
+      const res = await api.get<any>('/chatbot/ai-status')
+      if (res.data && !res.data.active) {
+        aiBlocked.value = true
+        aiBlockedReason.value = res.data.reason || 'La IA no está disponible en este momento.'
+      } else {
+        aiBlocked.value = false
+        aiBlockedReason.value = ''
+      }
+    } catch {
+      // If we can't check, allow usage
+      aiBlocked.value = false
+    }
+
+    if (messages.value.length === 0) {
+      messages.value.push({
+        role: 'assistant',
+        content: '¡Hola! 👋 Soy el asistente de CUSPIA. Puedo ayudarte con preguntas sobre cómo usar la aplicación.\n\nPor ejemplo:\n• ¿Cómo creo un paciente?\n• ¿Cómo agendo una cita?\n• ¿Cómo uso el odontograma?\n\n¿En qué puedo ayudarte?'
+      })
+    }
   }
 }
 
@@ -165,8 +183,20 @@ watch(messages, () => {
             </button>
           </div>
 
-          <!-- Messages -->
+          <!-- AI Blocked Banner -->
+          <div v-if="aiBlocked" class="flex-1 flex items-center justify-center p-6 bg-surface-50">
+            <div class="text-center space-y-3">
+              <div class="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto">
+                <SparklesIcon class="w-6 h-6 text-red-500" />
+              </div>
+              <p class="text-sm font-medium text-surface-700">Asistente no disponible</p>
+              <p class="text-xs text-surface-500 max-w-[250px]">{{ aiBlockedReason }}</p>
+            </div>
+          </div>
+
+          <!-- Messages (only shown when AI is not blocked) -->
           <div 
+            v-else
             ref="messagesContainer"
             class="flex-1 overflow-y-auto p-4 space-y-4 bg-surface-50"
           >
@@ -215,11 +245,11 @@ watch(messages, () => {
                 placeholder="Escribe tu pregunta..."
                 rows="1"
                 class="flex-1 resize-none rounded-xl border border-surface-200 px-4 py-2.5 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-                :disabled="isLoading"
+                :disabled="isLoading || aiBlocked"
               />
               <button
                 @click="sendMessage"
-                :disabled="!message.trim() || isLoading"
+                :disabled="!message.trim() || isLoading || aiBlocked"
                 :class="[
                   'p-2.5 rounded-xl transition-all',
                   message.trim() && !isLoading

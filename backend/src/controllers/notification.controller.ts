@@ -438,7 +438,8 @@ export const generateTemplateWithAI = asyncHandler(async (req: AuthenticatedRequ
         return;
     }
 
-    const result = await aiService.generateEmailTemplate(prompt);
+    const clinicId = req.tenantContext?.clinicId || undefined;
+    const result = await aiService.generateEmailTemplate(prompt, clinicId);
 
     if (!result.success) {
         const statusCode = result.code === 'INVALID_REQUEST' ? 400 :

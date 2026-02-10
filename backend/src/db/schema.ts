@@ -175,6 +175,9 @@ export const clinics = pgTable(
         timezone: varchar('timezone', { length: 50 }).default('Europe/Madrid'),
         settings: jsonb('settings').default({}),
         workingHours: jsonb('working_hours').default({}),
+        // AI configuration
+        aiEnabled: boolean('ai_enabled').default(false).notNull(),
+        aiMonthlyTokenLimit: integer('ai_monthly_token_limit').default(100000),
         isActive: boolean('is_active').default(true).notNull(),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -2038,7 +2041,24 @@ export const leadStatusEnum = pgEnum('lead_status', [
     'CONTACTED',
     'QUALIFIED',
     'CONVERTED',
-    'REJECTED',
+    'LOST',
+]);
+
+export const aiFeatureEnum = pgEnum('ai_feature', [
+    'chatbot',
+    'radiograph',
+    'transcription',
+    'voice_notes',
+    'email_template',
+    'stock_image',
+    'assistant',
+]);
+
+export const aiModelEnum = pgEnum('ai_model', [
+    'gpt-4o-mini',
+    'gpt-4o',
+    'whisper-1',
+    'dall-e-3',
 ]);
 
 // WhatsApp Settings (per clinic — 1:1)
@@ -2436,5 +2456,40 @@ export const chatAiLogsRelations = relations(chatAiLogs, ({ one }) => ({
     message: one(chatMessages, {
         fields: [chatAiLogs.messageId],
         references: [chatMessages.id],
+    }),
+}));
+
+// ============================================================================
+// AI USAGE LOGS (per-clinic tracking for all AI features)
+// ============================================================================
+
+export const aiUsageLogs = pgTable(
+    'ai_usage_logs',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        feature: aiFeatureEnum('feature').notNull(),
+        model: aiModelEnum('model').notNull(),
+        promptTokens: integer('prompt_tokens').default(0).notNull(),
+        completionTokens: integer('completion_tokens').default(0).notNull(),
+        totalTokens: integer('total_tokens').default(0).notNull(),
+        estimatedCost: decimal('estimated_cost', { precision: 10, scale: 6 }).default('0'),
+        metadata: jsonb('metadata'),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdx: index('ai_usage_logs_clinic_idx').on(table.clinicId),
+        featureIdx: index('ai_usage_logs_feature_idx').on(table.feature),
+        createdAtIdx: index('ai_usage_logs_created_at_idx').on(table.createdAt),
+        clinicCreatedIdx: index('ai_usage_logs_clinic_created_idx').on(table.clinicId, table.createdAt),
+    })
+);
+
+export const aiUsageLogsRelations = relations(aiUsageLogs, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [aiUsageLogs.clinicId],
+        references: [clinics.id],
     }),
 }));

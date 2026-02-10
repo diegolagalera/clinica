@@ -82,10 +82,41 @@ app.use((req, _res, next) => {
 });
 
 // ============================================================================
-// STATIC FILES (media uploads)
+// MEDIA SERVING (from MinIO/S3)
 // ============================================================================
+// NOTE: No auth middleware here — <img>, <audio>, <video> tags cannot send
+// Authorization headers. This matches the stock image pattern (see stock.routes.ts).
+// Security: MinIO bucket is private + S3 keys contain non-guessable UUIDs.
 
-app.use('/uploads', express.static('uploads'));
+import * as storage from './services/storage.service.js';
+
+// Generic media endpoint: streams any file from MinIO by its storage key
+app.get('/api/v1/media/*', async (req, res): Promise<void> => {
+    try {
+        // Extract the full key from the URL path after /api/v1/media/
+        const key = (req.params as Record<string, string>)[0];
+        if (!key) {
+            res.status(400).json({ error: 'Missing media key' });
+            return;
+        }
+
+        const { stream, contentType, contentLength } = await storage.getFileStream(key);
+
+        res.setHeader('Content-Type', contentType);
+        if (contentLength) {
+            res.setHeader('Content-Length', contentLength);
+        }
+        res.setHeader('Cache-Control', 'public, max-age=86400'); // 24h cache
+        stream.pipe(res);
+    } catch (err: any) {
+        if (err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) {
+            res.status(404).json({ error: 'File not found' });
+            return;
+        }
+        logger.error({ err, url: req.url }, 'Error serving media from MinIO');
+        res.status(500).json({ error: 'Error serving file' });
+    }
+});
 
 // ============================================================================
 // API ROUTES

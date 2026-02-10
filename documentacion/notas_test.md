@@ -86,6 +86,7 @@ PRUEBAS SIN GMAIL Y SMS CONFIGURADO!
 -multiples citas en el calendario en la misma hora como se ve?
 
 
+-plantillas para whatsapp 
 
 Citas con medico compartido
 --------------------------
@@ -141,8 +142,15 @@ Citas con mail
 -base de datos separados...
 -como medir el consumo de ia ?
 
+-testear personalidad chatboot ia 
+
+-tema de roles de la aplicacion, como lo montamos?....
 
 -Crear recordatorio si alguien no firma el registro clinico de un paciente en 24H
+
+-firma electronica
+
+-nueva conversacion de whatsapp desde el la vista del paciente
 
 -El websocket funciona bien pero tenemos que hacer evolutivos para la cita en curso... para que actualize todo... por si un trabajador sube una radiografia o añada notas que el otra tambien lo veo, ahora solo se sincroniza el stock... 
 ##################################

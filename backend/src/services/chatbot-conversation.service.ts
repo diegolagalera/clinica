@@ -8,6 +8,7 @@ import {
     patients,
     chatConversationNotes,
     chatQuickReplies,
+    clinics,
 } from '../db/schema.js';
 import { eq, and, desc, sql, ilike } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
@@ -15,8 +16,71 @@ import { WhatsAppService, type ParsedWebhookMessage } from './whatsapp.service.j
 import { ChatbotAiService } from './chatbot-ai.service.js';
 import { decrypt } from '../utils/encryption.js';
 import { emitToClinic } from '../websocket.js';
-import fs from 'fs';
-import path from 'path';
+import * as storage from './storage.service.js';
+
+// ============================================================================
+// Per-contact rate limiter (in-memory)
+// ============================================================================
+const RATE_LIMIT_WINDOW_MS = 2 * 60 * 1000;   // 2 minutes
+const RATE_LIMIT_PER_WINDOW = 7;                // max AI responses per 2-min window
+const RATE_LIMIT_DAILY = 60;                    // max AI responses per day
+
+interface ContactRateEntry {
+    /** Timestamps of AI responses inside the current short window */
+    windowHits: number[];
+    /** Counter of AI responses today (resets at midnight) */
+    dailyCount: number;
+    /** The day string (YYYY-MM-DD) the dailyCount belongs to */
+    dailyDate: string;
+}
+
+const rateLimitMap = new Map<string, ContactRateEntry>();
+
+// Cleanup stale entries every 10 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitMap) {
+        // Remove entries with no recent window hits and whose daily date is not today
+        const today = new Date().toISOString().slice(0, 10);
+        if (entry.dailyDate !== today && entry.windowHits.every(t => now - t > RATE_LIMIT_WINDOW_MS)) {
+            rateLimitMap.delete(key);
+        }
+    }
+}, 10 * 60 * 1000);
+
+function checkChatbotRateLimit(conversationId: string): { allowed: boolean; reason?: string } {
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+
+    let entry = rateLimitMap.get(conversationId);
+    if (!entry || entry.dailyDate !== today) {
+        entry = { windowHits: [], dailyCount: 0, dailyDate: today };
+        rateLimitMap.set(conversationId, entry);
+    }
+
+    // Prune old window hits
+    entry.windowHits = entry.windowHits.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+
+    // Check short-window limit
+    if (entry.windowHits.length >= RATE_LIMIT_PER_WINDOW) {
+        return { allowed: false, reason: `rate-limit: ${RATE_LIMIT_PER_WINDOW} msgs/${RATE_LIMIT_WINDOW_MS / 1000}s` };
+    }
+
+    // Check daily limit
+    if (entry.dailyCount >= RATE_LIMIT_DAILY) {
+        return { allowed: false, reason: `rate-limit: ${RATE_LIMIT_DAILY} msgs/day` };
+    }
+
+    return { allowed: true };
+}
+
+function recordChatbotResponse(conversationId: string): void {
+    const entry = rateLimitMap.get(conversationId);
+    if (entry) {
+        entry.windowHits.push(Date.now());
+        entry.dailyCount++;
+    }
+}
 
 /**
  * Conversation Engine Service
@@ -469,6 +533,13 @@ export class ChatbotConversationService {
         try {
             if (!userMessageText) return;
 
+            // Rate limit check — before spending tokens
+            const rateCheck = checkChatbotRateLimit(conversationId);
+            if (!rateCheck.allowed) {
+                logger.info({ conversationId, reason: rateCheck.reason }, 'Chatbot rate-limited, skipping AI response');
+                return;
+            }
+
             // Get conversation history
             const history = await db
                 .select({
@@ -497,12 +568,25 @@ export class ChatbotConversationService {
                 settings.systemPrompt,
             );
 
+            // If AI is quota-blocked, don't send anything to the patient
+            // Emit a WebSocket event so the frontend shows a banner
+            if (aiResult.quotaBlocked) {
+                emitToClinic(clinicId, 'chatbot:ai-status', {
+                    active: false,
+                    reason: aiResult.quotaReason || 'IA no disponible',
+                });
+                return;
+            }
+
             // Send via WhatsApp
             const sendResult = await WhatsAppService.sendTextMessage(
                 { phoneNumberId: settings.phoneNumberId, accessToken: settings.accessToken },
                 (await this.getConversation(conversationId, clinicId))?.waContactPhone || '',
                 aiResult.response
             );
+
+            // Record successful AI response for rate limiting
+            recordChatbotResponse(conversationId);
 
             // Save outbound message
             const [savedAiMessage] = await db.insert(chatMessages).values({
@@ -640,16 +724,21 @@ export class ChatbotConversationService {
         conversationId: string,
         messageId: string
     ): Promise<string> {
+        // Look up organization for tenant-isolated path
+        const clinic = await db.query.clinics.findFirst({
+            where: eq(clinics.id, clinicId),
+            columns: { organizationId: true },
+        });
+        const orgId = clinic?.organizationId || 'unknown';
+
         const ext = this.mimeToExtension(mimeType);
-        const dir = path.join(process.cwd(), 'uploads', 'whatsapp-media', clinicId, conversationId);
-        fs.mkdirSync(dir, { recursive: true });
-
         const filename = `${messageId}${ext}`;
-        const filePath = path.join(dir, filename);
-        fs.writeFileSync(filePath, buffer);
+        const storageKey = storage.buildKey(orgId, clinicId, 'whatsapp-media', conversationId, filename);
 
-        logger.info({ filePath, size: buffer.length, mimeType }, 'Media file saved');
-        return `/uploads/whatsapp-media/${clinicId}/${conversationId}/${filename}`;
+        await storage.uploadFile(storageKey, buffer, mimeType);
+
+        logger.info({ storageKey, size: buffer.length, mimeType }, 'Media file saved to MinIO');
+        return storageKey;
     }
 
     /**
@@ -900,36 +989,56 @@ export class ChatbotConversationService {
     }
 
     /**
-     * Convert a lead to a patient (marks the lead as converted).
+     * Convert a lead to a patient: creates the patient record from provided data,
+     * marks the lead as CONVERTED, and links conversations to the new patient.
      */
-    static async convertLead(leadId: string, clinicId: string, patientId: string, userId: string) {
+    static async convertLead(
+        leadId: string,
+        clinicId: string,
+        patientData: { firstName: string; lastName: string; phone?: string; email?: string },
+        userId: string
+    ) {
+        // 1. Verify lead exists
+        const [lead] = await db
+            .select()
+            .from(chatLeads)
+            .where(and(eq(chatLeads.id, leadId), eq(chatLeads.clinicId, clinicId)));
+
+        if (!lead) return null;
+
+        // 2. Create the patient
+        const [newPatient] = await db.insert(patients).values({
+            clinicId,
+            firstName: patientData.firstName,
+            lastName: patientData.lastName,
+            phone: patientData.phone || lead.phone,
+            email: patientData.email || lead.email || null,
+        }).returning();
+
+        // 3. Mark lead as converted
         const [updated] = await db
             .update(chatLeads)
             .set({
                 status: 'CONVERTED',
-                convertedPatientId: patientId,
+                convertedPatientId: newPatient!.id,
                 convertedById: userId,
                 convertedAt: new Date(),
                 updatedAt: new Date(),
             })
-            .where(and(
-                eq(chatLeads.id, leadId),
-                eq(chatLeads.clinicId, clinicId)
-            ))
+            .where(eq(chatLeads.id, leadId))
             .returning();
 
-        // Also update conversations to link to the patient
-        if (updated) {
-            await db.update(chatConversations).set({
-                patientId,
-                updatedAt: new Date(),
-            }).where(and(
-                eq(chatConversations.leadId, leadId),
-                eq(chatConversations.clinicId, clinicId)
-            ));
-        }
+        // 4. Link all conversations from this lead to the new patient
+        await db.update(chatConversations).set({
+            patientId: newPatient!.id,
+            updatedAt: new Date(),
+        }).where(and(
+            eq(chatConversations.leadId, leadId),
+            eq(chatConversations.clinicId, clinicId)
+        ));
 
-        return updated;
+        logger.info({ leadId, patientId: newPatient!.id, clinicId }, 'Lead converted to patient');
+        return { lead: updated, patient: newPatient };
     }
 
     /**

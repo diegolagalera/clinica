@@ -5,6 +5,7 @@ import * as radiographService from '../services/radiograph.service.js';
 import * as patientService from '../services/patient.service.js';
 import { success } from '../utils/response.js';
 import { BadRequestError } from '../utils/errors.js';
+import * as storage from '../services/storage.service.js';
 
 /**
  * POST /radiographs/patient/:patientId
@@ -87,9 +88,11 @@ export const getRadiographImage = asyncHandler(async (req: AuthenticatedRequest,
 
     const fileInfo = await radiographService.getRadiographFilePath(id!, req.tenantContext);
 
-    res.setHeader('Content-Type', fileInfo.mimeType);
+    const { stream, contentType } = await storage.getFileStream(fileInfo.path);
+
+    res.setHeader('Content-Type', contentType || fileInfo.mimeType);
     res.setHeader('Content-Disposition', `inline; filename="${fileInfo.filename}"`);
-    res.sendFile(fileInfo.path);
+    stream.pipe(res);
 });
 
 /**

@@ -28,7 +28,6 @@ const showEditModal = ref(false)
 const editingLead = ref<any>(null)
 const saving = ref(false)
 const showConvertModal = ref(false)
-const convertPatientId = ref('')
 const converting = ref(false)
 
 const editForm = ref({
@@ -37,6 +36,13 @@ const editForm = ref({
   email: '',
   notes: '',
   status: '',
+})
+
+const convertForm = ref({
+  firstName: '',
+  lastName: '',
+  phone: '',
+  email: '',
 })
 
 const fetchLeads = async () => {
@@ -94,18 +100,22 @@ const saveLead = async () => {
 
 const openConvert = (lead: any) => {
   editingLead.value = lead
-  convertPatientId.value = ''
+  convertForm.value = {
+    firstName: lead.firstName || '',
+    lastName: lead.lastName || '',
+    phone: lead.phone || '',
+    email: lead.email || '',
+  }
   showConvertModal.value = true
 }
 
 const convertLead = async () => {
-  if (!editingLead.value || !convertPatientId.value) return
+  if (!editingLead.value || !convertForm.value.firstName || !convertForm.value.lastName) return
   converting.value = true
   try {
-    await api.post(`/chatbot/leads/${editingLead.value.id}/convert`, { patientId: convertPatientId.value })
-    editingLead.value.status = 'CONVERTED'
+    await api.post(`/chatbot/leads/${editingLead.value.id}/convert`, convertForm.value)
     showConvertModal.value = false
-    toast.success('Lead convertido a paciente')
+    toast.success('Lead convertido a paciente correctamente')
     fetchLeads()
   } catch (err: any) {
     toast.error('Error convirtiendo lead')
@@ -313,30 +323,48 @@ onMounted(fetchLeads)
       </div>
     </Teleport>
 
-    <!-- Convert Lead Modal -->
+    <!-- Convert Lead to Patient Modal -->
     <Teleport to="body">
       <div v-if="showConvertModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" @click.self="showConvertModal = false">
         <div class="bg-white rounded-xl shadow-2xl max-w-md w-full">
           <div class="flex items-center justify-between p-4 border-b border-surface-200">
-            <h3 class="font-semibold text-surface-900">Convertir Lead a Paciente</h3>
+            <div>
+              <h3 class="font-semibold text-surface-900">Convertir Lead a Paciente</h3>
+              <p class="text-xs text-surface-500 mt-0.5">Revisa los datos y completa los campos necesarios</p>
+            </div>
             <button @click="showConvertModal = false"><XMarkIcon class="w-5 h-5 text-surface-500" /></button>
           </div>
-          <div class="p-4 space-y-4">
-            <p class="text-sm text-surface-600">
-              Para convertir este lead, introduce el ID del paciente ya creado en el sistema.
-              Primero crea el paciente desde el módulo de Pacientes y luego pega aquí su ID.
-            </p>
+          <form @submit.prevent="convertLead" class="p-4 space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-surface-700 mb-1">Nombre <span class="text-red-500">*</span></label>
+                <input v-model="convertForm.firstName" class="input w-full" required placeholder="Nombre" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-surface-700 mb-1">Apellido <span class="text-red-500">*</span></label>
+                <input v-model="convertForm.lastName" class="input w-full" required placeholder="Apellido" />
+              </div>
+            </div>
             <div>
-              <label class="block text-sm font-medium text-surface-700 mb-1">ID del Paciente</label>
-              <input v-model="convertPatientId" class="input w-full" placeholder="UUID del paciente..." />
+              <label class="block text-sm font-medium text-surface-700 mb-1">Teléfono</label>
+              <input v-model="convertForm.phone" class="input w-full" placeholder="+34..." />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">Email</label>
+              <input v-model="convertForm.email" type="email" class="input w-full" placeholder="email@ejemplo.com" />
+            </div>
+            <div class="bg-blue-50 rounded-lg p-3">
+              <p class="text-xs text-blue-700">
+                Se creará un nuevo paciente con estos datos y se vinculará automáticamente a la conversación de WhatsApp.
+              </p>
             </div>
             <div class="flex gap-3">
-              <button @click="showConvertModal = false" class="btn-secondary flex-1">Cancelar</button>
-              <button @click="convertLead" class="btn-primary flex-1" :disabled="!convertPatientId || converting">
-                {{ converting ? 'Convirtiendo...' : 'Convertir' }}
+              <button type="button" @click="showConvertModal = false" class="btn-secondary flex-1">Cancelar</button>
+              <button type="submit" class="btn-primary flex-1" :disabled="!convertForm.firstName || !convertForm.lastName || converting">
+                {{ converting ? 'Convirtiendo...' : 'Convertir a Paciente' }}
               </button>
             </div>
-          </div>
+          </form>
         </div>
       </div>
     </Teleport>

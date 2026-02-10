@@ -65,6 +65,8 @@ export interface Clinic {
     country: string
     timezone: string
     isActive: boolean
+    aiEnabled?: boolean
+    aiMonthlyTokenLimit?: number
     createdAt: string
     updatedAt: string
 }

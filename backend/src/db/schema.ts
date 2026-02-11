@@ -71,6 +71,7 @@ export const dentalConditionEnum = pgEnum('dental_condition', [
     'HEALTHY',
     'CARIES',
     'FILLING',
+    'TEMPORARY_FILLING',
     'CROWN',
     'EXTRACTION_INDICATED',
     'MISSING',
@@ -80,6 +81,11 @@ export const dentalConditionEnum = pgEnum('dental_condition', [
     'BRIDGE',
     'VENEER',
     'SEALANT',
+    'EROSION',
+    'ABRASION',
+    'PERIAPICAL_LESION',
+    'ROOT_RESORPTION',
+    'ROOT_FRACTURE',
 ]);
 export const toothSurfaceEnum = pgEnum('tooth_surface', [
     'MESIAL',
@@ -1224,6 +1230,7 @@ export const odontogramTeeth = pgTable(
             vestibular: 'HEALTHY',
             palatino: 'HEALTHY',
         }),
+        rootCondition: dentalConditionEnum('root_condition').default('HEALTHY'),
         notes: text('notes'),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),

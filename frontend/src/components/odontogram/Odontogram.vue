@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { api } from '@/services/api'
 import ToothSVG from './ToothSVG.vue'
 import type { Odontogram, OdontogramTooth, DentalCondition, ToothSurfaces, ApiResponse, OdontogramHistoryEntry, OdontogramSnapshot } from '@/types'
@@ -18,8 +18,12 @@ const selectedSurface = ref<keyof ToothSurfaces | null>(null)
 const selectedRoot = ref(false)
 const isSaving = ref(false)
 const history = ref<OdontogramHistoryEntry[]>([])
-const showHistory = ref(false)
-const showRoots = ref(true) // Toggle to show/hide roots
+const showRoots = ref(true)
+// Condition panel tab
+const conditionTab = ref<'crown' | 'root' | 'tooth'>('crown')
+
+// Clinic color overrides
+const clinicColors = ref<Record<string, string>>({})
 
 // Snapshots state
 const snapshots = ref<OdontogramSnapshot[]>([])
@@ -31,27 +35,96 @@ const viewingSnapshot = ref<OdontogramSnapshot | null>(null)
 const showDeleteConfirmModal = ref(false)
 const snapshotToDelete = ref<OdontogramSnapshot | null>(null)
 
-// Dental conditions with labels and colors
-const conditions: Array<{ value: DentalCondition; label: string; color: string }> = [
-  { value: 'HEALTHY', label: 'Sano', color: '#FFFFFF' },
-  { value: 'CARIES', label: 'Caries', color: '#EF4444' },
-  { value: 'FILLING', label: 'Obturación', color: '#3B82F6' },
-  { value: 'CROWN', label: 'Corona', color: '#F59E0B' },
-  { value: 'EXTRACTION_INDICATED', label: 'Extracción', color: '#DC2626' },
-  { value: 'MISSING', label: 'Ausente', color: '#9CA3AF' },
-  { value: 'IMPLANT', label: 'Implante', color: '#10B981' },
-  { value: 'ROOT_CANAL', label: 'Endodoncia', color: '#8B5CF6' },
-  { value: 'FRACTURE', label: 'Fractura', color: '#F97316' },
-  { value: 'BRIDGE', label: 'Puente', color: '#06B6D4' },
-  { value: 'VENEER', label: 'Carilla', color: '#EC4899' },
-  { value: 'SEALANT', label: 'Sellante', color: '#84CC16' },
-]
+// ============================================================================
+// CATEGORIZED CONDITIONS
+// ============================================================================
+
+// Default condition colors
+const defaultConditionColors: Record<string, string> = {
+  HEALTHY: '#FFFFFF',
+  CARIES: '#EF4444',
+  FILLING: '#3B82F6',
+  TEMPORARY_FILLING: '#93C5FD',
+  CROWN: '#F59E0B',
+  VENEER: '#EC4899',
+  BRIDGE: '#06B6D4',
+  SEALANT: '#84CC16',
+  FRACTURE: '#F97316',
+  EROSION: '#FBBF24',
+  ABRASION: '#D97706',
+  ROOT_CANAL: '#8B5CF6',
+  PERIAPICAL_LESION: '#EF4444',
+  ROOT_RESORPTION: '#F97316',
+  ROOT_FRACTURE: '#DC2626',
+  MISSING: '#9CA3AF',
+  IMPLANT: '#10B981',
+  EXTRACTION_INDICATED: '#DC2626',
+}
+
+// Helper to get merged color
+const cc = (value: string): string => clinicColors.value[value] || defaultConditionColors[value] || '#9CA3AF'
+
+const crownConditions = computed(() => [
+  { value: 'HEALTHY' as DentalCondition, label: 'Sano', color: cc('HEALTHY') },
+  { value: 'CARIES' as DentalCondition, label: 'Caries', color: cc('CARIES') },
+  { value: 'FILLING' as DentalCondition, label: 'Obturación', color: cc('FILLING') },
+  { value: 'TEMPORARY_FILLING' as DentalCondition, label: 'Obt. temporal', color: cc('TEMPORARY_FILLING') },
+  { value: 'CROWN' as DentalCondition, label: 'Corona', color: cc('CROWN') },
+  { value: 'VENEER' as DentalCondition, label: 'Carilla', color: cc('VENEER') },
+  { value: 'BRIDGE' as DentalCondition, label: 'Puente', color: cc('BRIDGE') },
+  { value: 'SEALANT' as DentalCondition, label: 'Sellante', color: cc('SEALANT') },
+  { value: 'FRACTURE' as DentalCondition, label: 'Fractura', color: cc('FRACTURE') },
+  { value: 'EROSION' as DentalCondition, label: 'Erosión', color: cc('EROSION') },
+  { value: 'ABRASION' as DentalCondition, label: 'Abrasión', color: cc('ABRASION') },
+])
+
+const rootConditions = computed(() => [
+  { value: 'HEALTHY' as DentalCondition, label: 'Sana', color: cc('HEALTHY') },
+  { value: 'ROOT_CANAL' as DentalCondition, label: 'Endodoncia', color: cc('ROOT_CANAL') },
+  { value: 'PERIAPICAL_LESION' as DentalCondition, label: 'Lesión periapical', color: cc('PERIAPICAL_LESION') },
+  { value: 'ROOT_RESORPTION' as DentalCondition, label: 'Reabsorción', color: cc('ROOT_RESORPTION') },
+  { value: 'ROOT_FRACTURE' as DentalCondition, label: 'Fractura radicular', color: cc('ROOT_FRACTURE') },
+])
+
+const toothConditions = computed(() => [
+  { value: 'HEALTHY' as DentalCondition, label: 'Sano', color: cc('HEALTHY') },
+  { value: 'MISSING' as DentalCondition, label: 'Ausente', color: cc('MISSING') },
+  { value: 'IMPLANT' as DentalCondition, label: 'Implante', color: cc('IMPLANT') },
+  { value: 'EXTRACTION_INDICATED' as DentalCondition, label: 'Extracción indicada', color: cc('EXTRACTION_INDICATED') },
+])
+
+// All conditions for legend
+const allConditions = computed(() => [
+  ...crownConditions.value.filter(c => c.value !== 'HEALTHY'),
+  ...rootConditions.value.filter(c => c.value !== 'HEALTHY'),
+  ...toothConditions.value.filter(c => c.value !== 'HEALTHY'),
+])
+
+// Compute active conditions based on selection
+const activeConditions = computed(() => {
+  if (selectedRoot.value) return rootConditions.value
+  if (selectedSurface.value) return crownConditions.value
+  // General tooth click — show tab content
+  if (conditionTab.value === 'crown') return crownConditions.value
+  if (conditionTab.value === 'root') return rootConditions.value
+  return toothConditions.value
+})
+
+// Current condition of selected element
+const currentConditionValue = computed(() => {
+  if (!selectedTooth.value) return null
+  if (selectedRoot.value) return selectedTooth.value.rootCondition || 'HEALTHY'
+  if (selectedSurface.value) return selectedTooth.value.surfaces[selectedSurface.value]
+  return selectedTooth.value.generalCondition
+})
 
 // Tooth organization by quadrant (FDI notation)
 const upperRight = [18, 17, 16, 15, 14, 13, 12, 11]
 const upperLeft = [21, 22, 23, 24, 25, 26, 27, 28]
 const lowerLeft = [38, 37, 36, 35, 34, 33, 32, 31]
 const lowerRight = [41, 42, 43, 44, 45, 46, 47, 48]
+
+const defaultSurfaces: ToothSurfaces = { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }
 
 // Get tooth data by number
 const getToothData = (toothNumber: number): OdontogramTooth | null => {
@@ -60,7 +133,6 @@ const getToothData = (toothNumber: number): OdontogramTooth | null => {
 
 // Load odontogram
 const loadOdontogram = async () => {
-  // Only show loading spinner on initial load to prevent scroll reset
   const isInitialLoad = !odontogram.value
   if (isInitialLoad) isLoading.value = true
   error.value = ''
@@ -127,7 +199,7 @@ const handleCreateSnapshot = async () => {
   }
 }
 
-// Delete snapshot - opens confirmation modal
+// Delete snapshot
 const openDeleteConfirm = (snapshot: OdontogramSnapshot) => {
   snapshotToDelete.value = snapshot
   showDeleteConfirmModal.value = true
@@ -154,7 +226,6 @@ const cancelDeleteSnapshot = () => {
   snapshotToDelete.value = null
 }
 
-// View snapshot (open dual comparison modal)
 const viewSnapshot = (snapshot: OdontogramSnapshot) => {
   viewingSnapshot.value = snapshot
 }
@@ -163,24 +234,26 @@ const closeSnapshotView = () => {
   viewingSnapshot.value = null
 }
 
-// Get tooth data from snapshot
 const getSnapshotToothData = (toothNumber: number): OdontogramTooth | null => {
   if (!viewingSnapshot.value) return null
   const teeth = viewingSnapshot.value.teethState as Array<{
     toothNumber: number
     generalCondition: DentalCondition
     surfaces: ToothSurfaces
+    rootCondition?: DentalCondition
     notes: string | null
   }>
   return teeth.find(t => t.toothNumber === toothNumber) as OdontogramTooth | null
 }
 
-// Select tooth
+// Select tooth (general click)
 const selectTooth = (toothNumber: number) => {
   const tooth = getToothData(toothNumber)
   if (tooth) {
     selectedTooth.value = tooth
     selectedSurface.value = null
+    selectedRoot.value = false
+    conditionTab.value = 'crown'
   }
 }
 
@@ -210,12 +283,42 @@ const applyCondition = async (condition: DentalCondition) => {
 
   isSaving.value = true
   try {
+    // Determine what to update based on context
+    let surface = selectedSurface.value
+    let isRoot = selectedRoot.value
+
+    // If no explicit surface/root selected, use tab context
+    if (!surface && !isRoot) {
+      if (conditionTab.value === 'root') {
+        // Root tab → apply as root condition
+        isRoot = true
+      } else if (conditionTab.value === 'crown') {
+        // Crown tab → apply to ALL surfaces at once for visual effect
+        const surfaces = ['mesial', 'distal', 'occlusal', 'vestibular', 'palatino'] as const
+        for (const s of surfaces) {
+          await api.put(`/odontogram/${odontogram.value!.id}/tooth/${selectedTooth.value!.toothNumber}`, {
+            condition,
+            surface: s,
+            isRoot: false,
+          })
+        }
+        await loadOdontogram()
+        await loadHistory()
+        if (selectedTooth.value) {
+          selectedTooth.value = getToothData(selectedTooth.value.toothNumber)
+        }
+        isSaving.value = false
+        return
+      }
+      // conditionTab === 'tooth' → generalCondition (surface=null, isRoot=false) — default behavior
+    }
+
     await api.put(`/odontogram/${odontogram.value.id}/tooth/${selectedTooth.value.toothNumber}`, {
       condition,
-      surface: selectedSurface.value,
+      surface,
+      isRoot,
     })
     
-    // Reload to get updated data
     await loadOdontogram()
     await loadHistory()
     
@@ -248,7 +351,7 @@ const surfaceLabels: Record<keyof ToothSurfaces, string> = {
   palatino: 'Palatino/Lingual',
 }
 
-// Format date for history display
+// Format date
 const formatDate = (dateString: string): string => {
   const date = new Date(dateString)
   const now = new Date()
@@ -264,9 +367,27 @@ const formatDate = (dateString: string): string => {
   return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
 }
 
+// Get condition label by value
+const getConditionLabel = (value: string): string => {
+  const all = [...crownConditions.value, ...rootConditions.value, ...toothConditions.value]
+  return all.find(c => c.value === value)?.label || value
+}
+
+// Load clinic color settings
+const loadClinicColors = async () => {
+  try {
+    const response = await api.get<ApiResponse<{ settings: Record<string, any> }>>('/clinics/current')
+    if (response.success && response.data?.settings?.odontogramColors) {
+      clinicColors.value = response.data.settings.odontogramColors
+    }
+  } catch (err) {
+    console.warn('Could not load clinic color settings', err)
+  }
+}
+
 // Load on mount
 onMounted(async () => {
-  await loadOdontogram()
+  await Promise.all([loadOdontogram(), loadClinicColors()])
   await loadHistory()
   await loadSnapshots()
 })
@@ -293,85 +414,88 @@ watch(() => props.patientId, () => {
     </div>
 
     <!-- Odontogram -->
-    <div v-else-if="odontogram" class="space-y-6">
-      <!-- Legend -->
-      <div class="flex flex-wrap gap-2 text-xs">
-        <div 
-          v-for="cond in conditions" 
-          :key="cond.value"
-          class="flex items-center gap-1 px-2 py-1 rounded border"
-        >
-          <div 
-            class="w-3 h-3 rounded-full border border-gray-300" 
-            :style="{ backgroundColor: cond.color }"
-          ></div>
-          <span>{{ cond.label }}</span>
-        </div>
-      </div>
-
-      <!-- Controls -->
-      <!-- Controls -->
-      <div class="flex items-center justify-between flex-wrap gap-2">
-        <div class="flex items-center gap-2">
-          <button 
-            @click="showRoots = !showRoots"
-            class="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border transition-colors"
-            :class="showRoots ? 'bg-primary-50 border-primary-300 text-primary-700' : 'bg-surface-50 border-surface-300 text-surface-600'"
+    <div v-else-if="odontogram" class="space-y-3">
+      <!-- Top bar: controls + legend -->
+      <div class="bg-white rounded-xl border border-surface-200 px-4 py-3">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <button 
+              @click="showRoots = !showRoots"
+              class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors"
+              :class="showRoots ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-surface-50 border-surface-300 text-surface-600'"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+              {{ showRoots ? 'Ocultar Raíces' : 'Mostrar Raíces' }}
+            </button>
+          </div>
+          <router-link 
+            v-if="!props.isFullscreen"
+            :to="{ name: 'clinic-odontogram-fullscreen', params: { patientId: patientId } }"
+            target="_blank"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-surface-300 bg-surface-50 text-surface-700 hover:bg-surface-100 transition-colors"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
             </svg>
-            {{ showRoots ? 'Ocultar Raíces' : 'Mostrar Raíces' }}
-          </button>
+            Pantalla Completa
+          </router-link>
         </div>
-        
-        <router-link 
-          v-if="!props.isFullscreen"
-          :to="{ name: 'clinic-odontogram-fullscreen', params: { patientId: patientId } }"
-          target="_blank"
-          class="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-green-300 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-          </svg>
-          Pantalla Completa
-        </router-link>
+        <!-- Inline legend -->
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          <div 
+            v-for="cond in allConditions" 
+            :key="'legend-' + cond.value"
+            class="flex items-center gap-1.5 text-xs text-surface-600"
+          >
+            <span 
+              class="w-3 h-3 rounded-full inline-block flex-shrink-0" 
+              :style="{ backgroundColor: cond.color }"
+            ></span>
+            <span>{{ cond.label }}</span>
+          </div>
+        </div>
       </div>
 
-      <div class="flex flex-col lg:flex-row gap-6">
+      <div class="flex flex-col lg:flex-row gap-3">
         <!-- Dental Chart -->
-        <div class="flex-1 bg-white rounded-xl border border-surface-200 p-4 overflow-x-auto">
+        <div class="flex-1 bg-white rounded-xl border border-surface-200 p-5 overflow-x-auto">
           <!-- Upper teeth -->
           <div class="mb-8">
-            <div class="text-center text-sm font-medium text-surface-500 mb-3">SUPERIOR</div>
-            <div class="flex justify-center gap-1">
+            <div class="text-center text-[10px] font-semibold text-surface-400 mb-3 tracking-[0.2em] uppercase">Superior</div>
+            <div class="flex justify-center gap-1.5">
               <!-- Upper Right (18-11) -->
-              <div class="flex gap-1 border-r-2 border-surface-300 pr-2 mr-2">
+              <div class="flex gap-1.5 border-r-2 border-surface-300 pr-2 mr-2">
                 <ToothSVG
                   v-for="num in upperRight"
                   :key="num"
                   :toothNumber="num"
                   :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                  :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                  :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                  :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                   :isSelected="selectedTooth?.toothNumber === num"
                   :isUpper="true"
                   :showRoot="showRoots"
+                   :colorOverrides="clinicColors"
                   @click="selectTooth(num)"
                   @surface-click="(s) => selectSurface(num, s)"
                   @root-click="selectRoot(num)"
                 />
               </div>
               <!-- Upper Left (21-28) -->
-              <div class="flex gap-1">
+              <div class="flex gap-1.5">
                 <ToothSVG
                   v-for="num in upperLeft"
                   :key="num"
                   :toothNumber="num"
                   :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                  :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                  :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                  :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                   :isSelected="selectedTooth?.toothNumber === num"
                   :isUpper="true"
                   :showRoot="showRoots"
+                   :colorOverrides="clinicColors"
                   @click="selectTooth(num)"
                   @surface-click="(s) => selectSurface(num, s)"
                   @root-click="selectRoot(num)"
@@ -381,181 +505,185 @@ watch(() => props.patientId, () => {
           </div>
 
           <!-- Divider line -->
-          <div class="border-t-2 border-surface-300 my-4 relative">
-            <span class="absolute left-1/2 -translate-x-1/2 -top-2 bg-white px-4 text-xs text-surface-400">
-              Línea Media
+          <div class="border-t border-surface-200 my-4 relative">
+            <span class="absolute left-1/2 -translate-x-1/2 -top-2 bg-white px-4 text-[9px] text-surface-300 font-medium tracking-[0.15em] uppercase">
+              Línea media
             </span>
           </div>
 
           <!-- Lower teeth -->
           <div class="mt-8">
-            <div class="flex justify-center gap-1">
+            <div class="flex justify-center gap-1.5">
               <!-- Lower Left (38-31) -->
-              <div class="flex gap-1 border-r-2 border-surface-300 pr-2 mr-2">
+              <div class="flex gap-1.5 border-r-2 border-surface-300 pr-2 mr-2">
                 <ToothSVG
                   v-for="num in lowerLeft"
                   :key="num"
                   :toothNumber="num"
                   :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                  :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                  :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                  :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                   :isSelected="selectedTooth?.toothNumber === num"
                   :isUpper="false"
                   :showRoot="showRoots"
+                   :colorOverrides="clinicColors"
                   @click="selectTooth(num)"
                   @surface-click="(s) => selectSurface(num, s)"
                   @root-click="selectRoot(num)"
                 />
               </div>
               <!-- Lower Right (41-48) -->
-              <div class="flex gap-1">
+              <div class="flex gap-1.5">
                 <ToothSVG
                   v-for="num in lowerRight"
                   :key="num"
                   :toothNumber="num"
                   :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                  :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                  :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                  :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                   :isSelected="selectedTooth?.toothNumber === num"
                   :isUpper="false"
                   :showRoot="showRoots"
+                   :colorOverrides="clinicColors"
                   @click="selectTooth(num)"
                   @surface-click="(s) => selectSurface(num, s)"
                   @root-click="selectRoot(num)"
                 />
               </div>
             </div>
-            <div class="text-center text-sm font-medium text-surface-500 mt-3">INFERIOR</div>
+            <div class="text-center text-[10px] font-semibold text-surface-400 mt-3 tracking-[0.2em] uppercase">Inferior</div>
           </div>
         </div>
 
-        <!-- Condition Panel -->
-        <div class="w-full lg:w-72 bg-white rounded-xl border border-surface-200 p-4">
-          <h3 class="font-semibold text-surface-900 mb-4">Panel de Condiciones</h3>
-          
-          <!-- No selection -->
-          <div v-if="!selectedTooth" class="text-center text-surface-400 py-8">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
-            </svg>
-            <p class="text-sm">Haz clic en un diente o superficie para seleccionar</p>
-          </div>
+        <!-- Condition Panel (compact + scrollable) -->
+        <div class="w-full lg:w-72 flex-shrink-0">
+          <div class="bg-white rounded-xl border border-surface-200 overflow-hidden lg:sticky lg:top-4">
+            <div class="px-3 py-2 border-b border-surface-100 bg-surface-50">
+              <h3 class="font-semibold text-surface-900 text-xs">Panel de Condiciones</h3>
+            </div>
+            
+            <!-- No selection -->
+            <div v-if="!selectedTooth" class="text-center text-surface-400 py-8 px-4">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8 mx-auto mb-1.5 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+              </svg>
+              <p class="text-xs">Selecciona un diente, superficie o raíz</p>
+            </div>
 
-          <!-- Tooth selected -->
-          <div v-else class="space-y-4">
-            <div class="flex items-center justify-between bg-surface-50 rounded-lg p-3">
-              <div>
-                <div class="font-medium">Diente {{ selectedTooth.toothNumber }}</div>
-                <div v-if="selectedRoot" class="text-sm text-purple-600 font-medium">
-                  🦷 Raíz
+            <!-- Tooth selected -->
+            <div v-else class="p-3 space-y-2 max-h-[420px] overflow-y-auto">
+              <!-- Selection info -->
+              <div class="flex items-center justify-between bg-surface-50 rounded-lg p-2">
+                <div class="min-w-0">
+                  <div class="font-semibold text-surface-900 text-sm">Diente {{ selectedTooth.toothNumber }}</div>
+                  <div v-if="selectedRoot" class="text-xs text-purple-600 font-medium mt-0.5 flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-purple-500 inline-block"></span>
+                    Raíz seleccionada
+                  </div>
+                  <div v-else-if="selectedSurface" class="text-xs text-primary-600 mt-0.5 flex items-center gap-1">
+                    <span class="w-2 h-2 rounded-full bg-primary-500 inline-block"></span>
+                    {{ surfaceLabels[selectedSurface] }}
+                  </div>
+                  <div v-else class="text-xs text-surface-500 mt-0.5">
+                    Condición general
+                  </div>
                 </div>
-                <div v-else-if="selectedSurface" class="text-sm text-primary-600">
-                  Superficie: {{ surfaceLabels[selectedSurface] }}
+                <button 
+                  @click="clearSelection" 
+                  class="text-surface-400 hover:text-surface-600 p-1 hover:bg-surface-200 rounded transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Tabs (only for general tooth click, not surface/root) -->
+              <div v-if="!selectedSurface && !selectedRoot" class="flex gap-1 bg-surface-100 rounded-lg p-1">
+                <button 
+                  @click="conditionTab = 'crown'"
+                  class="flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all"
+                  :class="conditionTab === 'crown' ? 'bg-white text-primary-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'"
+                >
+                  Corona
+                </button>
+                <button 
+                  @click="conditionTab = 'root'"
+                  class="flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all"
+                  :class="conditionTab === 'root' ? 'bg-white text-purple-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'"
+                >
+                  Raíz
+                </button>
+                <button 
+                  @click="conditionTab = 'tooth'"
+                  class="flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-all"
+                  :class="conditionTab === 'tooth' ? 'bg-white text-surface-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'"
+                >
+                  Diente
+                </button>
+              </div>
+
+              <!-- Category label -->
+              <div class="flex items-center gap-2">
+                <div v-if="selectedRoot" class="text-xs font-medium text-purple-600">Condiciones de Raíz</div>
+                <div v-else-if="selectedSurface" class="text-xs font-medium text-primary-600">Condiciones de Corona</div>
+                <div v-else-if="conditionTab === 'crown'" class="text-xs font-medium text-primary-600">Condiciones de Corona</div>
+                <div v-else-if="conditionTab === 'root'" class="text-xs font-medium text-purple-600">Condiciones de Raíz</div>
+                <div v-else class="text-xs font-medium text-surface-600">Estado del Diente</div>
+                <div class="flex-1 border-t border-surface-100"></div>
+              </div>
+
+              <!-- Condition buttons -->
+              <div class="space-y-1">
+                <button
+                  v-for="cond in activeConditions"
+                  :key="cond.value"
+                  :disabled="isSaving"
+                  @click="applyCondition(cond.value)"
+                  class="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs rounded-lg border transition-all hover:shadow-sm disabled:opacity-50"
+                  :class="currentConditionValue === cond.value
+                    ? 'border-primary-400 bg-primary-50 ring-1 ring-primary-200'
+                    : 'border-surface-200 hover:border-surface-300 hover:bg-surface-50'"
+                >
+                  <div 
+                    class="w-3 h-3 rounded-full border-2 flex-shrink-0" 
+                    :class="currentConditionValue === cond.value ? 'scale-110' : ''"
+                    :style="{ 
+                      backgroundColor: cond.color, 
+                      borderColor: cond.value === 'HEALTHY' ? '#D1D5DB' : cond.color 
+                    }"
+                  ></div>
+                  <span class="text-left flex-1" :class="currentConditionValue === cond.value ? 'font-medium text-primary-700' : 'text-surface-700'">
+                    {{ cond.label }}
+                  </span>
+                  <svg v-if="currentConditionValue === cond.value" xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-primary-500" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Saving indicator -->
+              <div v-if="isSaving" class="text-center text-xs text-primary-600 py-1">
+                <div class="animate-spin inline-block w-3 h-3 border-2 border-primary-500 border-t-transparent rounded-full mr-1"></div>
+                Guardando...
+              </div>
+
+              <!-- Current state summary -->
+              <div v-if="selectedTooth" class="bg-surface-50 rounded-lg p-2 space-y-1">
+                <div class="text-[10px] font-medium text-surface-500">Estado actual</div>
+                <div class="flex items-center gap-1.5 text-[11px]">
+                  <span class="text-surface-400">General:</span>
+                  <span class="font-medium text-surface-700">{{ getConditionLabel(selectedTooth.generalCondition) }}</span>
                 </div>
-                <div v-else class="text-sm text-surface-500">
-                  Condición general
+                <div class="flex items-center gap-1.5 text-[11px]">
+                  <span class="text-surface-400">Raíz:</span>
+                  <span class="font-medium text-surface-700">{{ getConditionLabel(selectedTooth.rootCondition || 'HEALTHY') }}</span>
                 </div>
               </div>
-              <button 
-                @click="clearSelection" 
-                class="text-surface-400 hover:text-surface-600"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-              </button>
-            </div>
-
-            <!-- Condition buttons -->
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                v-for="cond in conditions"
-                :key="cond.value"
-                :disabled="isSaving"
-                @click="applyCondition(cond.value)"
-                class="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-all hover:shadow-md disabled:opacity-50"
-                :class="{
-                  'border-primary-500 bg-primary-50': 
-                    (selectedSurface && selectedTooth?.surfaces[selectedSurface] === cond.value) ||
-                    (!selectedSurface && selectedTooth?.generalCondition === cond.value)
-                }"
-              >
-                <div 
-                  class="w-4 h-4 rounded-full border border-gray-300 flex-shrink-0" 
-                  :style="{ backgroundColor: cond.color }"
-                ></div>
-                <span class="truncate">{{ cond.label }}</span>
-              </button>
-            </div>
-
-            <!-- Saving indicator -->
-            <div v-if="isSaving" class="text-center text-sm text-primary-600">
-              <div class="animate-spin inline-block w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full mr-2"></div>
-              Guardando...
             </div>
           </div>
         </div>
       </div>
-
-      <!-- History Panel (hidden for now)
-      <div class="bg-white rounded-xl border border-surface-200 overflow-hidden">
-        <button 
-          @click="showHistory = !showHistory"
-          class="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-surface-50 transition-colors"
-        >
-          <div class="flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-surface-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span class="font-medium text-surface-900">Historial de Cambios</span>
-            <span class="text-xs bg-surface-100 px-2 py-0.5 rounded-full text-surface-600">{{ history.length }}</span>
-          </div>
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            class="w-5 h-5 text-surface-400 transition-transform" 
-            :class="{ 'rotate-180': showHistory }"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        
-        <div v-if="showHistory" class="border-t border-surface-200 max-h-64 overflow-y-auto">
-          <div v-if="history.length === 0" class="p-4 text-center text-surface-400 text-sm">
-            No hay cambios registrados aún
-          </div>
-          <div v-else class="divide-y divide-surface-100">
-            <div 
-              v-for="entry in history" 
-              :key="entry.id"
-              class="px-4 py-3 hover:bg-surface-50 transition-colors"
-            >
-              <div class="flex items-start justify-between gap-2">
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <span class="font-medium text-surface-900">Diente {{ entry.toothNumber }}</span>
-                    <span v-if="entry.surface" class="text-xs bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded">
-                      {{ entry.surface }}
-                    </span>
-                  </div>
-                  <div class="text-sm text-surface-600 mt-1 flex items-center gap-1.5">
-                    <span class="text-surface-400">{{ entry.previousCondition || 'Sin estado' }}</span>
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
-                    <span class="font-medium text-surface-700">{{ entry.newCondition }}</span>
-                  </div>
-                  <div v-if="entry.notes" class="text-xs text-surface-500 mt-1 italic">
-                    "{{ entry.notes }}"
-                  </div>
-                </div>
-                <div class="text-xs text-surface-400 whitespace-nowrap">
-                  {{ formatDate(entry.createdAt) }}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      -->
 
       <!-- Snapshots Panel -->
       <div class="bg-white rounded-xl border border-surface-200 overflow-hidden">
@@ -582,7 +710,6 @@ watch(() => props.patientId, () => {
         </button>
         
         <div v-if="showSnapshotsPanel" class="border-t border-surface-200 p-4 space-y-3">
-          <!-- Create button -->
           <button 
             @click="showCreateSnapshotModal = true"
             class="w-full px-4 py-2 bg-purple-50 text-purple-700 rounded-lg border border-purple-200 hover:bg-purple-100 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
@@ -593,7 +720,6 @@ watch(() => props.patientId, () => {
             Guardar Estado Actual
           </button>
           
-          <!-- Viewing snapshot indicator -->
           <div v-if="viewingSnapshot" class="bg-purple-100 rounded-lg p-3 flex items-center justify-between">
             <div class="flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -609,7 +735,6 @@ watch(() => props.patientId, () => {
             </button>
           </div>
           
-          <!-- Snapshots list -->
           <div v-if="snapshots.length === 0" class="text-center text-surface-400 py-4 text-sm">
             No hay snapshots guardados
           </div>
@@ -623,7 +748,6 @@ watch(() => props.patientId, () => {
               <div class="flex-1 min-w-0">
                 <div class="font-medium text-surface-800 truncate">{{ snap.name }}</div>
                 <div class="text-xs text-surface-500">{{ formatDate(snap.createdAt) }}</div>
-                <div v-if="snap.description" class="text-xs text-surface-400 mt-1 truncate">{{ snap.description }}</div>
               </div>
               <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button 
@@ -773,9 +897,6 @@ watch(() => props.patientId, () => {
               <div class="bg-white rounded-xl border border-purple-200 p-4 shadow-sm">
                 <div class="text-center mb-4">
                   <span class="inline-flex items-center gap-2 px-4 py-2 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                    </svg>
                     SNAPSHOT (Antes)
                   </span>
                 </div>
@@ -790,10 +911,12 @@ watch(() => props.patientId, () => {
                         :key="'snap-' + num"
                         :toothNumber="num"
                         :generalCondition="getSnapshotToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getSnapshotToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getSnapshotToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getSnapshotToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="true"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                     <div class="flex gap-0.5">
@@ -802,10 +925,12 @@ watch(() => props.patientId, () => {
                         :key="'snap-' + num"
                         :toothNumber="num"
                         :generalCondition="getSnapshotToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getSnapshotToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getSnapshotToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getSnapshotToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="true"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                   </div>
@@ -820,10 +945,12 @@ watch(() => props.patientId, () => {
                         :key="'snap-' + num"
                         :toothNumber="num"
                         :generalCondition="getSnapshotToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getSnapshotToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getSnapshotToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getSnapshotToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="false"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                     <div class="flex gap-0.5">
@@ -832,10 +959,12 @@ watch(() => props.patientId, () => {
                         :key="'snap-' + num"
                         :toothNumber="num"
                         :generalCondition="getSnapshotToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getSnapshotToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getSnapshotToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getSnapshotToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="false"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                   </div>
@@ -843,14 +972,11 @@ watch(() => props.patientId, () => {
                 </div>
               </div>
               
-              <!-- Current State (After) -->
+              <!-- Current (After) -->
               <div class="bg-white rounded-xl border border-green-200 p-4 shadow-sm">
                 <div class="text-center mb-4">
                   <span class="inline-flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 rounded-full text-sm font-medium">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    ACTUAL (Ahora)
+                    ACTUAL (Después)
                   </span>
                 </div>
                 
@@ -864,10 +990,12 @@ watch(() => props.patientId, () => {
                         :key="'curr-' + num"
                         :toothNumber="num"
                         :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="true"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                     <div class="flex gap-0.5">
@@ -876,10 +1004,12 @@ watch(() => props.patientId, () => {
                         :key="'curr-' + num"
                         :toothNumber="num"
                         :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="true"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                   </div>
@@ -894,10 +1024,12 @@ watch(() => props.patientId, () => {
                         :key="'curr-' + num"
                         :toothNumber="num"
                         :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="false"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                     <div class="flex gap-0.5">
@@ -906,10 +1038,12 @@ watch(() => props.patientId, () => {
                         :key="'curr-' + num"
                         :toothNumber="num"
                         :generalCondition="getToothData(num)?.generalCondition || 'HEALTHY'"
-                        :surfaces="getToothData(num)?.surfaces || { mesial: 'HEALTHY', distal: 'HEALTHY', occlusal: 'HEALTHY', vestibular: 'HEALTHY', palatino: 'HEALTHY' }"
+                        :surfaces="getToothData(num)?.surfaces || defaultSurfaces"
+                        :rootCondition="getToothData(num)?.rootCondition || 'HEALTHY'"
                         :isSelected="false"
                         :isUpper="false"
                         :showRoot="false"
+                         :colorOverrides="clinicColors"
                       />
                     </div>
                   </div>
@@ -923,7 +1057,7 @@ watch(() => props.patientId, () => {
               <div class="text-sm font-medium text-surface-700 mb-3">Leyenda de Condiciones</div>
               <div class="flex flex-wrap gap-2">
                 <div 
-                  v-for="cond in conditions" 
+                  v-for="cond in allConditions" 
                   :key="cond.value"
                   class="flex items-center gap-1.5 px-2 py-1 rounded border text-xs"
                 >
@@ -938,11 +1072,6 @@ watch(() => props.patientId, () => {
           </div>
         </div>
       </Teleport>
-
-      <!-- Instructions -->
-      <div class="text-sm text-surface-500 bg-surface-50 rounded-lg p-3">
-        <strong>Instrucciones:</strong> Haz clic en un diente para seleccionarlo. Haz clic en una superficie específica (centro, lados) para marcar solo esa área. Luego selecciona la condición del panel derecho.
-      </div>
     </div>
   </div>
 </template>

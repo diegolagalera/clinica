@@ -12,6 +12,7 @@ export type DentalCondition =
     | 'HEALTHY'
     | 'CARIES'
     | 'FILLING'
+    | 'TEMPORARY_FILLING'
     | 'CROWN'
     | 'EXTRACTION_INDICATED'
     | 'MISSING'
@@ -20,7 +21,12 @@ export type DentalCondition =
     | 'FRACTURE'
     | 'BRIDGE'
     | 'VENEER'
-    | 'SEALANT';
+    | 'SEALANT'
+    | 'EROSION'
+    | 'ABRASION'
+    | 'PERIAPICAL_LESION'
+    | 'ROOT_RESORPTION'
+    | 'ROOT_FRACTURE';
 
 export interface ToothSurfaces {
     mesial: DentalCondition;
@@ -36,6 +42,7 @@ export interface OdontogramTooth {
     toothNumber: number;
     generalCondition: DentalCondition;
     surfaces: ToothSurfaces;
+    rootCondition: DentalCondition;
     notes: string | null;
     createdAt: Date;
     updatedAt: Date;
@@ -141,6 +148,7 @@ export const getOrCreateOdontogram = async (
             ...t,
             generalCondition: (t.generalCondition || 'HEALTHY') as DentalCondition,
             surfaces: (t.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
+            rootCondition: (t.rootCondition || 'HEALTHY') as DentalCondition,
         })),
     };
 };
@@ -168,6 +176,7 @@ export const getOdontogramByPatientId = async (
             ...t,
             generalCondition: (t.generalCondition || 'HEALTHY') as DentalCondition,
             surfaces: (t.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
+            rootCondition: (t.rootCondition || 'HEALTHY') as DentalCondition,
         })),
     };
 };
@@ -181,7 +190,8 @@ export const updateToothCondition = async (
     condition: DentalCondition,
     surface: keyof ToothSurfaces | null, // null = update general condition
     userId: string,
-    notes?: string
+    notes?: string,
+    isRoot: boolean = false
 ): Promise<OdontogramTooth> => {
     // Get current tooth state
     const currentTooth = await db.query.odontogramTeeth.findFirst({
@@ -195,16 +205,25 @@ export const updateToothCondition = async (
         throw new Error(`Tooth ${toothNumber} not found in odontogram`);
     }
 
-    const previousCondition = surface
-        ? ((currentTooth.surfaces as ToothSurfaces)?.[surface] || 'HEALTHY')
-        : (currentTooth.generalCondition || 'HEALTHY');
+    let previousCondition: string;
+
+    if (isRoot) {
+        previousCondition = (currentTooth.rootCondition as string) || 'HEALTHY';
+    } else if (surface) {
+        previousCondition = ((currentTooth.surfaces as ToothSurfaces)?.[surface] || 'HEALTHY');
+    } else {
+        previousCondition = (currentTooth.generalCondition || 'HEALTHY');
+    }
 
     // Prepare update data
     let updateData: Record<string, unknown> = {
         updatedAt: new Date(),
     };
 
-    if (surface) {
+    if (isRoot) {
+        // Update root condition
+        updateData.rootCondition = condition;
+    } else if (surface) {
         // Update specific surface
         const currentSurfaces = (currentTooth.surfaces || DEFAULT_SURFACES) as ToothSurfaces;
         updateData.surfaces = {
@@ -232,7 +251,7 @@ export const updateToothCondition = async (
     await db.insert(odontogramHistory).values({
         odontogramId,
         toothNumber,
-        surface: surface || null,
+        surface: isRoot ? 'root' : (surface || null),
         previousCondition: previousCondition as string,
         newCondition: condition,
         changedById: userId,
@@ -252,6 +271,7 @@ export const updateToothCondition = async (
         ...updatedTooth,
         generalCondition: (updatedTooth.generalCondition || 'HEALTHY') as DentalCondition,
         surfaces: (updatedTooth.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
+        rootCondition: (updatedTooth.rootCondition || 'HEALTHY') as DentalCondition,
     };
 };
 
@@ -380,6 +400,7 @@ export const createSnapshot = async (
         toothNumber: t.toothNumber,
         generalCondition: t.generalCondition,
         surfaces: t.surfaces,
+        rootCondition: t.rootCondition,
         notes: t.notes,
     }));
 

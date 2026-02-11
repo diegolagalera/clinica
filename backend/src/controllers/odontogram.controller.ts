@@ -36,7 +36,7 @@ export const getOdontogram = asyncHandler(async (req: AuthenticatedRequest, res:
  */
 export const updateTooth = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { odontogramId, toothNumber } = req.params;
-    const { condition, surface, notes } = req.body;
+    const { condition, surface, isRoot, notes } = req.body;
 
     if (!condition) {
         throw new BadRequestError('La condición es requerida');
@@ -48,7 +48,8 @@ export const updateTooth = asyncHandler(async (req: AuthenticatedRequest, res: R
         condition,
         surface || null,
         req.user!.userId,
-        notes
+        notes,
+        isRoot || false
     );
 
     res.json(success(updatedTooth));

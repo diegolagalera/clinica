@@ -383,6 +383,7 @@ export type DentalCondition =
     | 'HEALTHY'
     | 'CARIES'
     | 'FILLING'
+    | 'TEMPORARY_FILLING'
     | 'CROWN'
     | 'EXTRACTION_INDICATED'
     | 'MISSING'
@@ -392,6 +393,11 @@ export type DentalCondition =
     | 'BRIDGE'
     | 'VENEER'
     | 'SEALANT'
+    | 'EROSION'
+    | 'ABRASION'
+    | 'PERIAPICAL_LESION'
+    | 'ROOT_RESORPTION'
+    | 'ROOT_FRACTURE'
 
 export interface ToothSurfaces {
     mesial: DentalCondition
@@ -407,6 +413,7 @@ export interface OdontogramTooth {
     toothNumber: number
     generalCondition: DentalCondition
     surfaces: ToothSurfaces
+    rootCondition: DentalCondition
     notes: string | null
     createdAt: string
     updatedAt: string

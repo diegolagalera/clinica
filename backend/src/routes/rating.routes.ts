@@ -8,7 +8,7 @@ import {
     getAllRatingRequests,
     sendTestRatingEmail,
 } from '../controllers/rating.controller.js';
-import { authenticate, tenantContext, requireAdmin } from '../middleware/index.js';
+import { authenticate, tenantContext, requirePermission } from '../middleware/index.js';
 
 const router = Router();
 
@@ -28,48 +28,48 @@ router.post('/public/:token', submitRating);
 // These are mounted at /api/ratings in app.ts
 // ============================================================================
 
-// Get clinic rating statistics (ADMIN only)
+// Get clinic rating statistics (ADMIN or workers with 'ratings' permission)
 router.get(
     '/stats',
     authenticate,
     tenantContext,
-    requireAdmin,
+    requirePermission('ratings'),
     getClinicStats
 );
 
-// Get worker rating statistics (ADMIN only)
+// Get worker rating statistics (ADMIN or workers with 'ratings' permission)
 router.get(
     '/worker/:workerId',
     authenticate,
     tenantContext,
-    requireAdmin,
+    requirePermission('ratings'),
     getWorkerStats
 );
 
-// Get recent ratings with comments (ADMIN only)
+// Get recent ratings with comments (ADMIN or workers with 'ratings' permission)
 router.get(
     '/recent',
     authenticate,
     tenantContext,
-    requireAdmin,
+    requirePermission('ratings'),
     getRecentRatings
 );
 
-// Get all rating requests for the clinic (ADMIN only)
+// Get all rating requests for the clinic (ADMIN or workers with 'ratings' permission)
 router.get(
     '/requests',
     authenticate,
     tenantContext,
-    requireAdmin,
+    requirePermission('ratings'),
     getAllRatingRequests
 );
 
-// Send a rating email immediately for testing (ADMIN only)
+// Send a rating email immediately for testing (ADMIN or workers with 'ratings' permission)
 router.post(
     '/test/:appointmentId',
     authenticate,
     tenantContext,
-    requireAdmin,
+    requirePermission('ratings'),
     sendTestRatingEmail
 );
 

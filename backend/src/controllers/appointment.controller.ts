@@ -2,11 +2,13 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { eq, and, count } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { clinics, appointmentStockUsage } from '../db/schema.js';
+import { clinics, appointmentStockUsage, appointments, patients, users, whatsappSettings, notificationLogs } from '../db/schema.js';
+import { WhatsAppService } from '../services/whatsapp.service.js';
 import * as appointmentService from '../services/appointment.service.js';
 import * as notificationService from '../services/notification.service.js';
 import * as ratingService from '../services/rating.service.js';
-import { queueNotification, cancelPendingNotification } from '../services/pending-notification.service.js';
+import { ChatbotConversationService } from '../services/chatbot-conversation.service.js';
+import { queueNotification, cancelPendingNotification, sendWaAppointmentNotification } from '../services/pending-notification.service.js';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
 import { asyncHandler } from '../middleware/index.js';
 import { BadRequestError } from '../utils/errors.js';
@@ -252,6 +254,13 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
                 patientId: result.data.patientId,
                 type: notificationType,
             }).catch(err => logger.error(`Failed to send cancellation notification: ${err.message}`));
+            // Also send WhatsApp cancellation immediately
+            sendWaAppointmentNotification(
+                result.data.id,
+                req.tenantContext.clinicId,
+                result.data.patientId,
+                'CANCELLED'
+            ).catch(err => logger.error(`Failed to send WA cancellation notification: ${err.message}`));
         }
 
         // Create rating request when appointment is marked as COMPLETED
@@ -509,4 +518,182 @@ export const cancelActiveAppointment = asyncHandler(async (req: AuthenticatedReq
     }
 
     res.json(success(result, 'Cita cancelada'));
+});
+
+// ============================================================================
+// WHATSAPP NOTIFICATION
+// ============================================================================
+
+const waNotifySchema = z.object({
+    eventType: z.enum(['CREATED', 'MODIFIED', 'CANCELLED']),
+    templateName: z.string().optional(),
+    languageCode: z.string().default('es'),
+});
+
+/**
+ * POST /appointments/:id/wa-notify
+ * Send a WhatsApp template notification for an appointment
+ */
+export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    if (!req.tenantContext.clinicId) {
+        throw new BadRequestError('Clinic context required');
+    }
+
+    const { id } = req.params;
+    const input = waNotifySchema.parse(req.body);
+    const clinicId = req.tenantContext.clinicId;
+
+    // Get appointment with patient data
+    const appointment = await db.query.appointments.findFirst({
+        where: eq(appointments.id, id!),
+        with: { patient: true, worker: true },
+    });
+
+    if (!appointment) {
+        throw new BadRequestError('Cita no encontrada');
+    }
+
+    // Get patient phone
+    const patient = await db.query.patients.findFirst({
+        where: eq(patients.id, appointment.patientId),
+    });
+
+    if (!patient?.phone) {
+        throw new BadRequestError('El paciente no tiene teléfono registrado');
+    }
+
+    // Get WhatsApp settings
+    const waSettings = await db.query.whatsappSettings.findFirst({
+        where: eq(whatsappSettings.clinicId, clinicId),
+    });
+
+    if (!waSettings?.isConfigured || !waSettings?.isEnabled) {
+        throw new BadRequestError('WhatsApp no está configurado para esta clínica');
+    }
+
+    // Resolve template name
+    let templateName = input.templateName;
+    if (!templateName) {
+        switch (input.eventType) {
+            case 'CREATED':
+                templateName = waSettings.waTemplateCreated || undefined;
+                break;
+            case 'MODIFIED':
+                templateName = waSettings.waTemplateModified || undefined;
+                break;
+            case 'CANCELLED':
+                templateName = waSettings.waTemplateCancelled || undefined;
+                break;
+        }
+    }
+
+    if (!templateName) {
+        throw new BadRequestError(`No hay plantilla configurada para el evento ${input.eventType}`);
+    }
+
+    // Get clinic and worker info for variables
+    const clinic = await db.query.clinics.findFirst({
+        where: eq(clinics.id, clinicId),
+    });
+
+    let doctorName = 'Equipo médico';
+    if (appointment.workerId) {
+        const worker = await db.query.users.findFirst({
+            where: eq(users.id, appointment.workerId),
+        });
+        if (worker) {
+            doctorName = `${worker.firstName} ${worker.lastName}`;
+        }
+    }
+
+    // Format date and time
+    const dateFormatter = new Intl.DateTimeFormat('es-ES', {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    });
+    const timeFormatter = new Intl.DateTimeFormat('es-ES', {
+        hour: '2-digit', minute: '2-digit',
+    });
+
+    const appointmentDate = dateFormatter.format(new Date(appointment.startTime));
+    const appointmentTime = timeFormatter.format(new Date(appointment.startTime));
+
+    // Define all available system variables
+    const variableValues: Record<string, string> = {
+        patient_name: `${patient.firstName} ${patient.lastName}`,
+        appointment_date: appointmentDate,
+        appointment_time: appointmentTime,
+        clinic_name: clinic?.name || 'Clínica',
+        doctor_name: doctorName,
+        clinic_phone: clinic?.phone || '',
+    };
+
+    // Resolve stored mapping for this event type
+    const mappingMap: Record<string, any> = {
+        CREATED: waSettings.waTemplateMappingCreated,
+        MODIFIED: waSettings.waTemplateMappingModified,
+        CANCELLED: waSettings.waTemplateMappingCancelled,
+    };
+    const mapping = mappingMap[input.eventType] as Record<string, string> | null;
+
+    // Build template components from mapping
+    let components: any[] = [];
+    if (mapping && typeof mapping === 'object') {
+        // Sort by key ({{1}}, {{2}}, ...) to ensure correct order
+        const sortedKeys = Object.keys(mapping).sort((a, b) => parseInt(a) - parseInt(b));
+        const bodyParams = sortedKeys.map(key => {
+            const variableKey = mapping[key] ?? '';
+            const value = variableValues[variableKey] || '';
+            return { type: 'text', text: value };
+        });
+        if (bodyParams.length > 0) {
+            components = [{ type: 'body', parameters: bodyParams }];
+        }
+    }
+
+    // Build readable preview for the chat message
+    const eventLabels: Record<string, string> = {
+        'CREATED': '✅ Cita confirmada',
+        'MODIFIED': '📝 Cita modificada',
+        'CANCELLED': '❌ Cita cancelada',
+    };
+    const templateBody = `${eventLabels[input.eventType]}\n📅 ${appointmentDate}\n🕐 ${appointmentTime}\n👤 ${patient.firstName} ${patient.lastName}\n🏥 ${clinic?.name || 'Clínica'}\n👨‍⚕️ ${doctorName}`;
+
+    // Send via ChatbotConversationService
+    const result = await ChatbotConversationService.sendTemplateMessage(
+        clinicId,
+        req.user.userId,
+        patient.phone,
+        templateName,
+        input.languageCode,
+        components,
+        templateBody
+    );
+
+    // Log in notification_logs
+    await db.insert(notificationLogs).values({
+        clinicId,
+        patientId: appointment.patientId,
+        appointmentId: id!,
+        templateType: input.eventType === 'CREATED' ? 'APPOINTMENT_CREATED'
+            : input.eventType === 'MODIFIED' ? 'APPOINTMENT_CREATED'  // Modified reuses created type
+                : 'APPOINTMENT_CANCELLED',
+        channel: 'whatsapp',
+        recipient: patient.phone,
+        subject: templateName,
+        status: 'SENT',
+        sentAt: new Date(),
+    });
+
+    // Update waNotificationSentAt on appointment
+    await db.update(appointments)
+        .set({ waNotificationSentAt: new Date(), updatedAt: new Date() })
+        .where(eq(appointments.id, id!));
+
+    logger.info({ appointmentId: id, eventType: input.eventType, templateName }, 'WhatsApp appointment notification sent');
+
+    res.json(success({
+        sent: true,
+        templateName,
+        conversationId: result.conversation.id,
+    }, 'Notificación WhatsApp enviada'));
 });

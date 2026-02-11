@@ -22,22 +22,22 @@ const getFrontendUrl = (): string => {
 /**
  * Send rating request email to patient
  */
-const sendRatingEmail = async (request: any): Promise<boolean> => {
+const sendRatingEmail = async (request: any): Promise<boolean | 'skip'> => {
     try {
         const patient = request.patient;
         const clinic = request.clinic;
         const appointment = request.appointment;
 
         if (!patient?.email) {
-            logger.warn(`Cannot send rating email for request ${request.id}: Patient has no email`);
-            return false;
+            logger.warn(`Cannot send rating email for request ${request.id}: Patient has no email — marking as SKIPPED`);
+            return 'skip';
         }
 
         // Check if clinic has email settings configured
         const emailSettingsData = await getEmailSettings(request.clinicId);
         if (!emailSettingsData?.isEnabled || !emailSettingsData?.isConfigured) {
-            logger.warn(`Cannot send rating email for request ${request.id}: Clinic email not configured`);
-            return false;
+            logger.warn(`Cannot send rating email for request ${request.id}: Clinic email not configured — marking as SKIPPED`);
+            return 'skip';
         }
 
         // Generate the rating URL
@@ -228,8 +228,14 @@ export const processRatingRequests = async () => {
 
         for (const request of pendingRequests) {
             try {
-                const success = await sendRatingEmail(request);
-                if (success) {
+                const result = await sendRatingEmail(request);
+                if (result === 'skip') {
+                    // Email not configured or patient has no email — skip permanently
+                    await db.update(ratingRequests)
+                        .set({ status: 'SKIPPED' })
+                        .where(eq(ratingRequests.id, request.id));
+                    logger.info(`Rating request ${request.id} marked as SKIPPED (email not available)`);
+                } else if (result === true) {
                     await markRequestAsSent(request.id);
                     logger.info(`Rating request ${request.id} marked as SENT`);
                 }

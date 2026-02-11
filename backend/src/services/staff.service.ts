@@ -58,6 +58,7 @@ export const getStaffByClinic = async (clinicId: string) => {
     const staffFromAssignments = assignments.map(a => ({
         ...a.user,
         clinicRole: a.role,
+        permissions: a.permissions || [],
     }));
 
     // Get users who have this clinic directly in their profile (ADMIN, WORKER with direct clinicId)
@@ -86,6 +87,7 @@ export const getStaffByClinic = async (clinicId: string) => {
             merged.push({
                 ...user,
                 clinicRole: user.role === 'ADMIN' ? 'Administrador' : 'Trabajador',
+                permissions: [] as string[],
             });
         }
     }
@@ -178,6 +180,7 @@ export const getClinicsForWorker = async (userId: string) => {
     return assignments.map(a => ({
         ...a.clinic,
         role: a.role,
+        permissions: a.permissions || [],
     }));
 };
 

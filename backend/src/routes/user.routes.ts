@@ -1,38 +1,38 @@
 import { Router } from 'express';
 import * as userController from '../controllers/user.controller.js';
-import { authenticate, requireSuperAdmin, requireAdmin } from '../middleware/index.js';
+import { authenticate, requireSuperAdmin, requireAdmin, requirePermission } from '../middleware/index.js';
 
 const router = Router();
 
 // All routes require authentication
 router.use(authenticate);
 
-// Get available clinics for user assignment (Admin can see org clinics)
-router.get('/clinics', requireAdmin, userController.getAvailableClinics);
+// Get available clinics for user assignment
+router.get('/clinics', requirePermission('staff'), userController.getAvailableClinics);
 
-// ========= Organization-scoped routes (ADMIN) =========
-// These allow ADMIN to manage users within their organization
+// ========= Organization-scoped routes (ADMIN or WORKER with 'staff' permission) =========
+// These allow ADMIN (and workers with staff permission) to manage users within their organization
 
-// List users in organization (for Admin panel)
-router.get('/org', requireAdmin, userController.listOrgUsers);
+// List users in organization (for Staff panel)
+router.get('/org', requirePermission('staff'), userController.listOrgUsers);
 
-// Get user by ID (Admin can see org users)
-router.get('/org/:id', requireAdmin, userController.getOrgUser);
+// Get user by ID
+router.get('/org/:id', requirePermission('staff'), userController.getOrgUser);
 
 // Create user in organization
-router.post('/org', requireAdmin, userController.createOrgUser);
+router.post('/org', requirePermission('staff'), userController.createOrgUser);
 
 // Update user in organization
-router.put('/org/:id', requireAdmin, userController.updateOrgUser);
+router.put('/org/:id', requirePermission('staff'), userController.updateOrgUser);
 
 // Reset user password in organization
-router.post('/org/:id/reset-password', requireAdmin, userController.resetOrgPassword);
+router.post('/org/:id/reset-password', requirePermission('staff'), userController.resetOrgPassword);
 
 // Toggle user active status in organization
-router.post('/org/:id/toggle-status', requireAdmin, userController.toggleOrgUserStatus);
+router.post('/org/:id/toggle-status', requirePermission('staff'), userController.toggleOrgUserStatus);
 
 // Delete user in organization
-router.delete('/org/:id', requireAdmin, userController.deleteOrgUser);
+router.delete('/org/:id', requirePermission('staff'), userController.deleteOrgUser);
 
 // ========= Global routes (SUPERADMIN only) =========
 // List all users

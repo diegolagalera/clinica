@@ -13,6 +13,7 @@ interface SendMessageResult {
     success: boolean;
     wamid?: string;
     error?: string;
+    errorCode?: number;
 }
 
 /**
@@ -54,6 +55,7 @@ export class WhatsAppService {
                 return {
                     success: false,
                     error: data.error?.message || `HTTP ${response.status}`,
+                    errorCode: data.error?.code,
                 };
             }
 
@@ -110,6 +112,7 @@ export class WhatsAppService {
                 return {
                     success: false,
                     error: data.error?.message || `HTTP ${response.status}`,
+                    errorCode: data.error?.code,
                 };
             }
 

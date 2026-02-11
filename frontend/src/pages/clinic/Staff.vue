@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { api } from '@/services/api'
-import type { User, Clinic, ApiResponse } from '@/types'
+import type { User, Clinic, ApiResponse, ModulePermission } from '@/types'
 import {
   MagnifyingGlassIcon,
   PlusIcon,
@@ -31,11 +31,24 @@ interface StaffMember extends User {
     id: string
     clinicId: string
     role?: string
+    permissions?: string[]
     clinic: Clinic
   }>
   clinic?: Clinic
   isActive?: boolean
+  clinicRole?: string
+  permissions?: string[]
 }
+
+// Available module permissions
+const modulePermissions: { key: ModulePermission; label: string; description: string }[] = [
+  { key: 'whatsapp', label: 'WhatsApp', description: 'Chat, configuración y leads' },
+  { key: 'ratings', label: 'Valoraciones', description: 'Ver y gestionar valoraciones' },
+  { key: 'marketing', label: 'Marketing', description: 'Campañas y plantillas' },
+  { key: 'staff', label: 'Personal', description: 'Gestionar el equipo' },
+  { key: 'stock', label: 'Inventario', description: 'Stock, proveedores y analítica' },
+  { key: 'settings', label: 'Configuración', description: 'SMS, email y ajustes' },
+]
 
 interface PaginatedResponse {
   items: StaffMember[]
@@ -104,6 +117,7 @@ const userForm = ref({
   clinicIds: [] as string[],
   licenseNumber: '',
   specialty: '',
+  clinicPermissions: {} as Record<string, string[]>,
 })
 
 const resetPasswordForm = ref({
@@ -210,6 +224,7 @@ const updateUser = async () => {
       clinicIds: userForm.value.clinicIds,
       licenseNumber: userForm.value.role === 'WORKER' ? userForm.value.licenseNumber || undefined : undefined,
       specialty: userForm.value.role === 'WORKER' ? userForm.value.specialty || undefined : undefined,
+      clinicPermissions: userForm.value.role === 'WORKER' ? userForm.value.clinicPermissions : undefined,
     })
     showEditModal.value = false
     await loadStaff()
@@ -318,6 +333,14 @@ const openEditModal = (member: StaffMember) => {
     }
   }
   
+  // Build per-clinic permissions map
+  const clinicPermissions: Record<string, string[]> = {}
+  if (member.workerClinics) {
+    for (const wc of member.workerClinics) {
+      clinicPermissions[wc.clinicId] = wc.permissions || []
+    }
+  }
+
   userForm.value = {
     email: member.email,
     password: '',
@@ -329,6 +352,7 @@ const openEditModal = (member: StaffMember) => {
     clinicIds,
     licenseNumber: member.staffProfile?.licenseNumber || '',
     specialty: member.staffProfile?.specialty || '',
+    clinicPermissions,
   }
   showEditModal.value = true
 }
@@ -352,8 +376,28 @@ const resetUserForm = () => {
     clinicIds: [],
     licenseNumber: '',
     specialty: '',
+    clinicPermissions: {} as Record<string, string[]>,
   }
   formError.value = ''
+}
+
+const onClinicToggle = (clinicId: string) => {
+  if (!userForm.value.clinicIds.includes(clinicId)) {
+    delete userForm.value.clinicPermissions[clinicId]
+  }
+}
+
+const toggleClinicPermission = (clinicId: string, permKey: string) => {
+  if (!userForm.value.clinicPermissions[clinicId]) {
+    userForm.value.clinicPermissions[clinicId] = []
+  }
+  const perms = userForm.value.clinicPermissions[clinicId]
+  const idx = perms.indexOf(permKey)
+  if (idx >= 0) {
+    perms.splice(idx, 1)
+  } else {
+    perms.push(permKey)
+  }
 }
 
 // Role helpers
@@ -455,7 +499,21 @@ onMounted(async () => {
               </div>
             </td>
             <td class="px-4 py-4">
-              <span :class="getRoleClass(member.role)">{{ getRoleLabel(member.role) }}</span>
+              <div class="flex flex-col gap-1">
+                <span :class="getRoleClass(member.role)">{{ getRoleLabel(member.role) }}</span>
+                <template v-if="member.role === 'WORKER' && member.workerClinics?.some(wc => wc.permissions && wc.permissions.length > 0)">
+                  <div v-for="wc in member.workerClinics?.filter(w => w.permissions && w.permissions.length > 0)" :key="wc.id" class="flex flex-wrap items-center gap-1">
+                    <span class="text-[10px] text-surface-400">{{ wc.clinic?.name }}:</span>
+                    <span 
+                      v-for="p in wc.permissions" 
+                      :key="p"
+                      class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent-100 text-accent-700"
+                    >
+                      {{ modulePermissions.find(mp => mp.key === p)?.label || p }}
+                    </span>
+                  </div>
+                </template>
+              </div>
             </td>
             <td class="px-4 py-4 hidden md:table-cell">
               <div v-if="member.workerClinics && member.workerClinics.length > 0" class="flex flex-wrap gap-1">
@@ -622,23 +680,56 @@ onMounted(async () => {
               
               <div v-if="userForm.role === 'WORKER' || userForm.role === 'ADMIN'">
                 <label class="label">Clínicas asignadas</label>
-                <div class="border border-surface-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-2">
-                  <label 
+                <div class="border border-surface-200 rounded-xl p-3 space-y-1">
+                  <div 
                     v-for="clinic in availableClinics" 
                     :key="clinic.id"
-                    class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-50 cursor-pointer"
+                    class="rounded-lg"
                   >
-                    <input 
-                      type="checkbox" 
-                      :value="clinic.id"
-                      v-model="userForm.clinicIds"
-                      class="w-4 h-4 text-primary-600 border-surface-300 rounded focus:ring-primary-500"
-                    />
-                    <div class="flex items-center gap-2">
-                      <BuildingStorefrontIcon class="w-4 h-4 text-surface-400" />
-                      <span class="text-sm text-surface-700">{{ clinic.name }}</span>
+                    <!-- Clinic checkbox -->
+                    <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-50 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        :value="clinic.id"
+                        v-model="userForm.clinicIds"
+                        class="w-4 h-4 text-primary-600 border-surface-300 rounded focus:ring-primary-500"
+                        @change="onClinicToggle(clinic.id)"
+                      />
+                      <div class="flex items-center gap-2">
+                        <BuildingStorefrontIcon class="w-4 h-4 text-surface-400" />
+                        <span class="text-sm text-surface-700">{{ clinic.name }}</span>
+                      </div>
+                    </label>
+
+                    <!-- Per-clinic permissions (only for WORKER, only if clinic is selected) -->
+                    <div 
+                      v-if="userForm.role === 'WORKER' && userForm.clinicIds.includes(clinic.id)" 
+                      class="ml-9 mb-2 p-2 bg-surface-50 rounded-lg border border-surface-100"
+                    >
+                      <p class="text-xs font-medium text-surface-500 mb-1.5">Permisos en {{ clinic.name }}</p>
+                      <div class="flex flex-wrap gap-2">
+                        <label 
+                          v-for="perm in modulePermissions" 
+                          :key="perm.key"
+                          class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border cursor-pointer transition-colors text-xs"
+                          :class="[
+                            (userForm.clinicPermissions[clinic.id] || []).includes(perm.key)
+                              ? 'bg-primary-50 border-primary-300 text-primary-700'
+                              : 'bg-white border-surface-200 text-surface-500 hover:border-surface-300'
+                          ]"
+                        >
+                          <input 
+                            type="checkbox" 
+                            :value="perm.key"
+                            :checked="(userForm.clinicPermissions[clinic.id] || []).includes(perm.key)"
+                            class="sr-only"
+                            @change="toggleClinicPermission(clinic.id, perm.key)"
+                          />
+                          {{ perm.label }}
+                        </label>
+                      </div>
                     </div>
-                  </label>
+                  </div>
                   <p v-if="availableClinics.length === 0" class="text-sm text-surface-400 text-center py-2">
                     No hay clínicas disponibles
                   </p>

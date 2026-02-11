@@ -60,7 +60,9 @@ const getToothData = (toothNumber: number): OdontogramTooth | null => {
 
 // Load odontogram
 const loadOdontogram = async () => {
-  isLoading.value = true
+  // Only show loading spinner on initial load to prevent scroll reset
+  const isInitialLoad = !odontogram.value
+  if (isInitialLoad) isLoading.value = true
   error.value = ''
   try {
     const response = await api.get<ApiResponse<Odontogram>>(`/odontogram/patient/${props.patientId}`)
@@ -71,7 +73,7 @@ const loadOdontogram = async () => {
     console.error('Error loading odontogram:', err)
     error.value = 'Error al cargar el odontograma'
   } finally {
-    isLoading.value = false
+    if (isInitialLoad) isLoading.value = false
   }
 }
 

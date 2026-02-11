@@ -1,10 +1,10 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { config } from '../config/env.js';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors.js';
 import { db } from '../db/index.js';
-import { users } from '../db/schema.js';
+import { users, workerClinics } from '../db/schema.js';
 import type { AuthenticatedRequest, AccessTokenPayload, Role } from '../types/index.js';
 
 /**
@@ -105,4 +105,66 @@ export const optionalAuth: RequestHandler = (
         // Token invalid but that's okay for optional auth
         next();
     }
+};
+
+/**
+ * Check if user has the required module permission.
+ * - SUPERADMIN and ADMIN always pass (full access).
+ * - WORKER must have the permission in their worker_clinics record for the current clinic.
+ * Must be used AFTER authenticate middleware. Uses X-Clinic-Id header or tenantContext.
+ */
+export const requirePermission = (...permissions: string[]): RequestHandler => {
+    return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+        try {
+            const authReq = req as AuthenticatedRequest;
+            if (!authReq.user) {
+                return next(new UnauthorizedError('Not authenticated'));
+            }
+
+            const { role, userId } = authReq.user;
+
+            // SUPERADMIN and ADMIN always have full access
+            if (role === ('SUPERADMIN' as Role) || role === ('ADMIN' as Role)) {
+                return next();
+            }
+
+            // For WORKER, check permissions in worker_clinics
+            if (role === ('WORKER' as Role)) {
+                // Determine clinic ID from tenant context or header
+                const clinicId = authReq.tenantContext?.clinicId
+                    || req.headers['x-clinic-id'] as string | undefined;
+
+                if (!clinicId) {
+                    return next(new ForbiddenError('No clinic context for permission check'));
+                }
+
+                const assignment = await db.query.workerClinics.findFirst({
+                    where: and(
+                        eq(workerClinics.userId, userId),
+                        eq(workerClinics.clinicId, clinicId),
+                        eq(workerClinics.isActive, true)
+                    ),
+                    columns: { permissions: true },
+                });
+
+                if (!assignment) {
+                    return next(new ForbiddenError('Not assigned to this clinic'));
+                }
+
+                const userPermissions = assignment.permissions || [];
+                const hasRequired = permissions.some(p => userPermissions.includes(p));
+
+                if (!hasRequired) {
+                    return next(new ForbiddenError(`Requires permission: ${permissions.join(' or ')}`));
+                }
+
+                return next();
+            }
+
+            // Any other role — deny
+            return next(new ForbiddenError('Insufficient permissions'));
+        } catch (error) {
+            next(error);
+        }
+    };
 };

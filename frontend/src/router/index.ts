@@ -107,109 +107,109 @@ const routes: RouteRecordRaw[] = [
                 path: 'staff',
                 name: 'clinic-staff',
                 component: ClinicStaff,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { permission: 'staff' }
             },
             { path: 'patients', name: 'clinic-patients', component: ClinicPatients },
             { path: 'patients/:id', name: 'clinic-patient-detail', component: ClinicPatientDetail },
             { path: 'calendar', name: 'clinic-calendar', component: ClinicCalendar },
             { path: 'records', name: 'clinic-records', component: ClinicRecords },
             { path: 'radiographs', name: 'clinic-radiographs', component: ClinicRadiographs },
-            { path: 'inventory', name: 'clinic-inventory', component: ClinicInventory },
-            { path: 'suppliers', name: 'clinic-suppliers', component: ClinicSuppliers },
-            { path: 'stock-packs', name: 'clinic-stock-packs', component: ClinicStockPacks },
-            { path: 'stock-analytics', name: 'clinic-stock-analytics', component: ClinicStockAnalytics },
+            { path: 'inventory', name: 'clinic-inventory', component: ClinicInventory, meta: { permission: 'stock' } },
+            { path: 'suppliers', name: 'clinic-suppliers', component: ClinicSuppliers, meta: { permission: 'stock' } },
+            { path: 'stock-packs', name: 'clinic-stock-packs', component: ClinicStockPacks, meta: { permission: 'stock' } },
+            { path: 'stock-analytics', name: 'clinic-stock-analytics', component: ClinicStockAnalytics, meta: { permission: 'stock' } },
             {
                 path: 'invoices',
                 name: 'clinic-invoices',
                 component: ClinicInvoices,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { roles: [Role.ADMIN] }
             },
             {
                 path: 'notifications',
                 name: 'clinic-notifications',
                 component: ClinicNotifications,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { permission: 'settings' }
             },
             {
                 path: 'notifications/editor/:id?',
                 name: 'clinic-template-editor',
                 component: ClinicTemplateEditor,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { permission: 'settings' }
             },
             {
                 path: 'sms',
                 name: 'clinic-sms',
                 component: ClinicSmsConfig,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { permission: 'settings' }
             },
             {
                 path: 'settings',
                 name: 'clinic-settings',
                 component: ClinicSettings,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { permission: 'settings' }
             },
             {
                 path: 'ratings',
                 name: 'clinic-ratings',
                 component: ClinicRatings,
-                meta: { roles: [Role.ADMIN] } // Only Admin
+                meta: { permission: 'ratings' }
             },
             // Marketing routes
             {
                 path: 'marketing',
                 name: 'clinic-marketing',
                 component: MarketingDashboard,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             {
                 path: 'marketing/templates',
                 name: 'clinic-marketing-templates',
                 component: TemplateLibrary,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             {
                 path: 'marketing/templates/new',
                 name: 'clinic-marketing-template-new',
                 component: MarketingTemplateEditor,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             {
                 path: 'marketing/templates/:id/edit',
                 name: 'clinic-marketing-template-edit',
                 component: MarketingTemplateEditor,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             {
                 path: 'marketing/birthday',
                 name: 'clinic-marketing-birthday',
                 component: BirthdaySettings,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             // Campaign routes
             {
                 path: 'marketing/campaigns/new',
                 name: 'clinic-marketing-campaign-new',
                 component: CampaignEditor,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             {
                 path: 'marketing/campaigns/:id/edit',
                 name: 'clinic-marketing-campaign-edit',
                 component: CampaignEditor,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             // Segment routes
             {
                 path: 'marketing/segments/new',
                 name: 'clinic-marketing-segment-new',
                 component: AudienceBuilder,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
             {
                 path: 'marketing/segments/:id/edit',
                 name: 'clinic-marketing-segment-edit',
                 component: AudienceBuilder,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'marketing' }
             },
 
             // WhatsApp Chatbot routes
@@ -217,25 +217,25 @@ const routes: RouteRecordRaw[] = [
                 path: 'whatsapp',
                 name: 'clinic-whatsapp',
                 component: WhatsAppChat,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'whatsapp' }
             },
             {
                 path: 'whatsapp/settings',
                 name: 'clinic-whatsapp-settings',
                 component: WhatsAppSettings,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'whatsapp' }
             },
             {
                 path: 'whatsapp/knowledge',
                 name: 'clinic-whatsapp-knowledge',
                 component: KnowledgeBase,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'whatsapp' }
             },
             {
                 path: 'whatsapp/leads',
                 name: 'clinic-whatsapp-leads',
                 component: WhatsAppLeads,
-                meta: { roles: [Role.ADMIN] }
+                meta: { permission: 'whatsapp' }
             },
         ],
     },
@@ -291,7 +291,7 @@ const router = createRouter({
 })
 
 // Navigation guards
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
     // Skip auth checks for public routes
     if (to.matched.some(record => record.meta.isPublic)) {
         return next()
@@ -322,6 +322,22 @@ router.beforeEach((to, _from, next) => {
     if (requiredRoles.length > 0 && !authStore.canAccess(requiredRoles)) {
         const redirectPath = getHomeRouteForRole(authStore.userRole!)
         return next(redirectPath)
+    }
+
+    // Check permission-based access
+    const requiredPermission = to.matched.reduce<string | null>((perm, record) => {
+        if (record.meta.permission) {
+            return record.meta.permission as string
+        }
+        return perm
+    }, null)
+
+    if (requiredPermission) {
+        // Wait for permissions to be loaded before checking
+        await authStore.ensurePermissionsLoaded()
+        if (!authStore.hasPermission(requiredPermission as any)) {
+            return next('/clinic/dashboard')
+        }
     }
 
     next()

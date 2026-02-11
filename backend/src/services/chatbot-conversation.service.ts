@@ -10,13 +10,21 @@ import {
     chatQuickReplies,
     clinics,
 } from '../db/schema.js';
-import { eq, and, desc, sql, ilike } from 'drizzle-orm';
+import { eq, and, desc, sql, ilike, isNull } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import { WhatsAppService, type ParsedWebhookMessage } from './whatsapp.service.js';
 import { ChatbotAiService } from './chatbot-ai.service.js';
 import { decrypt } from '../utils/encryption.js';
 import { emitToClinic } from '../websocket.js';
 import * as storage from './storage.service.js';
+
+/**
+ * Normalize a phone number to digits-only (no '+' prefix) so that
+ * +34644404697 and 34644404697 match the same conversation.
+ */
+function normalizePhone(phone: string): string {
+    return phone.replace(/^\+/, '');
+}
 
 // ============================================================================
 // Per-contact rate limiter (in-memory)
@@ -136,19 +144,23 @@ export class ChatbotConversationService {
             conditions.push(eq(chatConversations.controlMode, filters.controlMode as any));
         }
 
-        let query = db
-            .select()
+        const rows = await db
+            .select({
+                conversation: chatConversations,
+                patientFirstName: patients.firstName,
+                patientLastName: patients.lastName,
+            })
             .from(chatConversations)
+            .leftJoin(patients, eq(chatConversations.patientId, patients.id))
             .where(and(...conditions))
             .orderBy(desc(chatConversations.lastMessageAt))
             .limit(filters?.limit || 50)
             .offset(filters?.offset || 0);
 
-        const conversations = await query;
-
-        // Enrich with last message preview
+        // Enrich with last message preview + patient full name
         const enriched = await Promise.all(
-            conversations.map(async (conv) => {
+            rows.map(async (row) => {
+                const conv = row.conversation;
                 const [lastMessage] = await db
                     .select()
                     .from(chatMessages)
@@ -158,6 +170,9 @@ export class ChatbotConversationService {
 
                 return {
                     ...conv,
+                    patientName: row.patientFirstName && row.patientLastName
+                        ? `${row.patientFirstName} ${row.patientLastName}`
+                        : null,
                     lastMessage: lastMessage
                         ? {
                             content: lastMessage.content?.substring(0, 100) || null,
@@ -174,14 +189,25 @@ export class ChatbotConversationService {
     }
 
     static async getConversation(conversationId: string, clinicId: string) {
-        const [conversation] = await db
-            .select()
+        const [row] = await db
+            .select({
+                conversation: chatConversations,
+                patientFirstName: patients.firstName,
+                patientLastName: patients.lastName,
+            })
             .from(chatConversations)
+            .leftJoin(patients, eq(chatConversations.patientId, patients.id))
             .where(and(
                 eq(chatConversations.id, conversationId),
                 eq(chatConversations.clinicId, clinicId)
             ));
-        return conversation || null;
+        if (!row) return null;
+        return {
+            ...row.conversation,
+            patientName: row.patientFirstName && row.patientLastName
+                ? `${row.patientFirstName} ${row.patientLastName}`
+                : null,
+        };
     }
 
     /**
@@ -406,33 +432,35 @@ export class ChatbotConversationService {
         phone: string,
         contactName: string | null,
     ) {
+        const normalized = normalizePhone(phone);
+
         // Check for existing conversation with this phone (one continuous thread per contact)
         const [existing] = await db
             .select()
             .from(chatConversations)
             .where(and(
                 eq(chatConversations.clinicId, clinicId),
-                eq(chatConversations.waContactPhone, phone),
+                eq(chatConversations.waContactPhone, normalized),
             ));
 
         if (existing) return existing;
 
-        // Look up patient by phone
+        // Look up patient by phone (use original phone for patient lookup flexibility)
         const patient = await this.findPatientByPhone(clinicId, phone);
 
         // Look up or create lead if no patient
         let leadId: string | null = null;
         if (!patient) {
-            const lead = await this.findOrCreateLead(clinicId, phone, contactName);
+            const lead = await this.findOrCreateLead(clinicId, normalized, contactName);
             leadId = lead.id;
         }
 
-        // Create new conversation
+        // Create new conversation — always store normalized phone
         const [conversation] = await db.insert(chatConversations).values({
             clinicId,
             patientId: patient?.id || null,
             leadId,
-            waContactPhone: phone,
+            waContactPhone: normalized,
             waContactName: contactName,
             status: 'ACTIVE',
             controlMode: 'AI',
@@ -1046,7 +1074,7 @@ export class ChatbotConversationService {
      */
     static async sendTemplateMessage(
         clinicId: string,
-        userId: string,
+        userId: string | undefined,
         phone: string,
         templateName: string,
         languageCode: string = 'es',
@@ -1059,19 +1087,22 @@ export class ChatbotConversationService {
         }
 
         // Find or create conversation for this phone
-        const conversation = (await this.findOrCreateConversation(clinicId, phone, null))!;
+        const normalizedPhone = normalizePhone(phone);
+        const conversation = (await this.findOrCreateConversation(clinicId, normalizedPhone, null))!;
 
         // Send template via WhatsApp API
         const result = await WhatsAppService.sendTemplateMessage(
             { phoneNumberId: settings.phoneNumberId, accessToken: settings.accessToken },
-            phone,
+            normalizedPhone,
             templateName,
             languageCode,
             components
         );
 
         if (!result.success) {
-            throw new Error(result.error || 'Failed to send template message');
+            const err: any = new Error(result.error || 'Failed to send template message');
+            err.errorCode = result.errorCode;
+            throw err;
         }
 
         // Build a readable preview of the template for the message content
@@ -1087,7 +1118,7 @@ export class ChatbotConversationService {
             wamid: result.wamid || null,
             status: 'SENT',
             isFromAi: false,
-            sentById: userId,
+            sentById: userId ?? null,
             metadata: { templateName, languageCode, components },
         }).returning();
 

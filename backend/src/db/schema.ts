@@ -267,6 +267,7 @@ export const workerClinics = pgTable(
             .notNull()
             .references(() => clinics.id, { onDelete: 'cascade' }),
         role: varchar('role', { length: 50 }), // Optional specific role in this clinic
+        permissions: jsonb('permissions').$type<string[]>().default([]).notNull(), // Module permissions: whatsapp, ratings, marketing, staff, settings
         isActive: boolean('is_active').default(true).notNull(),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -314,6 +315,9 @@ export const patients = pgTable(
         acceptsMarketing: boolean('accepts_marketing').default(true).notNull(),
         acceptsBirthdayEmails: boolean('accepts_birthday_emails').default(true).notNull(),
         marketingUnsubscribeToken: varchar('marketing_unsubscribe_token', { length: 64 }),
+        // WhatsApp availability (null = unknown, true = confirmed, false = not on WA)
+        whatsappAvailable: boolean('whatsapp_available'),
+        whatsappCheckedAt: timestamp('whatsapp_checked_at'),
         isActive: boolean('is_active').default(true).notNull(),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -356,6 +360,7 @@ export const appointments = pgTable(
         startedById: uuid('started_by_id').references(() => users.id), // Who started
         notes: text('notes'),
         reminderSent: boolean('reminder_sent').default(false).notNull(),
+        waNotificationSentAt: timestamp('wa_notification_sent_at'),
         createdById: uuid('created_by_id').references(() => users.id),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -2077,6 +2082,20 @@ export const whatsappSettings = pgTable('whatsapp_settings', {
     inactivityTimeoutHours: integer('inactivity_timeout_hours').default(24).notNull(),
     isEnabled: boolean('is_enabled').default(false).notNull(),
     isConfigured: boolean('is_configured').default(false).notNull(),
+    // WhatsApp appointment notification settings
+    waNotifyEnabled: boolean('wa_notify_enabled').default(false).notNull(),
+    waTemplateCreated: varchar('wa_template_created', { length: 255 }),
+    waTemplateMappingCreated: jsonb('wa_template_mapping_created'),       // { "1": "patient_name", "2": "appointment_date", ... }
+    waTemplateModified: varchar('wa_template_modified', { length: 255 }),
+    waTemplateMappingModified: jsonb('wa_template_mapping_modified'),
+    waTemplateCancelled: varchar('wa_template_cancelled', { length: 255 }),
+    waTemplateMappingCancelled: jsonb('wa_template_mapping_cancelled'),
+    waTemplateReminder24h: varchar('wa_template_reminder_24h', { length: 255 }),
+    waTemplateMappingReminder24h: jsonb('wa_template_mapping_reminder_24h'),
+    waTemplateReminder1h: varchar('wa_template_reminder_1h', { length: 255 }),
+    waTemplateMappingReminder1h: jsonb('wa_template_mapping_reminder_1h'),
+    waReminder24hEnabled: boolean('wa_reminder_24h_enabled').default(false).notNull(),
+    waReminder1hEnabled: boolean('wa_reminder_1h_enabled').default(false).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });

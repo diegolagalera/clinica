@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
 import {
@@ -33,6 +33,85 @@ const form = ref({
 
 const testPhone = ref('')
 const isConfigured = ref(false)
+
+// WA Notification settings
+const waNotifyForm = ref<Record<string, any>>({
+  waNotifyEnabled: false,
+  waTemplateCreated: '',
+  waTemplateMappingCreated: {} as Record<string, string>,
+  waTemplateModified: '',
+  waTemplateMappingModified: {} as Record<string, string>,
+  waTemplateCancelled: '',
+  waTemplateMappingCancelled: {} as Record<string, string>,
+  waTemplateReminder24h: '',
+  waTemplateMappingReminder24h: {} as Record<string, string>,
+  waTemplateReminder1h: '',
+  waTemplateMappingReminder1h: {} as Record<string, string>,
+  waReminder24hEnabled: false,
+  waReminder1hEnabled: false,
+})
+const waTemplates = ref<Array<{ name: string; status: string; language: string; components?: any[] }>>([])
+const savingWaNotify = ref(false)
+
+// System variables available for template mapping
+const SYSTEM_VARIABLES = [
+  { key: 'patient_name', label: 'Nombre del paciente', example: 'Juan García' },
+  { key: 'appointment_date', label: 'Fecha de la cita', example: 'lunes, 10 de febrero de 2026' },
+  { key: 'appointment_time', label: 'Hora de la cita', example: '18:30' },
+  { key: 'clinic_name', label: 'Nombre de la clínica', example: 'Clínica Dental Ejemplo' },
+  { key: 'doctor_name', label: 'Nombre del profesional', example: 'Dr. López' },
+  { key: 'clinic_phone', label: 'Teléfono de la clínica', example: '+34912345678' },
+]
+
+// Get template body text from loaded templates
+const getTemplateBody = (templateName: string): string => {
+  if (!templateName) return ''
+  const tpl = waTemplates.value.find(t => t.name === templateName)
+  if (!tpl?.components) return ''
+  const body = tpl.components.find((c: any) => c.type === 'BODY')
+  return body?.text || ''
+}
+
+// Extract {{N}} placeholders from template body
+const getTemplatePlaceholders = (templateName: string): string[] => {
+  const body = getTemplateBody(templateName)
+  if (!body) return []
+  const matches = body.match(/\{\{\d+\}\}/g)
+  return matches ? [...new Set(matches)].sort((a, b) => parseInt(a.replace(/\D/g, '')) - parseInt(b.replace(/\D/g, ''))) : []
+}
+
+// Check if all event types with selected templates have complete mappings
+const waNotifyValid = computed(() => {
+  const eventTypes = [
+    { template: 'waTemplateCreated', mapping: 'waTemplateMappingCreated' },
+    { template: 'waTemplateModified', mapping: 'waTemplateMappingModified' },
+    { template: 'waTemplateCancelled', mapping: 'waTemplateMappingCancelled' },
+  ]
+  // Check reminders too
+  if (waNotifyForm.value.waReminder24hEnabled) {
+    eventTypes.push({ template: 'waTemplateReminder24h', mapping: 'waTemplateMappingReminder24h' })
+  }
+  if (waNotifyForm.value.waReminder1hEnabled) {
+    eventTypes.push({ template: 'waTemplateReminder1h', mapping: 'waTemplateMappingReminder1h' })
+  }
+
+  for (const { template, mapping } of eventTypes) {
+    const tplName = waNotifyForm.value[template]
+    if (!tplName) continue
+    const placeholders = getTemplatePlaceholders(tplName)
+    const currentMapping = waNotifyForm.value[mapping] || {}
+    for (const ph of placeholders) {
+      const num = ph.replace(/\D/g, '')
+      if (!currentMapping[num]) return false
+    }
+  }
+  return true
+})
+
+// Handle template change — reset mapping if template changes
+const onTemplateChange = (mappingKey: string) => {
+  waNotifyForm.value[mappingKey] = {}
+}
 
 const fetchSettings = async () => {
   loading.value = true
@@ -93,7 +172,51 @@ const testConnection = async () => {
 
 
 
-onMounted(fetchSettings)
+const fetchWaNotifySettings = async () => {
+  try {
+    const res = await api.get<any>('/chatbot/settings/wa-notifications')
+    if (res.data) {
+      waNotifyForm.value.waNotifyEnabled = res.data.waNotifyEnabled ?? false
+      waNotifyForm.value.waTemplateCreated = res.data.waTemplateCreated || ''
+      waNotifyForm.value.waTemplateMappingCreated = res.data.waTemplateMappingCreated || {}
+      waNotifyForm.value.waTemplateModified = res.data.waTemplateModified || ''
+      waNotifyForm.value.waTemplateMappingModified = res.data.waTemplateMappingModified || {}
+      waNotifyForm.value.waTemplateCancelled = res.data.waTemplateCancelled || ''
+      waNotifyForm.value.waTemplateMappingCancelled = res.data.waTemplateMappingCancelled || {}
+      waNotifyForm.value.waTemplateReminder24h = res.data.waTemplateReminder24h || ''
+      waNotifyForm.value.waTemplateMappingReminder24h = res.data.waTemplateMappingReminder24h || {}
+      waNotifyForm.value.waTemplateReminder1h = res.data.waTemplateReminder1h || ''
+      waNotifyForm.value.waTemplateMappingReminder1h = res.data.waTemplateMappingReminder1h || {}
+      waNotifyForm.value.waReminder24hEnabled = res.data.waReminder24hEnabled ?? false
+      waNotifyForm.value.waReminder1hEnabled = res.data.waReminder1hEnabled ?? false
+    }
+  } catch { /* ignore */ }
+}
+
+const fetchWaTemplates = async () => {
+  try {
+    const res = await api.get<any>('/chatbot/templates')
+    waTemplates.value = (res.data || []).filter((t: any) => t.status === 'APPROVED')
+  } catch { waTemplates.value = [] }
+}
+
+const saveWaNotifySettings = async () => {
+  savingWaNotify.value = true
+  try {
+    await api.put('/chatbot/settings/wa-notifications', waNotifyForm.value)
+    toast.success('Configuración de notificaciones guardada')
+  } catch {
+    toast.error('Error al guardar configuración de notificaciones')
+  } finally {
+    savingWaNotify.value = false
+  }
+}
+
+onMounted(() => {
+  fetchSettings()
+  fetchWaNotifySettings()
+  fetchWaTemplates()
+})
 </script>
 
 <template>
@@ -249,6 +372,195 @@ onMounted(fetchSettings)
           <div v-if="testResult" :class="['p-3 rounded-lg text-sm', testResult.success ? 'bg-green-50 text-green-700' : 'bg-danger-50 text-danger-700']">
             {{ testResult.success ? '✅ Mensaje de prueba enviado correctamente' : `❌ Error: ${testResult.error}` }}
           </div>
+        </div>
+      </div>
+
+      <!-- Appointment Notification Settings -->
+      <div class="card" v-if="isConfigured">
+        <div class="p-5 border-b border-surface-100">
+          <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-surface-500" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+            </svg>
+            <h2 class="font-semibold text-surface-900">Notificaciones de Citas por WhatsApp</h2>
+          </div>
+          <p class="text-xs text-surface-500 mt-1">Envía notificaciones automáticas a pacientes vía WhatsApp cuando se crean, modifican o cancelan citas.</p>
+        </div>
+        <div class="p-5 space-y-5">
+          <!-- Enable toggle -->
+          <div class="flex items-center justify-between p-3 bg-surface-50 rounded-lg">
+            <div>
+              <p class="text-sm font-medium text-surface-800">Notificaciones activadas</p>
+              <p class="text-xs text-surface-500">Muestra la opción de enviar WhatsApp al crear o editar citas</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input v-model="waNotifyForm.waNotifyEnabled" type="checkbox" class="sr-only peer" />
+              <div class="w-11 h-6 bg-surface-300 peer-focus:outline-none rounded-full peer peer-checked:bg-green-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+            </label>
+          </div>
+
+          <template v-if="waNotifyForm.waNotifyEnabled">
+            <!-- Event templates -->
+            <div class="space-y-4">
+              <h3 class="text-sm font-medium text-surface-700">Plantillas por evento</h3>
+              
+              <!-- Cita creada -->
+              <div class="space-y-2">
+                <label class="block text-xs font-medium text-surface-600">✅ Cita creada</label>
+                <select v-model="waNotifyForm.waTemplateCreated" @change="onTemplateChange('waTemplateMappingCreated')" class="input w-full text-sm">
+                  <option value="">Sin plantilla</option>
+                  <option v-for="t in waTemplates" :key="t.name" :value="t.name">{{ t.name }} ({{ t.language }})</option>
+                </select>
+                <!-- Template preview + variable mapping -->
+                <div v-if="waNotifyForm.waTemplateCreated && getTemplateBody(waNotifyForm.waTemplateCreated)" class="ml-2 p-3 bg-surface-50 rounded-lg border border-surface-200 space-y-3">
+                  <p class="text-xs text-surface-500 font-medium">Vista previa de la plantilla:</p>
+                  <p class="text-xs text-surface-700 whitespace-pre-line bg-white p-2 rounded border border-surface-100">{{ getTemplateBody(waNotifyForm.waTemplateCreated) }}</p>
+                  <div v-if="getTemplatePlaceholders(waNotifyForm.waTemplateCreated).length" class="space-y-2">
+                    <p class="text-xs font-medium text-surface-600">Asignar variables:</p>
+                    <div v-for="ph in getTemplatePlaceholders(waNotifyForm.waTemplateCreated)" :key="ph" class="flex items-center gap-2">
+                      <span class="text-xs font-mono bg-amber-100 text-amber-800 px-2 py-0.5 rounded min-w-[50px] text-center">{{ ph }}</span>
+                      <span class="text-xs text-surface-400">=</span>
+                      <select v-model="waNotifyForm.waTemplateMappingCreated[ph.replace(/\D/g, '')]" class="input text-xs flex-1">
+                        <option value="">— Seleccionar variable —</option>
+                        <option v-for="sv in SYSTEM_VARIABLES" :key="sv.key" :value="sv.key">{{ sv.label }} (ej: {{ sv.example }})</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Cita modificada -->
+              <div class="space-y-2">
+                <label class="block text-xs font-medium text-surface-600">📝 Cita modificada</label>
+                <select v-model="waNotifyForm.waTemplateModified" @change="onTemplateChange('waTemplateMappingModified')" class="input w-full text-sm">
+                  <option value="">Sin plantilla</option>
+                  <option v-for="t in waTemplates" :key="t.name" :value="t.name">{{ t.name }} ({{ t.language }})</option>
+                </select>
+                <div v-if="waNotifyForm.waTemplateModified && getTemplateBody(waNotifyForm.waTemplateModified)" class="ml-2 p-3 bg-surface-50 rounded-lg border border-surface-200 space-y-3">
+                  <p class="text-xs text-surface-500 font-medium">Vista previa de la plantilla:</p>
+                  <p class="text-xs text-surface-700 whitespace-pre-line bg-white p-2 rounded border border-surface-100">{{ getTemplateBody(waNotifyForm.waTemplateModified) }}</p>
+                  <div v-if="getTemplatePlaceholders(waNotifyForm.waTemplateModified).length" class="space-y-2">
+                    <p class="text-xs font-medium text-surface-600">Asignar variables:</p>
+                    <div v-for="ph in getTemplatePlaceholders(waNotifyForm.waTemplateModified)" :key="ph" class="flex items-center gap-2">
+                      <span class="text-xs font-mono bg-amber-100 text-amber-800 px-2 py-0.5 rounded min-w-[50px] text-center">{{ ph }}</span>
+                      <span class="text-xs text-surface-400">=</span>
+                      <select v-model="waNotifyForm.waTemplateMappingModified[ph.replace(/\D/g, '')]" class="input text-xs flex-1">
+                        <option value="">— Seleccionar variable —</option>
+                        <option v-for="sv in SYSTEM_VARIABLES" :key="sv.key" :value="sv.key">{{ sv.label }} (ej: {{ sv.example }})</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Cita cancelada -->
+              <div class="space-y-2">
+                <label class="block text-xs font-medium text-surface-600">❌ Cita cancelada</label>
+                <select v-model="waNotifyForm.waTemplateCancelled" @change="onTemplateChange('waTemplateMappingCancelled')" class="input w-full text-sm">
+                  <option value="">Sin plantilla</option>
+                  <option v-for="t in waTemplates" :key="t.name" :value="t.name">{{ t.name }} ({{ t.language }})</option>
+                </select>
+                <div v-if="waNotifyForm.waTemplateCancelled && getTemplateBody(waNotifyForm.waTemplateCancelled)" class="ml-2 p-3 bg-surface-50 rounded-lg border border-surface-200 space-y-3">
+                  <p class="text-xs text-surface-500 font-medium">Vista previa de la plantilla:</p>
+                  <p class="text-xs text-surface-700 whitespace-pre-line bg-white p-2 rounded border border-surface-100">{{ getTemplateBody(waNotifyForm.waTemplateCancelled) }}</p>
+                  <div v-if="getTemplatePlaceholders(waNotifyForm.waTemplateCancelled).length" class="space-y-2">
+                    <p class="text-xs font-medium text-surface-600">Asignar variables:</p>
+                    <div v-for="ph in getTemplatePlaceholders(waNotifyForm.waTemplateCancelled)" :key="ph" class="flex items-center gap-2">
+                      <span class="text-xs font-mono bg-amber-100 text-amber-800 px-2 py-0.5 rounded min-w-[50px] text-center">{{ ph }}</span>
+                      <span class="text-xs text-surface-400">=</span>
+                      <select v-model="waNotifyForm.waTemplateMappingCancelled[ph.replace(/\D/g, '')]" class="input text-xs flex-1">
+                        <option value="">— Seleccionar variable —</option>
+                        <option v-for="sv in SYSTEM_VARIABLES" :key="sv.key" :value="sv.key">{{ sv.label }} (ej: {{ sv.example }})</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Reminder settings -->
+            <div class="space-y-3 pt-3 border-t border-surface-100">
+              <h3 class="text-sm font-medium text-surface-700">Recordatorios automáticos</h3>
+              
+              <!-- 24h reminder -->
+              <div class="flex items-center justify-between p-3 bg-surface-50 rounded-lg">
+                <div>
+                  <p class="text-sm font-medium text-surface-800">Recordatorio 24h antes</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input v-model="waNotifyForm.waReminder24hEnabled" type="checkbox" class="sr-only peer" />
+                  <div class="w-11 h-6 bg-surface-300 peer-focus:outline-none rounded-full peer peer-checked:bg-green-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <div v-if="waNotifyForm.waReminder24hEnabled" class="space-y-2">
+                <label class="block text-xs font-medium text-surface-600">Plantilla recordatorio 24h</label>
+                <select v-model="waNotifyForm.waTemplateReminder24h" @change="onTemplateChange('waTemplateMappingReminder24h')" class="input w-full text-sm">
+                  <option value="">Sin plantilla</option>
+                  <option v-for="t in waTemplates" :key="t.name" :value="t.name">{{ t.name }} ({{ t.language }})</option>
+                </select>
+                <div v-if="waNotifyForm.waTemplateReminder24h && getTemplateBody(waNotifyForm.waTemplateReminder24h)" class="ml-2 p-3 bg-surface-50 rounded-lg border border-surface-200 space-y-3">
+                  <p class="text-xs text-surface-500 font-medium">Vista previa de la plantilla:</p>
+                  <p class="text-xs text-surface-700 whitespace-pre-line bg-white p-2 rounded border border-surface-100">{{ getTemplateBody(waNotifyForm.waTemplateReminder24h) }}</p>
+                  <div v-if="getTemplatePlaceholders(waNotifyForm.waTemplateReminder24h).length" class="space-y-2">
+                    <p class="text-xs font-medium text-surface-600">Asignar variables:</p>
+                    <div v-for="ph in getTemplatePlaceholders(waNotifyForm.waTemplateReminder24h)" :key="ph" class="flex items-center gap-2">
+                      <span class="text-xs font-mono bg-amber-100 text-amber-800 px-2 py-0.5 rounded min-w-[50px] text-center">{{ ph }}</span>
+                      <span class="text-xs text-surface-400">=</span>
+                      <select v-model="waNotifyForm.waTemplateMappingReminder24h[ph.replace(/\D/g, '')]" class="input text-xs flex-1">
+                        <option value="">— Seleccionar variable —</option>
+                        <option v-for="sv in SYSTEM_VARIABLES" :key="sv.key" :value="sv.key">{{ sv.label }} (ej: {{ sv.example }})</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 1h reminder -->
+              <div class="flex items-center justify-between p-3 bg-surface-50 rounded-lg">
+                <div>
+                  <p class="text-sm font-medium text-surface-800">Recordatorio 1h antes</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input v-model="waNotifyForm.waReminder1hEnabled" type="checkbox" class="sr-only peer" />
+                  <div class="w-11 h-6 bg-surface-300 peer-focus:outline-none rounded-full peer peer-checked:bg-green-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-full"></div>
+                </label>
+              </div>
+              <div v-if="waNotifyForm.waReminder1hEnabled" class="space-y-2">
+                <label class="block text-xs font-medium text-surface-600">Plantilla recordatorio 1h</label>
+                <select v-model="waNotifyForm.waTemplateReminder1h" @change="onTemplateChange('waTemplateMappingReminder1h')" class="input w-full text-sm">
+                  <option value="">Sin plantilla</option>
+                  <option v-for="t in waTemplates" :key="t.name" :value="t.name">{{ t.name }} ({{ t.language }})</option>
+                </select>
+                <div v-if="waNotifyForm.waTemplateReminder1h && getTemplateBody(waNotifyForm.waTemplateReminder1h)" class="ml-2 p-3 bg-surface-50 rounded-lg border border-surface-200 space-y-3">
+                  <p class="text-xs text-surface-500 font-medium">Vista previa de la plantilla:</p>
+                  <p class="text-xs text-surface-700 whitespace-pre-line bg-white p-2 rounded border border-surface-100">{{ getTemplateBody(waNotifyForm.waTemplateReminder1h) }}</p>
+                  <div v-if="getTemplatePlaceholders(waNotifyForm.waTemplateReminder1h).length" class="space-y-2">
+                    <p class="text-xs font-medium text-surface-600">Asignar variables:</p>
+                    <div v-for="ph in getTemplatePlaceholders(waNotifyForm.waTemplateReminder1h)" :key="ph" class="flex items-center gap-2">
+                      <span class="text-xs font-mono bg-amber-100 text-amber-800 px-2 py-0.5 rounded min-w-[50px] text-center">{{ ph }}</span>
+                      <span class="text-xs text-surface-400">=</span>
+                      <select v-model="waNotifyForm.waTemplateMappingReminder1h[ph.replace(/\D/g, '')]" class="input text-xs flex-1">
+                        <option value="">— Seleccionar variable —</option>
+                        <option v-for="sv in SYSTEM_VARIABLES" :key="sv.key" :value="sv.key">{{ sv.label }} (ej: {{ sv.example }})</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Validation warning -->
+            <div v-if="!waNotifyValid" class="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <p class="text-xs text-amber-800">⚠️ Debes asignar una variable del sistema a cada <code class="bg-amber-100 px-1 rounded" v-pre>{{N}}</code> de las plantillas seleccionadas para poder guardar.</p>
+            </div>
+
+            <!-- Save WA notifications -->
+            <div class="flex justify-end pt-2">
+              <button @click="saveWaNotifySettings" class="btn-primary px-6" :disabled="savingWaNotify || !waNotifyValid">
+                {{ savingWaNotify ? 'Guardando...' : 'Guardar notificaciones' }}
+              </button>
+            </div>
+          </template>
         </div>
       </div>
     </template>

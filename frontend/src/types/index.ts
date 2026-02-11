@@ -51,6 +51,9 @@ export interface Organization {
     updatedAt: string
 }
 
+// Module Permissions
+export type ModulePermission = 'whatsapp' | 'ratings' | 'marketing' | 'staff' | 'settings' | 'stock'
+
 // Clinic
 export interface Clinic {
     id: string
@@ -67,6 +70,7 @@ export interface Clinic {
     isActive: boolean
     aiEnabled?: boolean
     aiMonthlyTokenLimit?: number
+    permissions?: ModulePermission[]
     createdAt: string
     updatedAt: string
 }
@@ -95,6 +99,7 @@ export interface Patient {
     insuranceNumber?: string
     consentGiven: boolean
     consentDate?: string
+    whatsappAvailable?: boolean | null
     isActive: boolean
     createdAt: string
     updatedAt: string
@@ -150,6 +155,8 @@ export interface Appointment {
     patient?: Patient
     worker?: User  // Legacy primary worker
     appointmentWorkers?: AppointmentWorker[]  // All assigned workers
+    // Notification tracking
+    waNotificationSentAt?: string | null
     createdAt: string
     updatedAt: string
 }

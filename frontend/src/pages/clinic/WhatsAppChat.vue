@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
 import { onSocketEvent } from '@/services/websocket'
@@ -27,12 +28,15 @@ import {
   PlusIcon,
   ChatBubbleLeftEllipsisIcon,
   TrashIcon,
+  UserIcon,
 } from '@heroicons/vue/24/outline'
 import {
   ChatBubbleLeftRightIcon as ChatBubbleLeftRightSolidIcon,
 } from '@heroicons/vue/24/solid'
 
 const toast = useToast()
+const router = useRouter()
+const route = useRoute()
 
 // State
 const conversations = ref<any[]>([])
@@ -74,6 +78,7 @@ const filteredConversations = computed(() => {
   if (searchQuery.value) {
     const q = searchQuery.value.toLowerCase()
     result = result.filter(c =>
+      (c.patientName || '').toLowerCase().includes(q) ||
       (c.waContactName || '').toLowerCase().includes(q) ||
       (c.waContactPhone || '').includes(q)
     )
@@ -317,7 +322,7 @@ const formatTime = (date: string) => {
 }
 
 const getContactInitials = (conv: any) => {
-  const name = conv.waContactName || conv.waContactPhone || '?'
+  const name = conv.patientName || conv.waContactName || conv.waContactPhone || '?'
   return name.substring(0, 2).toUpperCase()
 }
 
@@ -526,10 +531,29 @@ const fetchAiStatus = async () => {
   } catch { /* ignore */ }
 }
 
-onMounted(() => {
-  fetchConversations()
+onMounted(async () => {
+  await fetchConversations()
   loadQuickReplies()
   fetchAiStatus()
+
+  // Auto-select conversation matching phone query param (from PatientDetail link)
+  const phoneParam = route.query.phone as string | undefined
+  if (phoneParam) {
+    const normalizedPhone = phoneParam.replace(/^\+/, '')
+    const match = conversations.value.find(c => {
+      const convPhone = (c.waContactPhone || '').replace(/^\+/, '')
+      return convPhone === normalizedPhone
+    })
+    if (match) {
+      selectConversation(match)
+    } else {
+      // No existing conversation — open template modal with phone pre-filled
+      await openTemplateModal()
+      templatePhone.value = phoneParam
+    }
+    // Clean up query param so it doesn't persist on refresh
+    router.replace({ query: {} })
+  }
 
   // WebSocket listeners (no polling)
   unsubNewMessage = onSocketEvent('chatbot:new-message', handleNewMessage as (data: unknown) => void)
@@ -687,7 +711,7 @@ watch(filterMode, () => fetchConversations())
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between">
                 <span class="font-medium text-sm text-surface-900 truncate">
-                  {{ conv.waContactName || conv.waContactPhone }}
+                  {{ conv.patientName || conv.waContactName || conv.waContactPhone }}
                 </span>
                 <span class="text-[10px] text-surface-400 ml-2 flex-shrink-0">
                   {{ formatTime(conv.lastMessageAt) }}
@@ -737,12 +761,22 @@ watch(filterMode, () => fetchConversations())
               </div>
               <div>
                 <h3 class="font-semibold text-sm text-surface-900">
-                  {{ selectedConversation.waContactName || selectedConversation.waContactPhone }}
+                  {{ selectedConversation.patientName || selectedConversation.waContactName || selectedConversation.waContactPhone }}
                 </h3>
                 <div class="flex items-center gap-2 text-xs text-surface-500">
                   <PhoneIcon class="w-3 h-3" />
                   {{ selectedConversation.waContactPhone }}
-                  <span v-if="selectedConversation.patientId" class="text-blue-600 font-medium">• Paciente</span>
+                  <template v-if="selectedConversation.patientId">
+                    <span class="text-blue-600 font-medium">• Paciente</span>
+                    <button
+                      @click="router.push(`/clinic/patients/${selectedConversation.patientId}`)"
+                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 transition-colors font-medium"
+                      title="Ver ficha del paciente"
+                    >
+                      <UserIcon class="w-3 h-3" />
+                      Ver ficha
+                    </button>
+                  </template>
                   <span v-else class="text-amber-600 font-medium">• Lead</span>
                 </div>
               </div>

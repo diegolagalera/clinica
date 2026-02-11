@@ -1,21 +1,26 @@
 import cron from 'node-cron';
 import { db } from '../db/index.js';
-import { appointments, clinics, emailSettings, notificationLogs } from '../db/schema.js';
+import { appointments, clinics, emailSettings, notificationLogs, whatsappSettings, patients, users } from '../db/schema.js';
 import { and, eq, gte, lte, isNull, ne, desc, sql } from 'drizzle-orm';
 import { sendAppointmentNotification } from '../services/notification.service.js';
+import { ChatbotConversationService } from '../services/chatbot-conversation.service.js';
 import { processPendingNotifications } from '../services/pending-notification.service.js';
 import { logger } from '../utils/logger.js';
 
 /**
  * Check if reminder was already sent for this appointment
  */
-const wasReminderSent = async (appointmentId: string, templateType: string): Promise<boolean> => {
+const wasReminderSent = async (appointmentId: string, templateType: string, channel?: string): Promise<boolean> => {
+    const conditions = [
+        eq(notificationLogs.appointmentId, appointmentId),
+        eq(notificationLogs.templateType, templateType as any),
+        eq(notificationLogs.status, 'SENT'),
+    ];
+    if (channel) {
+        conditions.push(eq(notificationLogs.channel, channel as any));
+    }
     const existing = await db.query.notificationLogs.findFirst({
-        where: and(
-            eq(notificationLogs.appointmentId, appointmentId),
-            eq(notificationLogs.templateType, templateType as any),
-            eq(notificationLogs.status, 'SENT')
-        ),
+        where: and(...conditions),
     });
     return !!existing;
 };
@@ -57,6 +62,9 @@ export const processReminders = async () => {
             logger.error(`Error processing reminders for clinic ${settings.clinicId}: ${err.message}`);
         }
     }
+
+    // Also process WhatsApp reminders for clinics that have WA enabled
+    await processWhatsAppReminders(now);
 
     logger.info('Reminder processing complete');
 };
@@ -110,6 +118,166 @@ const processReminderType = async (clinicId: string, type: '24h' | '1h', now: Da
             logger.info(`Sent ${type} reminder for appointment ${appointment.id}`);
         } catch (err: any) {
             logger.error(`Failed to send reminder for appointment ${appointment.id}: ${err.message}`);
+        }
+    }
+};
+
+/**
+ * Process WhatsApp reminders for all clinics that have WA notifications enabled
+ */
+const processWhatsAppReminders = async (now: Date) => {
+    // Get clinics with WA notifications enabled
+    const waSettingsList = await db.query.whatsappSettings.findMany({
+        where: and(
+            eq(whatsappSettings.isEnabled, true),
+            eq(whatsappSettings.isConfigured, true),
+            eq(whatsappSettings.waNotifyEnabled, true),
+        ),
+    });
+
+    for (const waSettings of waSettingsList) {
+        try {
+            // 24h WhatsApp reminder
+            if (waSettings.waReminder24hEnabled && waSettings.waTemplateReminder24h) {
+                await processWaReminderType(waSettings.clinicId, '24h', now, waSettings.waTemplateReminder24h, waSettings.waTemplateMappingReminder24h as Record<string, string> | null);
+            }
+
+            // 1h WhatsApp reminder
+            if (waSettings.waReminder1hEnabled && waSettings.waTemplateReminder1h) {
+                await processWaReminderType(waSettings.clinicId, '1h', now, waSettings.waTemplateReminder1h, waSettings.waTemplateMappingReminder1h as Record<string, string> | null);
+            }
+        } catch (err: any) {
+            logger.error(`Error processing WA reminders for clinic ${waSettings.clinicId}: ${err.message}`);
+        }
+    }
+};
+
+/**
+ * Process WhatsApp reminder for a specific type
+ */
+const processWaReminderType = async (clinicId: string, type: '24h' | '1h', now: Date, templateName: string, mapping: Record<string, string> | null) => {
+    const hoursBefore = type === '24h' ? 24 : 1;
+    const reminderType = type === '24h' ? 'APPOINTMENT_REMINDER_24H' : 'APPOINTMENT_REMINDER_1H';
+
+    const targetTimeStart = new Date(now);
+    targetTimeStart.setHours(targetTimeStart.getHours() + hoursBefore);
+
+    const targetTimeEnd = new Date(targetTimeStart);
+    targetTimeEnd.setMinutes(targetTimeEnd.getMinutes() + 10);
+
+    const pendingAppointments = await db.query.appointments.findMany({
+        where: and(
+            eq(appointments.clinicId, clinicId),
+            gte(appointments.startTime, targetTimeStart),
+            lte(appointments.startTime, targetTimeEnd),
+            ne(appointments.status, 'CANCELLED'),
+            ne(appointments.status, 'NO_SHOW'),
+            ne(appointments.status, 'COMPLETED'),
+        ),
+    });
+
+    if (pendingAppointments.length === 0) return;
+
+    // Get clinic data for template variables
+    const clinic = await db.query.clinics.findFirst({
+        where: eq(clinics.id, clinicId),
+    });
+
+    for (const appointment of pendingAppointments) {
+        try {
+            // Check if WA reminder was already sent for this appointment+type
+            const alreadySent = await wasReminderSent(appointment.id, reminderType, 'whatsapp');
+            if (alreadySent) {
+                logger.info(`WA reminder ${type} already sent for appointment ${appointment.id}, skipping`);
+                continue;
+            }
+
+            // Get patient with phone
+            const patient = await db.query.patients.findFirst({
+                where: eq(patients.id, appointment.patientId),
+            });
+
+            if (!patient?.phone) {
+                logger.info(`No phone for patient ${appointment.patientId}, skipping WA reminder`);
+                continue;
+            }
+
+            // Get worker name
+            let doctorName = 'Equipo médico';
+            if (appointment.workerId) {
+                const worker = await db.query.users.findFirst({
+                    where: eq(users.id, appointment.workerId),
+                });
+                if (worker) {
+                    doctorName = `${worker.firstName} ${worker.lastName}`;
+                }
+            }
+
+            // Format date/time
+            const dateFormatter = new Intl.DateTimeFormat('es-ES', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+            });
+            const timeFormatter = new Intl.DateTimeFormat('es-ES', {
+                hour: '2-digit', minute: '2-digit',
+            });
+
+            const appointmentDate = dateFormatter.format(new Date(appointment.startTime));
+            const appointmentTime = timeFormatter.format(new Date(appointment.startTime));
+
+            // Define all available system variables
+            const variableValues: Record<string, string> = {
+                patient_name: `${patient.firstName} ${patient.lastName}`,
+                appointment_date: appointmentDate,
+                appointment_time: appointmentTime,
+                clinic_name: clinic?.name || 'Clínica',
+                doctor_name: doctorName,
+                clinic_phone: clinic?.phone || '',
+            };
+
+            // Build template components from mapping
+            let components: any[] = [];
+            if (mapping && typeof mapping === 'object') {
+                const sortedKeys = Object.keys(mapping).sort((a, b) => parseInt(a) - parseInt(b));
+                const bodyParams = sortedKeys.map(key => {
+                    const variableKey = mapping[key] ?? '';
+                    const value = variableValues[variableKey] || '';
+                    return { type: 'text', text: value };
+                });
+                if (bodyParams.length > 0) {
+                    components = [{ type: 'body', parameters: bodyParams }];
+                }
+            }
+
+            const reminderLabel = type === '24h' ? '⏰ Recordatorio 24h' : '⏰ Recordatorio 1h';
+            const templateBody = `${reminderLabel}\n📅 ${appointmentDate}\n🕐 ${appointmentTime}\n👤 ${patient.firstName} ${patient.lastName}\n🏥 ${clinic?.name || 'Clínica'}\n👨‍⚕️ ${doctorName}`;
+
+            // Send via ChatbotConversationService (userId null for automated)
+            await ChatbotConversationService.sendTemplateMessage(
+                clinicId,
+                '', // system-sent, no user id
+                patient.phone,
+                templateName,
+                'es',
+                components,
+                templateBody
+            );
+
+            // Log in notification_logs
+            await db.insert(notificationLogs).values({
+                clinicId,
+                patientId: appointment.patientId,
+                appointmentId: appointment.id,
+                templateType: reminderType as any,
+                channel: 'whatsapp',
+                recipient: patient.phone,
+                subject: templateName,
+                status: 'SENT',
+                sentAt: new Date(),
+            });
+
+            logger.info(`WA ${type} reminder sent for appointment ${appointment.id}`);
+        } catch (err: any) {
+            logger.error(`Failed to send WA reminder for appointment ${appointment.id}: ${err.message}`);
         }
     }
 };

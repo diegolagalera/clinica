@@ -67,6 +67,13 @@ router.put('/:id/real-time', appointmentController.updateRealTime);
 router.post('/:id/reset-time', appointmentController.resetRealTime);
 
 // ============================================================================
+// WHATSAPP NOTIFICATION
+// ============================================================================
+
+// Send WhatsApp notification for an appointment
+router.post('/:id/wa-notify', appointmentController.sendWaNotification);
+
+// ============================================================================
 // APPOINTMENT STOCK USAGE
 // ============================================================================
 

@@ -45,7 +45,7 @@ const DEFAULT_TEMPLATES: Record<EmailTemplateType, { name: string; subject: stri
             { id: '1', type: 'text', content: '<h2 style="color: #0891b2;">¡Cita confirmada!</h2>', align: 'center' },
             { id: '2', type: 'text', content: '<p>Hola <strong>{{patient_name}}</strong>,</p><p>Tu cita ha sido programada con éxito.</p>' },
             { id: '3', type: 'divider' },
-            { id: '4', type: 'text', content: '<p><strong>📅 Fecha:</strong> {{appointment_date}}</p><p><strong>🕐 Hora:</strong> {{appointment_time}}</p><p><strong>🏥 Clínica:</strong> {{clinic_name}}</p><p><strong>👨‍⚕️ Profesional:</strong> {{doctor_name}}</p>' },
+            { id: '4', type: 'text', content: '<p><strong>📅 Fecha:</strong> {{appointment_date}}</p><p><strong>🕐 Hora:</strong> {{appointment_time}}</p><p><strong>🏥 Clínica:</strong> {{clinic_name}}</p>' },
             { id: '5', type: 'divider' },
             { id: '6', type: 'text', content: '<p style="color: #6b7280; font-size: 14px;">Si necesitas cancelar o modificar tu cita, por favor contacta con nosotros.</p>' },
             { id: '7', type: 'text', content: '<p style="color: #6b7280; font-size: 12px;">{{clinic_name}} | {{clinic_phone}}</p>', align: 'center' },

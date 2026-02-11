@@ -135,20 +135,21 @@ Citas con mail
 -testar citas con valoraciones 
 -testar recordatorios de citas 1h, 24h 
 
--que roles vamos a tener? que puede ver cada quien?
+-que roles vamos a tener? que puede ver cada quien? ✅
 
 -ia con faqd sobre la aplicacion? ✅
 
 -base de datos separados...
--como medir el consumo de ia ?
+-como medir el consumo de ia ? ✅
 
--testear personalidad chatboot ia 
+-testear personalidad chatboot ia ✅
 
--tema de roles de la aplicacion, como lo montamos?....
+-tema de roles de la aplicacion, como lo montamos?.... ✅
 
 -Crear recordatorio si alguien no firma el registro clinico de un paciente en 24H
 
 -firma electronica
+-mostrar nombre completo en whatsapp y link para ir al paciente
 
 -nueva conversacion de whatsapp desde el la vista del paciente
 

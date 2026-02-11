@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import * as smsController from '../controllers/sms.controller.js';
-import { authenticate, requireAdmin, tenantContext, requireClinicContext } from '../middleware/index.js';
+import { authenticate, requirePermission, tenantContext, requireClinicContext } from '../middleware/index.js';
 
 const router = Router();
 
-// All routes require authentication and admin role
+// All routes require authentication and settings permission
 router.use(authenticate);
 router.use(tenantContext);
-router.use(requireAdmin);
+router.use(requirePermission('settings'));
 router.use(requireClinicContext);
 
 // SMS Settings

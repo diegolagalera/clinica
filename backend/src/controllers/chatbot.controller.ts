@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { encrypt } from '../utils/encryption.js';
 import { logger } from '../utils/logger.js';
 import { AiUsageService } from '../services/ai-usage.service.js';
+import { authenticate, requirePermission } from '../middleware/index.js';
 
 const router = Router();
 
@@ -62,7 +63,9 @@ const extractClinicId = (req: Request, res: Response, next: NextFunction): void 
     next();
 };
 
+router.use(authenticate);
 router.use(extractClinicId);
+router.use(requirePermission('whatsapp'));
 
 // ============================================================================
 // AI STATUS
@@ -869,6 +872,93 @@ router.post('/leads/:id/convert', async (req: Request, res: Response): Promise<v
         res.json({ data: result });
     } catch (error) {
         res.status(500).json({ error: 'Failed to convert lead' });
+    }
+});
+
+// ============================================================================
+// WHATSAPP APPOINTMENT NOTIFICATION SETTINGS
+// ============================================================================
+
+// GET /api/v1/chatbot/settings/wa-notifications — Get WA notification config
+router.get('/settings/wa-notifications', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        const settings = await db.query.whatsappSettings.findFirst({
+            where: eq(whatsappSettings.clinicId, clinicId),
+        });
+
+        if (!settings) {
+            res.json({ data: null });
+            return;
+        }
+
+        res.json({
+            data: {
+                waNotifyEnabled: settings.waNotifyEnabled,
+                waTemplateCreated: settings.waTemplateCreated,
+                waTemplateMappingCreated: settings.waTemplateMappingCreated,
+                waTemplateModified: settings.waTemplateModified,
+                waTemplateMappingModified: settings.waTemplateMappingModified,
+                waTemplateCancelled: settings.waTemplateCancelled,
+                waTemplateMappingCancelled: settings.waTemplateMappingCancelled,
+                waTemplateReminder24h: settings.waTemplateReminder24h,
+                waTemplateMappingReminder24h: settings.waTemplateMappingReminder24h,
+                waTemplateReminder1h: settings.waTemplateReminder1h,
+                waTemplateMappingReminder1h: settings.waTemplateMappingReminder1h,
+                waReminder24hEnabled: settings.waReminder24hEnabled,
+                waReminder1hEnabled: settings.waReminder1hEnabled,
+            },
+        });
+    } catch (error) {
+        logger.error({ error }, 'Failed to fetch WA notification settings');
+        res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+// PUT /api/v1/chatbot/settings/wa-notifications — Update WA notification config
+router.put('/settings/wa-notifications', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const clinicId = (req as any).clinicId as string;
+        const {
+            waNotifyEnabled,
+            waTemplateCreated,
+            waTemplateMappingCreated,
+            waTemplateModified,
+            waTemplateMappingModified,
+            waTemplateCancelled,
+            waTemplateMappingCancelled,
+            waTemplateReminder24h,
+            waTemplateMappingReminder24h,
+            waTemplateReminder1h,
+            waTemplateMappingReminder1h,
+            waReminder24hEnabled,
+            waReminder1hEnabled,
+        } = req.body;
+
+        await db.update(whatsappSettings)
+            .set({
+                waNotifyEnabled: waNotifyEnabled ?? false,
+                waTemplateCreated: waTemplateCreated || null,
+                waTemplateMappingCreated: waTemplateMappingCreated || null,
+                waTemplateModified: waTemplateModified || null,
+                waTemplateMappingModified: waTemplateMappingModified || null,
+                waTemplateCancelled: waTemplateCancelled || null,
+                waTemplateMappingCancelled: waTemplateMappingCancelled || null,
+                waTemplateReminder24h: waTemplateReminder24h || null,
+                waTemplateMappingReminder24h: waTemplateMappingReminder24h || null,
+                waTemplateReminder1h: waTemplateReminder1h || null,
+                waTemplateMappingReminder1h: waTemplateMappingReminder1h || null,
+                waReminder24hEnabled: waReminder24hEnabled ?? false,
+                waReminder1hEnabled: waReminder1hEnabled ?? false,
+                updatedAt: new Date(),
+            })
+            .where(eq(whatsappSettings.clinicId, clinicId));
+
+        logger.info({ clinicId }, 'WA notification settings updated');
+        res.json({ success: true });
+    } catch (error) {
+        logger.error({ error }, 'Failed to update WA notification settings');
+        res.status(500).json({ error: 'Failed to update settings' });
     }
 });
 

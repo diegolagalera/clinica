@@ -35,6 +35,7 @@ import {
   ExclamationCircleIcon,
   EyeIcon,
   SparklesIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 
 interface ClinicalRecord {
@@ -194,8 +195,11 @@ const realTimeForm = ref({
 // Rating requests tracking
 const ratingRequestsSent = ref<Record<string, boolean>>({})
 const sendingRatingFor = ref<string | null>(null)
+const sendingWaNotifyFor = ref<string | null>(null)
 const showRatingConfirmModal = ref(false)
 const pendingRatingAppointmentId = ref<string | null>(null)
+const showCancelConfirmModal = ref(false)
+const pendingCancelAppointment = ref<Appointment | null>(null)
 const isEmailEnabled = ref(true) // Will be checked on load
 
 // Workers list
@@ -750,13 +754,26 @@ const closeAppointmentModal = () => {
   selectedAppointment.value = null
 }
 
-const cancelAppointment = async (apt: Appointment) => {
-  if (!confirm('¿Cancelar esta cita?')) return
+const cancelAppointment = (apt: Appointment) => {
+  pendingCancelAppointment.value = apt
+  showCancelConfirmModal.value = true
+}
+
+const closeCancelConfirmModal = () => {
+  showCancelConfirmModal.value = false
+  pendingCancelAppointment.value = null
+}
+
+const confirmCancelAppointment = async () => {
+  if (!pendingCancelAppointment.value) return
   try {
-    await api.delete(`/appointments/${apt.id}`)
+    await api.delete(`/appointments/${pendingCancelAppointment.value.id}`)
     await loadAppointments()
+    toast.success('Cita cancelada correctamente')
   } catch (err: any) {
     error.value = err.response?.data?.message || 'Error cancelling appointment'
+  } finally {
+    closeCancelConfirmModal()
   }
 }
 
@@ -870,6 +887,22 @@ const confirmSendRatingRequest = async () => {
   } finally {
     sendingRatingFor.value = null
     pendingRatingAppointmentId.value = null
+  }
+}
+
+// Send WhatsApp notification for an appointment
+const sendWaNotify = async (apt: any) => {
+  sendingWaNotifyFor.value = apt.id
+  try {
+    await api.post(`/appointments/${apt.id}/wa-notify`, {
+      eventType: 'CREATED',
+    })
+    apt.waNotificationSentAt = new Date().toISOString()
+    toast.success('Notificación WhatsApp enviada')
+  } catch (err: any) {
+    toast.error(err.response?.data?.error || 'Error al enviar notificación WhatsApp')
+  } finally {
+    sendingWaNotifyFor.value = null
   }
 }
 
@@ -1847,6 +1880,25 @@ onUnmounted(() => {
             <span v-if="patient.phone" class="flex items-center gap-1 text-surface-500">
               <PhoneIcon class="w-4 h-4" />
               {{ patient.phone }}
+              <!-- WhatsApp unavailable warning -->
+              <span v-if="patient.whatsappAvailable === false" class="relative group ml-0.5">
+                <span class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-600 cursor-help">
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
+                </span>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none z-50">
+                  Este número no existe en WhatsApp
+                  <div class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-surface-800"></div>
+                </div>
+              </span>
+              <router-link
+                v-if="authStore.hasPermission('whatsapp')"
+                :to="`/clinic/whatsapp?phone=${encodeURIComponent(patient.phone)}`"
+                class="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-green-50 text-green-600 hover:bg-green-100 hover:text-green-700 transition-colors text-xs font-medium"
+                title="Ver conversación de WhatsApp"
+              >
+                <ChatBubbleLeftRightIcon class="w-3.5 h-3.5" />
+                WhatsApp
+              </router-link>
             </span>
           </div>
         </div>
@@ -2260,7 +2312,7 @@ onUnmounted(() => {
           <div 
             v-for="apt in appointments" 
             :key="apt.id"
-            class="card flex items-center gap-4 p-4"
+            class="card flex items-center gap-4 p-4 !overflow-visible"
           >
             <div class="w-14 h-14 rounded-xl bg-primary-100 flex flex-col items-center justify-center text-primary-700">
               <span class="text-lg font-semibold">{{ new Date(apt.startTime).getDate() }}</span>
@@ -2287,6 +2339,34 @@ onUnmounted(() => {
               ]">
                 {{ getStatusLabel(apt.status) }}
               </span>
+              <!-- WhatsApp notification status -->
+              <template v-if="authStore.hasPermission('whatsapp')">
+                <!-- Already sent -->
+                <div v-if="apt.waNotificationSentAt" class="relative group">
+                  <span class="p-2 text-green-500 inline-flex">
+                    <ChatBubbleLeftRightIcon class="w-4 h-4" />
+                  </span>
+                  <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                    WA enviada: {{ new Date(apt.waNotificationSentAt).toLocaleString('es-ES') }}
+                    <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                  </div>
+                </div>
+                <!-- Not sent — send button (only for SCHEDULED appointments) -->
+                <div v-else-if="apt.status === 'SCHEDULED'" class="relative group">
+                  <button
+                    @click="sendWaNotify(apt)"
+                    :disabled="sendingWaNotifyFor === apt.id"
+                    class="p-2 text-surface-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                  >
+                    <ChatBubbleLeftRightIcon v-if="sendingWaNotifyFor !== apt.id" class="w-4 h-4" />
+                    <div v-else class="w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin"></div>
+                  </button>
+                  <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                    Enviar notificación WhatsApp
+                    <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                  </div>
+                </div>
+              </template>
               <!-- Send rating button for completed appointments -->
               <!-- Disabled when email not enabled - with visible tooltip -->
               <div 
@@ -2299,55 +2379,79 @@ onUnmounted(() => {
                 >
                   <StarIcon class="w-4 h-4" />
                 </button>
-                <div class="absolute right-full top-1/2 -translate-y-1/2 mr-2 px-3 py-2 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
                   Email no configurado
-                  <div class="absolute left-full top-1/2 -translate-y-1/2 border-4 border-transparent border-l-gray-800"></div>
+                  <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
                 </div>
               </div>
               <!-- Active button when email is enabled -->
-              <button 
+              <div 
                 v-else-if="apt.status === 'COMPLETED' && isAdmin && !ratingRequestsSent[apt.id]"
-                @click="openRatingConfirmModal(apt.id)"
-                :disabled="sendingRatingFor === apt.id"
-                class="p-2 text-amber-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
-                title="Enviar email de valoración"
+                class="relative group"
               >
-                <StarIcon v-if="sendingRatingFor !== apt.id" class="w-4 h-4" />
-                <div v-else class="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
-              </button>
-              <span 
+                <button 
+                  @click="openRatingConfirmModal(apt.id)"
+                  :disabled="sendingRatingFor === apt.id"
+                  class="p-2 text-amber-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg"
+                >
+                  <StarIcon v-if="sendingRatingFor !== apt.id" class="w-4 h-4" />
+                  <div v-else class="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+                </button>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Enviar email de valoración
+                  <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
+              <div 
                 v-else-if="apt.status === 'COMPLETED' && ratingRequestsSent[apt.id]"
-                class="p-2 text-green-500"
-                title="Email de valoración enviado"
+                class="relative group"
               >
-                <StarIcon class="w-4 h-4" />
-              </span>
+                <span class="p-2 text-green-500 inline-flex">
+                  <StarIcon class="w-4 h-4" />
+                </span>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Valoración enviada ✓
+                  <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
               <!-- View details button for completed appointments (available to all) -->
-              <button 
-                v-if="apt.status === 'COMPLETED' && !isAdmin"
-                @click="openEditAppointmentModal(apt)" 
-                class="p-2 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg"
-                title="Ver detalles de la cita"
-              >
-                <EyeIcon class="w-4 h-4" />
-              </button>
+              <div v-if="apt.status === 'COMPLETED' && !isAdmin" class="relative group">
+                <button 
+                  @click="openEditAppointmentModal(apt)" 
+                  class="p-2 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg"
+                >
+                  <EyeIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Ver detalles
+                  <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
               <!-- Edit button (only for admin on completed, or anyone on non-completed) -->
-              <button 
-                v-if="canEditAppointment(apt)"
-                @click="openEditAppointmentModal(apt)" 
-                class="p-2 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg"
-                title="Editar cita"
-              >
-                <PencilIcon class="w-4 h-4" />
-              </button>
-              <button 
-                v-if="canDeleteAppointment(apt)"
-                @click="cancelAppointment(apt)" 
-                class="p-2 text-surface-400 hover:text-danger-600 hover:bg-danger-50 rounded-lg"
-                title="Cancelar cita"
-              >
-                <XMarkIcon class="w-4 h-4" />
-              </button>
+              <div v-if="canEditAppointment(apt)" class="relative group">
+                <button 
+                  @click="openEditAppointmentModal(apt)" 
+                  class="p-2 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg"
+                >
+                  <PencilIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Editar cita
+                  <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
+              <div v-if="canDeleteAppointment(apt)" class="relative group">
+                <button 
+                  @click="cancelAppointment(apt)" 
+                  class="p-2 text-surface-400 hover:text-danger-600 hover:bg-danger-50 rounded-lg"
+                >
+                  <XMarkIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-surface-800 text-white text-xs rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Cancelar cita
+                  <div class="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3376,6 +3480,46 @@ onUnmounted(() => {
                 class="btn-primary flex-1"
               >
                 Enviar Email
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Cancel Appointment Confirmation Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showCancelConfirmModal" 
+        class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
+        @click.self="closeCancelConfirmModal"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div class="text-center">
+            <div class="w-12 h-12 bg-danger-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <XMarkIcon class="w-6 h-6 text-danger-500" />
+            </div>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Cancelar cita</h3>
+            <p class="text-surface-600 mb-1">
+              ¿Estás seguro de que quieres cancelar esta cita?
+            </p>
+            <p v-if="pendingCancelAppointment" class="text-sm text-surface-500 mb-6">
+              {{ pendingCancelAppointment.title || pendingCancelAppointment.type }} — 
+              {{ new Date(pendingCancelAppointment.startTime).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }) }}
+              a las {{ new Date(pendingCancelAppointment.startTime).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) }}
+            </p>
+            <div class="flex gap-3">
+              <button 
+                @click="closeCancelConfirmModal" 
+                class="btn-secondary flex-1"
+              >
+                Volver
+              </button>
+              <button 
+                @click="confirmCancelAppointment" 
+                class="btn-danger flex-1"
+              >
+                Cancelar cita
               </button>
             </div>
           </div>

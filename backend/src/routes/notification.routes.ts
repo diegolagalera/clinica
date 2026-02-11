@@ -1,16 +1,16 @@
 import { Router } from 'express';
 import * as notificationController from '../controllers/notification.controller.js';
-import { authenticate, requireAdmin, tenantContext, requireClinicContext } from '../middleware/index.js';
+import { authenticate, requirePermission, tenantContext, requireClinicContext } from '../middleware/index.js';
 
 const router = Router();
 
 // Status check - available to all authenticated users
 router.get('/status', authenticate, tenantContext, requireClinicContext, notificationController.getStatus);
 
-// All other routes require admin role
+// All other routes require settings permission
 router.use(authenticate);
 router.use(tenantContext);
-router.use(requireAdmin);
+router.use(requirePermission('settings'));
 router.use(requireClinicContext);
 
 // Email Settings

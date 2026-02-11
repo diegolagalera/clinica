@@ -4,7 +4,7 @@ import * as stockController from '../controllers/stock.controller.js';
 import * as stockPacksController from '../controllers/stock-packs.controller.js';
 import * as stockReportsController from '../controllers/stock-reports.controller.js';
 import * as supplierController from '../controllers/supplier.controller.js';
-import { authenticate, requireStaff, tenantContext, requireAdmin } from '../middleware/index.js';
+import { authenticate, requireStaff, tenantContext, requireAdmin, requirePermission } from '../middleware/index.js';
 
 const router = Router();
 const upload = multer({
@@ -20,6 +20,9 @@ const upload = multer({
     }
 });
 
+// Helper: stock permission guard for write/admin operations
+const stockPerm = requirePermission('stock');
+
 // =================================================================
 // PUBLIC ROUTES (before auth middleware)
 // =================================================================
@@ -27,63 +30,66 @@ const upload = multer({
 // Get item image (public so it can be used in <img> tags)
 router.get('/items/:id/image', stockController.getItemImage);
 
-// All routes below require authentication, staff role, and tenant context
+// All routes below require authentication + staff role + tenant context.
+// READ endpoints use requireStaff so any worker can access stock data
+// (needed by patient/appointment views for stock consumption).
+// WRITE/ADMIN endpoints additionally require the 'stock' permission.
 router.use(authenticate);
 router.use(requireStaff);
 router.use(tenantContext);
 
 // ============================================================================
-// STOCK REPORTS
+// STOCK REPORTS  (require 'stock' permission)
 // ============================================================================
 
 // Stock summary
-router.get('/reports/summary', stockReportsController.getStockSummary);
+router.get('/reports/summary', stockPerm, stockReportsController.getStockSummary);
 
 // Low stock items
-router.get('/reports/low-stock', stockReportsController.getLowStockItems);
+router.get('/reports/low-stock', stockPerm, stockReportsController.getLowStockItems);
 
 // Consumption report
-router.get('/reports/consumption', stockReportsController.getConsumptionReport);
+router.get('/reports/consumption', stockPerm, stockReportsController.getConsumptionReport);
 
 // Consumption by patient
-router.get('/reports/consumption/by-patient', stockReportsController.getConsumptionByPatient);
+router.get('/reports/consumption/by-patient', stockPerm, stockReportsController.getConsumptionByPatient);
 
 // Movement history
-router.get('/reports/movements', stockReportsController.getMovementsReport);
+router.get('/reports/movements', stockPerm, stockReportsController.getMovementsReport);
 
 // Expiring items
-router.get('/reports/expiring', stockReportsController.getExpiringItems);
+router.get('/reports/expiring', stockPerm, stockReportsController.getExpiringItems);
 
 // ============================================================================
-// SUPPLIERS
+// SUPPLIERS  (require 'stock' permission for all operations)
 // ============================================================================
 
 // List suppliers (with search)
-router.get('/suppliers', supplierController.listSuppliers);
+router.get('/suppliers', stockPerm, supplierController.listSuppliers);
 
 // Get all suppliers (for dropdown, no pagination)
-router.get('/suppliers/all', supplierController.getAllSuppliers);
+router.get('/suppliers/all', stockPerm, supplierController.getAllSuppliers);
 
 // Get single supplier
-router.get('/suppliers/:id', supplierController.getSupplier);
+router.get('/suppliers/:id', stockPerm, supplierController.getSupplier);
 
 // Get items for a supplier
-router.get('/suppliers/:id/items', supplierController.getSupplierItems);
+router.get('/suppliers/:id/items', stockPerm, supplierController.getSupplierItems);
 
-// Create supplier (admin only)
-router.post('/suppliers', requireAdmin, supplierController.createSupplier);
+// Create supplier
+router.post('/suppliers', stockPerm, supplierController.createSupplier);
 
-// Update supplier (admin only)
-router.put('/suppliers/:id', requireAdmin, supplierController.updateSupplier);
+// Update supplier
+router.put('/suppliers/:id', stockPerm, supplierController.updateSupplier);
 
-// Delete supplier (admin only)
-router.delete('/suppliers/:id', requireAdmin, supplierController.deleteSupplier);
+// Delete supplier
+router.delete('/suppliers/:id', stockPerm, supplierController.deleteSupplier);
 
 // ============================================================================
-// INVENTORY ITEMS
+// INVENTORY ITEMS — READ (any staff)
 // ============================================================================
 
-// List items (with filters)
+// List items (with filters) — needed by patient/appointment views
 router.get('/items', stockController.listItems);
 
 // Get categories
@@ -92,38 +98,42 @@ router.get('/items/categories', stockController.getCategories);
 // Get single item
 router.get('/items/:id', stockController.getItem);
 
-// Get item movement history
-router.get('/items/:id/movements', stockController.getItemMovements);
+// Get item movement history (stock perm — admin view)
+router.get('/items/:id/movements', stockPerm, stockController.getItemMovements);
 
-// Create item (admin only)
-router.post('/items', requireAdmin, stockController.createItem);
+// ============================================================================
+// INVENTORY ITEMS — WRITE (require 'stock' permission)
+// ============================================================================
 
-// Update item (admin only)
-router.put('/items/:id', requireAdmin, stockController.updateItem);
+// Create item
+router.post('/items', stockPerm, stockController.createItem);
 
-// Delete item (admin only)
-router.delete('/items/:id', requireAdmin, stockController.deleteItem);
+// Update item
+router.put('/items/:id', stockPerm, stockController.updateItem);
+
+// Delete item
+router.delete('/items/:id', stockPerm, stockController.deleteItem);
 
 // Adjust stock
-router.post('/items/:id/adjust', stockController.adjustStock);
+router.post('/items/:id/adjust', stockPerm, stockController.adjustStock);
 
-// Upload item image (admin only)
-router.post('/items/:id/image', requireAdmin, upload.single('image'), stockController.uploadItemImage);
+// Upload item image
+router.post('/items/:id/image', stockPerm, upload.single('image'), stockController.uploadItemImage);
 
-// Delete item image (admin only)
-router.delete('/items/:id/image', requireAdmin, stockController.deleteItemImage);
+// Delete item image
+router.delete('/items/:id/image', stockPerm, stockController.deleteItemImage);
 
 // Generate AI image (preview only, returns URL)
-router.post('/items/generate-image', requireAdmin, stockController.generateItemImage);
+router.post('/items/generate-image', stockPerm, stockController.generateItemImage);
 
 // Generate AI image for existing item and save it
-router.post('/items/:id/generate-image', requireAdmin, stockController.generateAndSaveItemImage);
+router.post('/items/:id/generate-image', stockPerm, stockController.generateAndSaveItemImage);
 
 // ============================================================================
-// STOCK PACKS
+// STOCK PACKS — READ (any staff)
 // ============================================================================
 
-// List packs
+// List packs — needed by patient/appointment views
 router.get('/packs', stockPacksController.listPacks);
 
 // Get pack categories
@@ -132,19 +142,23 @@ router.get('/packs/categories', stockPacksController.getPackCategories);
 // Get single pack with items
 router.get('/packs/:id', stockPacksController.getPack);
 
-// Create pack (admin only)
-router.post('/packs', requireAdmin, stockPacksController.createPack);
+// ============================================================================
+// STOCK PACKS — WRITE (require 'stock' permission)
+// ============================================================================
 
-// Update pack (admin only)
-router.put('/packs/:id', requireAdmin, stockPacksController.updatePack);
+// Create pack
+router.post('/packs', stockPerm, stockPacksController.createPack);
 
-// Delete pack (admin only)
-router.delete('/packs/:id', requireAdmin, stockPacksController.deletePack);
+// Update pack
+router.put('/packs/:id', stockPerm, stockPacksController.updatePack);
 
-// Add item to pack (admin only)
-router.post('/packs/:id/items', requireAdmin, stockPacksController.addPackItem);
+// Delete pack
+router.delete('/packs/:id', stockPerm, stockPacksController.deletePack);
 
-// Remove item from pack (admin only)
-router.delete('/packs/:id/items/:itemId', requireAdmin, stockPacksController.removePackItem);
+// Add item to pack
+router.post('/packs/:id/items', stockPerm, stockPacksController.addPackItem);
+
+// Remove item from pack
+router.delete('/packs/:id/items/:itemId', stockPerm, stockPacksController.removePackItem);
 
 export default router;

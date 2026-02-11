@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '@/services/api'
-import type { User, AuthTokens, LoginResponse, Role, ApiResponse, Clinic, Organization } from '@/types'
+import type { User, AuthTokens, LoginResponse, Role, ApiResponse, Clinic, Organization, ModulePermission } from '@/types'
 import router from '@/router'
 
 const ACCESS_TOKEN_KEY = 'dental_erp_access_token'
@@ -21,6 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
     const currentOrganization = ref<Organization | null>(null)
     const isLoading = ref(false)
     const error = ref<string | null>(null)
+    let _permissionsPromise: Promise<void> | null = null
     const requires2FA = ref(false)
     const tempEmail = ref<string | null>(null)
     const tempPassword = ref<string | null>(null)
@@ -241,8 +242,32 @@ export const useAuthStore = defineStore('auth', () => {
         return hasRole(...requiredRoles)
     }
 
+    const hasPermission = (permission: ModulePermission): boolean => {
+        if (!user.value) return false
+        // ADMIN and SUPERADMIN always have full access
+        if (user.value.role === 'ADMIN' || user.value.role === 'SUPERADMIN') return true
+        // For WORKER, check current clinic's permissions
+        const clinic = currentClinic.value
+        if (!clinic?.permissions) return false
+        return clinic.permissions.includes(permission)
+    }
+
+    // Ensure permissions have been loaded (for route guard)
+    const ensurePermissionsLoaded = (): Promise<void> => {
+        if (!user.value) return Promise.resolve()
+        if (availableClinics.value.length > 0) return Promise.resolve()
+        if (_permissionsPromise) return _permissionsPromise
+        _permissionsPromise = loadUserContext()
+        return _permissionsPromise
+    }
+
     // Initialize on store creation
     init()
+
+    // Eagerly start loading permissions if authenticated
+    if (user.value) {
+        _permissionsPromise = loadUserContext()
+    }
 
     return {
         // State
@@ -277,5 +302,7 @@ export const useAuthStore = defineStore('auth', () => {
         selectOrganization,
         hasRole,
         canAccess,
+        hasPermission,
+        ensurePermissionsLoaded,
     }
 })

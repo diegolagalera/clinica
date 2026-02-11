@@ -87,26 +87,20 @@ const toggleSidebar = () => {
 }
 
 const navigation = computed(() => {
-  const baseNav = [
-    { name: 'Dashboard', href: '/clinic/dashboard', icon: HomeIcon, adminOnly: false, disabled: false },
-    { name: 'Agenda', href: '/clinic/calendar', icon: CalendarDaysIcon, adminOnly: false, disabled: false },
-    { name: 'Pacientes', href: '/clinic/patients', icon: UserGroupIcon, adminOnly: false, disabled: false },
-    { name: 'Inventario', href: '/clinic/inventory', icon: CubeIcon, adminOnly: false, disabled: false },
+  const allNav = [
+    { name: 'Dashboard', href: '/clinic/dashboard', icon: HomeIcon, permission: null, disabled: false },
+    { name: 'Agenda', href: '/clinic/calendar', icon: CalendarDaysIcon, permission: null, disabled: false },
+    { name: 'Pacientes', href: '/clinic/patients', icon: UserGroupIcon, permission: null, disabled: false },
+    { name: 'Inventario', href: '/clinic/inventory', icon: CubeIcon, permission: 'stock' as const, disabled: false },
+    { name: 'Personal', href: '/clinic/staff', icon: UsersIcon, permission: 'staff' as const, disabled: false },
+    { name: 'Marketing', href: '/clinic/marketing', icon: EnvelopeIcon, permission: 'marketing' as const, disabled: true },
+    { name: 'WhatsApp', href: '/clinic/whatsapp', icon: ChatBubbleLeftRightIcon, permission: 'whatsapp' as const, disabled: false },
+    { name: 'Valoraciones', href: '/clinic/ratings', icon: StarIcon, permission: 'ratings' as const, disabled: false },
+    { name: 'Configuración', href: '/clinic/settings', icon: Cog6ToothIcon, permission: 'settings' as const, disabled: false },
   ]
 
-  // Admin-only items
-  if (authStore.isAdmin) {
-    baseNav.push(
-      { name: 'Personal', href: '/clinic/staff', icon: UsersIcon, adminOnly: true, disabled: false },
-      { name: 'Marketing', href: '/clinic/marketing', icon: EnvelopeIcon, adminOnly: true, disabled: true },
-      { name: 'WhatsApp', href: '/clinic/whatsapp', icon: ChatBubbleLeftRightIcon, adminOnly: true, disabled: false },
-      // { name: 'Facturación', href: '/clinic/invoices', icon: DocumentTextIcon, adminOnly: true }, // TODO: Enable when billing is developed
-      { name: 'Valoraciones', href: '/clinic/ratings', icon: StarIcon, adminOnly: true, disabled: false },
-      { name: 'Configuración', href: '/clinic/settings', icon: Cog6ToothIcon, adminOnly: true, disabled: false },
-    )
-  }
-
-  return baseNav
+  // Filter: show items that have no permission requirement OR the user has the permission
+  return allNav.filter(item => !item.permission || authStore.hasPermission(item.permission))
 })
 
 const isActiveRoute = (href: string) => {
@@ -335,7 +329,7 @@ const changePassword = async () => {
           >
             <component :is="item.icon" class="w-5 h-5 flex-shrink-0" />
             <span v-if="!sidebarCollapsed">{{ item.name }}</span>
-            <span v-if="item.adminOnly && !sidebarCollapsed" class="ml-auto badge badge-primary text-[10px]">Admin</span>
+            <span v-if="item.permission && !sidebarCollapsed" class="ml-auto badge badge-primary text-[10px]">Pro</span>
           </RouterLink>
         </template>
       </nav>

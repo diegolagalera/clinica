@@ -152,36 +152,118 @@ Es un diagrama interactivo de la dentadura del paciente donde puedes registrar e
 1. Ve a Configuración > Email
 2. Configura los datos SMTP (host, puerto, usuario, contraseña)
 3. Prueba la conexión con el botón "Enviar email de prueba"
+4. Puedes personalizar las plantillas de email para citas, cancelaciones, etc.
 
-### Notificaciones automáticas:
-- Se pueden activar recordatorios de citas por email/SMS
-- Recordatorio 24h antes y 1h antes (configurables)
+### Notificaciones automáticas de citas:
+El sistema envía notificaciones automáticas cuando:
+- **Se crea una cita nueva:** Email + SMS + WhatsApp (si están configurados)
+- **Se modifica la hora/fecha de una cita:** Email + WhatsApp (con debounce de 5 minutos)
+- **Se cancela una cita:** Email + WhatsApp inmediatamente
+
+#### Sistema de debounce (antirrebote):
+- Cuando se modifica una cita, el sistema **espera 5 minutos** antes de enviar la notificación
+- Si se vuelve a modificar en esos 5 minutos, se reinicia el temporizador
+- Esto evita enviar múltiples notificaciones si se realizan varios cambios seguidos
+- Solo se envía la notificación final con los datos actualizados
 
 ### Campañas de marketing:
 1. Ve a Marketing > Campañas
 2. Crea una nueva campaña
-3. Diseña el email con el editor
+3. Diseña el email con el editor visual drag-and-drop
 4. Selecciona los destinatarios (segmentos de pacientes)
 5. Programa o envía inmediatamente
 
 ### Felicitaciones de cumpleaños:
 - Se pueden configurar emails automáticos de cumpleaños
 - Ve a Marketing > Cumpleaños
+- Activa/desactiva y personaliza el mensaje
+
+### Preferencias de marketing del paciente:
+- Cada paciente tiene un toggle "Acepta emails de marketing"
+- Se configura al crear o editar el paciente
+- Solo los pacientes que aceptan recibirán campañas y felicitaciones
+
+---
+
+## 💬 WHATSAPP
+
+### ¿Qué es el módulo de WhatsApp?
+CUSPIA integra WhatsApp Business API para comunicación directa con pacientes. Incluye:
+- Chat en tiempo real con los pacientes
+- Chatbot con IA que responde automáticamente
+- Envío de plantillas de notificación (citas, cancelaciones, etc.)
+- Gestión de leads (pacientes potenciales)
+- Base de conocimiento para el chatbot
+
+### Acceder al chat de WhatsApp:
+1. Ve a "WhatsApp" en el menú lateral (necesitas permiso de WhatsApp)
+2. Verás las conversaciones activas a la izquierda
+3. Haz clic en una conversación para ver los mensajes
+4. El nombre del paciente se muestra si está vinculado en el sistema
+
+### Chatbot con IA:
+- El chatbot responde automáticamente a los mensajes de los pacientes
+- Usa la base de conocimiento de la clínica para dar respuestas precisas
+- **Límites:** 7 respuestas cada 2 minutos por contacto, 60 respuestas al día
+- Los mensajes que superen el límite quedan guardados para respuesta manual
+- El modo se puede cambiar entre "IA" y "HUMANO" por conversación
+
+### Enviar plantillas de WhatsApp:
+1. En una conversación, haz clic en el icono de plantilla
+2. Selecciona la plantilla que quieres enviar
+3. Las variables se rellenan automáticamente (nombre del paciente, fecha, etc.)
+4. Confirma el envío
+
+### Configurar WhatsApp:
+1. Ve a WhatsApp > Configuración (icono de engranaje)
+2. Configura tu **Phone Number ID** y **Access Token** de Meta/Facebook
+3. Configura las plantillas para cada tipo de evento:
+   - **Cita creada:** Plantilla que se envía al crear una cita
+   - **Cita modificada:** Plantilla que se envía al cambiar la hora/fecha
+   - **Cita cancelada:** Plantilla que se envía al cancelar una cita
+4. Mapea las variables de cada plantilla (nombre del paciente, fecha, hora, doctor, etc.)
+
+### Enviar desde la vista de paciente:
+- En la ficha del paciente, hay un icono de WhatsApp junto al teléfono
+- Al hacer clic abre directamente el chat con ese paciente
+- Si no existe conversación previa, abre el modal de plantillas automáticamente
+
+### Notificaciones WhatsApp en citas:
+- En la ficha del paciente, cada cita programada muestra:
+  - **Icono verde de WhatsApp:** La notificación ya fue enviada
+  - **Icono gris clicable:** Puedes enviar la notificación manualmente
+- Solo visible para usuarios con permiso de WhatsApp
+
+### Base de conocimiento:
+1. Ve a WhatsApp > Base de Conocimiento
+2. Añade documentos, preguntas frecuentes y respuestas
+3. El chatbot usará esta información para responder automáticamente
+4. Cuanta más información añadas, mejor responderá el chatbot
+
+### Gestión de Leads:
+1. Ve a WhatsApp > Leads
+2. Los contactos que escriben sin ser pacientes aparecen como leads
+3. Puedes convertir un lead en paciente desde la interfaz
 
 ---
 
 ## 👥 USUARIOS Y ROLES
 
 ### Tipos de roles:
-- **Super Admin:** Acceso total al sistema, gestión de organizaciones
-- **Admin:** Administrador de la clínica, acceso a configuración
-- **Trabajador:** Personal de la clínica, acceso a funciones clínicas
-- **Paciente:** Acceso limitado para ver sus propias citas
+- **Super Admin:** Acceso total al sistema, gestión de organizaciones y clínicas
+- **Admin:** Administrador de la clínica, acceso a toda la configuración y datos
+- **Trabajador:** Personal de la clínica, acceso a funciones clínicas (citas, pacientes, stock)
+
+### Permisos especiales:
+Los administradores pueden configurar permisos adicionales para cada trabajador:
+- **WhatsApp:** Acceso al módulo de WhatsApp y envío de notificaciones
+- Otros permisos se gestionan según el rol base
 
 ### Crear un nuevo trabajador:
 1. Ve a Configuración > Trabajadores
 2. Haz clic en "+ Nuevo Trabajador"
 3. Completa los datos y asigna el rol
+4. Configura los permisos especiales si es necesario
 
 ### Cambiar contraseña:
 - El usuario puede ir a su Perfil (icono en la esquina superior derecha)
@@ -198,25 +280,79 @@ Es un diagrama interactivo de la dentadura del paciente donde puedes registrar e
 
 ### Configuración general:
 - Ve a Configuración en el menú lateral
-- Puedes modificar datos de la clínica, horarios, etc.
+- Puedes modificar datos de la clínica, horarios, logotipo, etc.
 
 ### Servicios/Tratamientos:
 - Ve a Configuración > Servicios
 - Añade, edita o elimina los tratamientos que ofrece la clínica
 - Configura duración y precio de cada servicio
 
+### Configuración de Email:
+1. Ve a Configuración > Email
+2. Configura SMTP para emails transaccionales (citas, recordatorios)
+3. Activa/desactiva tipos de notificación
+4. Personaliza las plantillas de email
+
+### Configuración de SMS:
+1. Ve a Configuración > Email (sección SMS)
+2. Configura las credenciales de Twilio
+3. Personaliza el Sender ID (máximo 11 caracteres alfanuméricos)
+
+### Configuración de WhatsApp:
+1. Ve a WhatsApp > Configuración
+2. Introduce Phone Number ID y Access Token de Meta
+3. Configura las plantillas de notificación para cada evento
+4. Mapea las variables (nombre, fecha, hora, etc.)
+
 ---
 
 ## 🔔 NOTIFICACIONES
 
-### Tipos de notificaciones:
-- Recordatorios de citas por email
-- Recordatorios de citas por SMS
-- Solicitudes de valoración post-consulta
+### Canales de notificación:
+CUSPIA soporta 3 canales de notificación para citas:
+1. **Email:** Requiere configuración SMTP (Configuración > Email)
+2. **SMS:** Requiere configuración de Twilio (Configuración > Email > SMS)
+3. **WhatsApp:** Requiere configuración de WhatsApp Business API (WhatsApp > Configuración)
 
-### Configurar notificaciones:
-1. Ve a Configuración > Email
-2. Activa/desactiva los tipos de notificación que desees
+### ¿Cuándo se envían notificaciones?
+| Evento | Email | SMS | WhatsApp |
+|--------|-------|-----|----------|
+| Cita creada | ✅ Inmediato | ✅ Inmediato | ✅ Inmediato |
+| Cita modificada (hora/fecha) | ✅ Con debounce 5 min | ❌ | ✅ Con debounce 5 min |
+| Cita cancelada | ✅ Inmediato | ❌ | ✅ Inmediato |
+
+### Enviar notificación WhatsApp manual:
+- En la ficha del paciente, en la lista de citas programadas
+- Si la cita no tiene notificación WhatsApp enviada, aparece un botón para enviarla
+- Solo disponible para usuarios con permiso de WhatsApp
+
+### Solicitudes de valoración:
+- Cuando una cita se completa, el admin puede enviar un email de valoración
+- El paciente recibe un enlace para dejar su opinión
+- Requiere que el email esté configurado
+
+---
+
+## 🏥 FICHA DEL PACIENTE
+
+### Pestañas disponibles:
+- **Información:** Datos personales, contacto, historial médico
+- **Citas:** Historial de todas las citas del paciente
+- **Odontograma:** Diagrama dental interactivo
+- **Historial clínico:** Registros clínicos y notas de las consultas
+- **Radiografías:** Subida y gestión de imágenes radiográficas con análisis IA
+- **Facturación:** Presupuestos y facturas
+
+### Radiografías con IA:
+1. Ve a la pestaña "Radiografías" del paciente
+2. Sube una imagen radiográfica
+3. Haz clic en "Analizar con IA" para obtener un análisis automático
+4. La IA identifica posibles hallazgos y los presenta como sugerencias
+
+### Contacto rápido por WhatsApp:
+- Junto al teléfono del paciente hay un icono de WhatsApp
+- Al hacer clic abre el chat directo con el paciente
+- Si no hay conversación previa, abre automáticamente el modal de plantillas
 
 ---
 
@@ -233,6 +369,30 @@ Ve al detalle del paciente y navega por las pestañas: Información, Citas, Odon
 
 **¿Los datos se guardan automáticamente?**
 No, debes hacer clic en "Guardar" para confirmar los cambios.
+
+**¿Por qué no veo el módulo de WhatsApp?**
+Necesitas tener el permiso de WhatsApp activado. Pide a tu administrador que te lo asigne en Configuración > Trabajadores.
+
+**¿Por qué no se envió la notificación de WhatsApp al modificar una cita?**
+El sistema espera 5 minutos (debounce) antes de enviar. Si modificaste varias veces seguidas, solo se enviará la última versión. También verifica que la plantilla de "cita modificada" esté configurada en WhatsApp > Configuración.
+
+**¿Cómo sé si se envió la notificación de WhatsApp de una cita?**
+En la ficha del paciente, las citas muestran un icono verde de WhatsApp si la notificación fue enviada. Si no se envió, aparece un botón gris para enviarla manualmente.
+
+**¿Qué pasa si falla el envío de WhatsApp?**
+El email se envía igualmente. Los fallos de WhatsApp no bloquean las notificaciones por email.
+
+**¿Puedo enviar la notificación de WhatsApp manualmente?**
+Sí, en la ficha del paciente, en las citas programadas que no tengan notificación enviada, verás un botón para enviarla.
+
+**¿Cómo configuro las plantillas de WhatsApp?**
+Ve a WhatsApp > Configuración. Necesitas tener las plantillas aprobadas en tu cuenta de Meta/Facebook Business. Luego mapea el nombre de la plantilla y sus variables en la configuración.
+
+**¿Qué es el Sender ID del SMS?**
+Es el nombre que aparece como remitente del SMS (máx. 11 caracteres alfanuméricos). Se configura en Configuración > Email > SMS.
+
+**¿Cómo funciona el chatbot de WhatsApp?**
+El chatbot responde automáticamente usando IA basada en la base de conocimiento de tu clínica. Tiene límites de 7 respuestas cada 2 minutos y 60 al día por contacto. Puedes cambiar entre modo IA y modo humano por conversación.
 `;
 
 /**
@@ -277,6 +437,8 @@ Por ejemplo, puedo explicarte:
 - 📅 Cómo agendar una cita
 - 🦷 Cómo usar el odontograma
 - 📦 Cómo gestionar el inventario
+- 💬 Cómo usar WhatsApp y notificaciones
+- 🔔 Cómo configurar las notificaciones
 
 ¿En qué te puedo ayudar?`;
 

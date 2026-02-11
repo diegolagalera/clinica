@@ -1,5 +1,8 @@
 import type { Response } from 'express';
 import { z } from 'zod';
+import { eq, and } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { workerClinics } from '../db/schema.js';
 import * as userService from '../services/user.service.js';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
 import { asyncHandler } from '../middleware/index.js';
@@ -32,6 +35,7 @@ export const updateUserSchema = z.object({
     licenseNumber: z.string().max(50).optional(),
     specialty: z.string().max(100).optional(),
     bio: z.string().optional(),
+    clinicPermissions: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export const resetPasswordSchema = z.object({
@@ -248,15 +252,32 @@ export const updateOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
 
     const input = updateUserSchema.parse(req.body);
 
+    // Extract clinicPermissions before passing to user service
+    const { clinicPermissions, ...userInput } = input;
+
     // Prevent changing to SUPERADMIN
-    if (input.role === 'SUPERADMIN') {
+    if (userInput.role === 'SUPERADMIN') {
         return res.status(403).json({ success: false, message: 'Cannot assign SUPERADMIN role' });
     }
 
     const result = await userService.updateUser(id!, {
-        ...input as any,
+        ...userInput as any,
         organizationId, // Keep in same org
     });
+
+    // Save per-clinic permissions to worker_clinics if provided
+    if (clinicPermissions !== undefined && result.success) {
+        for (const [clinicId, perms] of Object.entries(clinicPermissions)) {
+            await db.update(workerClinics)
+                .set({ permissions: perms, updatedAt: new Date() })
+                .where(
+                    and(
+                        eq(workerClinics.userId, id!),
+                        eq(workerClinics.clinicId, clinicId)
+                    )
+                );
+        }
+    }
 
     if (result.success) {
         res.json(success(result.data, 'User updated successfully'));

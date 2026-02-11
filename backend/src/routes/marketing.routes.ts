@@ -4,8 +4,14 @@ import { audienceService } from '../services/audience.service.js';
 import { campaignService } from '../services/campaign.service.js';
 import { birthdayService } from '../services/birthday.service.js';
 import { logger } from '../utils/logger.js';
+import { authenticate, tenantContext, requirePermission } from '../middleware/index.js';
 
 const router = Router();
+
+// All marketing routes require authentication and marketing permission
+router.use(authenticate);
+router.use(tenantContext);
+router.use(requirePermission('marketing'));
 
 // Middleware to get clinicId from auth
 const getClinicId = (req: any): string => {

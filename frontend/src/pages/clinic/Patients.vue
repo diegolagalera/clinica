@@ -312,6 +312,16 @@ onMounted(() => {
               <span v-if="patient.phone" class="flex items-center gap-1 text-sm text-surface-500">
                 <PhoneIcon class="w-3 h-3" />
                 {{ patient.phone }}
+                <!-- WhatsApp unavailable warning -->
+                <span v-if="patient.whatsappAvailable === false" class="relative group ml-0.5">
+                  <span class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-100 text-amber-600 cursor-help">
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" /></svg>
+                  </span>
+                  <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all pointer-events-none z-50">
+                    Este número no existe en WhatsApp
+                    <div class="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-surface-800"></div>
+                  </div>
+                </span>
               </span>
             </div>
           </div>

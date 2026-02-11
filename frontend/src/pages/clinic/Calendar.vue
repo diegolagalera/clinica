@@ -78,6 +78,18 @@ const searchResults = ref<Patient[]>([])
 const isSearching = ref(false)
 const showWorkerDropdown = ref(false)
 
+// WhatsApp notification modal state
+const showWaModal = ref(false)
+const waModalAppointmentId = ref('')
+const waModalEventType = ref<'CREATED' | 'MODIFIED' | 'CANCELLED'>('CREATED')
+const waModalPatientName = ref('')
+const waModalTemplateName = ref('')
+const waModalTemplates = ref<Array<{ name: string; status: string; language: string }>>([]) 
+const waModalDefaultTemplate = ref('')
+const waModalSending = ref(false)
+const waModalSent = ref(false)
+const waNotifyEnabled = ref(false)
+
 // Real time management (Admin only)
 const realTimeEditing = ref(false)
 const isResettingTime = ref(false)
@@ -231,6 +243,11 @@ const canEditAppointment = (apt: Appointment) => {
   return apt.workerId === userId
 }
 
+// Helper: get YYYY-MM-DD string in LOCAL timezone (avoids UTC off-by-one after midnight)
+const toLocalDateKey = (d: Date): string => {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 // Computed - Days visible based on view mode
 const weekDays = computed(() => {
   const days = []
@@ -315,15 +332,15 @@ const dateRange = computed(() => {
     const today = new Date()
     const tomorrow = new Date(today)
     tomorrow.setDate(tomorrow.getDate() + 1)
-    return { start: today.toISOString().split('T')[0], end: tomorrow.toISOString().split('T')[0] }
+    return { start: toLocalDateKey(today), end: toLocalDateKey(tomorrow) }
   }
   const start = days[0]!
   const end = new Date(days[days.length - 1]!)
   // Add 1 day to end to include it in the query (API uses exclusive end)
   end.setDate(end.getDate() + 1)
   return {
-    start: start.toISOString().split('T')[0],
-    end: end.toISOString().split('T')[0],
+    start: toLocalDateKey(start),
+    end: toLocalDateKey(end),
   }
 })
 
@@ -418,9 +435,9 @@ const appointmentsByDay = computed(() => {
   const map = new Map<string, Array<Appointment & { column: number; totalColumns: number }>>()
   
   visibleDays.value.forEach(day => {
-    const key = day.toISOString().split('T')[0]
+    const key = toLocalDateKey(day)
     const dayApts = filteredAppointments.value
-      .filter(apt => new Date(apt.startTime).toISOString().split('T')[0] === key)
+      .filter(apt => toLocalDateKey(new Date(apt.startTime)) === key)
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
     
     // Calculate overlap columns
@@ -616,6 +633,9 @@ const saveAppointment = async () => {
   isSaving.value = true
   
   try {
+    let savedAppointmentId = ''
+    let eventType: 'CREATED' | 'MODIFIED' | 'CANCELLED' = 'CREATED'
+    
     if (isEditing.value && selectedAppointment.value) {
       await api.put(`/appointments/${selectedAppointment.value.id}`, {
         type: formData.value.type,
@@ -626,19 +646,97 @@ const saveAppointment = async () => {
         status: formData.value.status,
         workerIds: formData.value.workerIds.length > 0 ? formData.value.workerIds : undefined,
       })
+      savedAppointmentId = selectedAppointment.value.id
+      eventType = formData.value.status === 'CANCELLED' ? 'CANCELLED' : 'MODIFIED'
       toast.success('Cita actualizada')
     } else {
-      await api.post('/appointments', formData.value)
+      const resp = await api.post<ApiResponse<Appointment>>('/appointments', formData.value)
+      savedAppointmentId = resp?.data?.id || ''
+      eventType = 'CREATED'
       toast.success('Cita creada')
     }
+    
+    // Capture patient name before resetting
+    const pName = patientSearch.value
+    
     showModal.value = false
     resetForm()
     await loadAppointments(true) // Silent reload to avoid scroll jump
+    
+    // Show WhatsApp notification modal if configured
+    if (savedAppointmentId) {
+      showWaNotificationModal(savedAppointmentId, eventType, pName)
+    }
   } catch {
     // Error toast is shown automatically by API interceptor
   } finally {
     isSaving.value = false
   }
+}
+
+// Show WA notification modal
+const showWaNotificationModal = async (appointmentId: string, eventType: 'CREATED' | 'MODIFIED' | 'CANCELLED', patientName: string) => {
+  try {
+    // Check if WA notifications are enabled
+    const settingsResp = await api.get<ApiResponse<any>>('/chatbot/settings/wa-notifications')
+    const settings = settingsResp?.data
+    
+    if (!settings?.waNotifyEnabled) return // WA notifications not enabled
+    
+    waNotifyEnabled.value = true
+    waModalAppointmentId.value = appointmentId
+    waModalEventType.value = eventType
+    waModalPatientName.value = patientName
+    waModalSent.value = false
+    waModalSending.value = false
+
+    // Resolve default template for this event
+    const templateMap: Record<string, string> = {
+      CREATED: settings.waTemplateCreated || '',
+      MODIFIED: settings.waTemplateModified || '',
+      CANCELLED: settings.waTemplateCancelled || '',
+    }
+    waModalDefaultTemplate.value = templateMap[eventType] || ''
+    waModalTemplateName.value = waModalDefaultTemplate.value
+    
+    // Load available templates from Meta
+    try {
+      const templatesResp = await api.get<ApiResponse<any[]>>('/chatbot/templates')
+      waModalTemplates.value = (templatesResp?.data || []).filter((t: any) => t.status === 'APPROVED')
+    } catch {
+      waModalTemplates.value = []
+    }
+    
+    showWaModal.value = true
+  } catch {
+    // If settings fetch fails, don't show modal
+  }
+}
+
+// Send WA notification
+const sendWaNotification = async () => {
+  if (!waModalAppointmentId.value || !waModalTemplateName.value) return
+  
+  waModalSending.value = true
+  try {
+    await api.post(`/appointments/${waModalAppointmentId.value}/wa-notify`, {
+      eventType: waModalEventType.value,
+      templateName: waModalTemplateName.value,
+    })
+    waModalSent.value = true
+    toast.success('Notificación WhatsApp enviada')
+    setTimeout(() => {
+      showWaModal.value = false
+    }, 1500)
+  } catch {
+    toast.error('Error al enviar notificación WhatsApp')
+  } finally {
+    waModalSending.value = false
+  }
+}
+
+const closeWaModal = () => {
+  showWaModal.value = false
 }
 
 // Navigation - adapts to current view mode
@@ -799,8 +897,11 @@ const startDrag = (e: MouseEvent, apt: Appointment) => {
     originalStart.value = start
     originalEnd.value = end
     
-    const dayKey = start.toISOString().split('T')[0]
-    originalDayIndex.value = weekDays.value.findIndex(d => d.toISOString().split('T')[0] === dayKey)
+    const dayKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
+    originalDayIndex.value = weekDays.value.findIndex(d => {
+      const dk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      return dk === dayKey
+    })
     
     const startMinutes = start.getHours() * 60 + start.getMinutes()
     const endMinutes = end.getHours() * 60 + end.getMinutes()
@@ -957,8 +1058,11 @@ const startResize = (e: MouseEvent, apt: Appointment) => {
   originalStart.value = start
   originalEnd.value = end
   
-  const dayKey = start.toISOString().split('T')[0]
-  originalDayIndex.value = weekDays.value.findIndex(d => d.toISOString().split('T')[0] === dayKey)
+  const dayKey = start.getFullYear() + '-' + String(start.getMonth() + 1).padStart(2, '0') + '-' + String(start.getDate()).padStart(2, '0')
+  originalDayIndex.value = weekDays.value.findIndex(d => {
+    const dk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+    return dk === dayKey
+  })
   
   const startMinutes = start.getHours() * 60 + start.getMinutes()
   const endMinutes = end.getHours() * 60 + end.getMinutes()
@@ -1077,9 +1181,9 @@ const currentTimePosition = computed(() => {
 
 // Month view helpers
 const getMonthDayAppointments = (day: Date) => {
-  const key = day.toISOString().split('T')[0]
+  const key = toLocalDateKey(day)
   return filteredAppointments.value.filter(apt => 
-    new Date(apt.startTime).toISOString().split('T')[0] === key
+    toLocalDateKey(new Date(apt.startTime)) === key
   ).sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
 }
 
@@ -1367,7 +1471,7 @@ const appointmentStatuses = [
 
                 <!-- Appointments -->
                 <div 
-                  v-for="apt in appointmentsByDay.get(day.toISOString().split('T')[0])" 
+                  v-for="apt in appointmentsByDay.get(toLocalDateKey(day))" 
                   :key="apt.id"
                   class="absolute rounded-lg px-2 py-1 text-white text-xs overflow-hidden select-none"
                   :class="canEditAppointment(apt) ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer opacity-75'"
@@ -1807,6 +1911,93 @@ const appointmentStatuses = [
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- WhatsApp Notification Modal -->
+    <Teleport to="body">
+      <div v-if="showWaModal" class="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div class="fixed inset-0 bg-black/50 backdrop-blur-sm" @click="closeWaModal"></div>
+        <div class="relative bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md animate-scale-in">
+          <!-- Header -->
+          <div class="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                <svg class="w-5 h-5 text-green-600" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Notificar por WhatsApp</h3>
+                <p class="text-sm text-slate-500">{{ waModalPatientName }}</p>
+              </div>
+            </div>
+            <button @click="closeWaModal" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition">
+              <XMarkIcon class="w-5 h-5 text-slate-400" />
+            </button>
+          </div>
+
+          <!-- Body -->
+          <div class="px-6 py-5 space-y-4">
+            <!-- Event type badge -->
+            <div class="flex items-center gap-2">
+              <span class="text-sm text-slate-600 dark:text-slate-400">Evento:</span>
+              <span v-if="waModalEventType === 'CREATED'" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                ✅ Cita creada
+              </span>
+              <span v-else-if="waModalEventType === 'MODIFIED'" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+                📝 Cita modificada
+              </span>
+              <span v-else class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400">
+                ❌ Cita cancelada
+              </span>
+            </div>
+
+            <!-- Template selector -->
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Plantilla de mensaje</label>
+              <select v-model="waModalTemplateName" class="input w-full">
+                <option value="" disabled>Seleccionar plantilla</option>
+                <option v-for="t in waModalTemplates" :key="t.name" :value="t.name">
+                  {{ t.name }} ({{ t.language }})
+                </option>
+              </select>
+              <p v-if="waModalDefaultTemplate" class="mt-1 text-xs text-slate-500">
+                Plantilla predeterminada: {{ waModalDefaultTemplate }}
+              </p>
+            </div>
+
+            <!-- Success state -->
+            <div v-if="waModalSent" class="flex items-center gap-2 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+              <svg class="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span class="text-sm font-medium text-green-700 dark:text-green-400">Notificación enviada correctamente</span>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-3">
+            <button @click="closeWaModal" class="btn-secondary">
+              {{ waModalSent ? 'Cerrar' : 'Omitir' }}
+            </button>
+            <button 
+              v-if="!waModalSent"
+              @click="sendWaNotification" 
+              :disabled="!waModalTemplateName || waModalSending"
+              class="btn-primary flex items-center gap-2"
+            >
+              <svg v-if="waModalSending" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25" />
+                <path d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" fill="currentColor" class="opacity-75" />
+              </svg>
+              <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+              </svg>
+              {{ waModalSending ? 'Enviando...' : 'Enviar WhatsApp' }}
+            </button>
+          </div>
         </div>
       </div>
     </Teleport>

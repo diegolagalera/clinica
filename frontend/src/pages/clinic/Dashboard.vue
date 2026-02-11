@@ -14,6 +14,7 @@ import {
   CpuChipIcon,
   ExclamationCircleIcon,
 } from '@heroicons/vue/24/outline'
+import { StarIcon as StarIconSolid } from '@heroicons/vue/24/solid'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -31,6 +32,9 @@ const isLoading = ref(true)
 // AI Usage state (admin only)
 const aiUsage = ref<any>(null)
 const aiStatus = ref<{ active: boolean; aiEnabled: boolean; reason: string | null }>({ active: true, aiEnabled: true, reason: null })
+
+// Rating stats state (admin only)
+const ratingStats = ref<{ totalRatings: number; averageRating: number; distribution: Record<number, number> } | null>(null)
 
 const featureLabels: Record<string, string> = {
   chatbot: 'Chatbot WhatsApp',
@@ -102,7 +106,10 @@ const getStatusLabel = (status: string) => {
 
 onMounted(() => {
   loadDashboard()
-  if (authStore.isAdmin) loadAiUsage()
+  if (authStore.isAdmin) {
+    loadAiUsage()
+    loadRatingStats()
+  }
 })
 
 // AI usage loader
@@ -144,6 +151,17 @@ const getUsageColor = (percent: number): string => {
   if (percent >= 70) return 'bg-warning-500'
   return 'bg-accent-500'
 }
+
+// Rating loader (admin only)
+const loadRatingStats = async () => {
+  try {
+    const statsRes = await api.get<any>('/ratings/stats')
+    if (statsRes.success && statsRes.data) {
+      ratingStats.value = statsRes.data
+    }
+  } catch { /* ignore */ }
+}
+
 </script>
 
 <template>
@@ -207,77 +225,133 @@ const getUsageColor = (percent: number): string => {
       </div>
     </div>
 
-    <!-- AI Usage Card (Admin only) -->
-    <div v-if="authStore.isAdmin" class="card overflow-hidden">
-      <div class="card-header flex items-center gap-3">
-        <div class="p-2 rounded-xl bg-primary-100">
-          <CpuChipIcon class="w-5 h-5 text-primary-600" />
-        </div>
-        <h2 class="font-semibold text-surface-900">Inteligencia Artificial</h2>
-      </div>
-
-      <!-- AI Disabled Banner -->
-      <div v-if="!aiStatus.aiEnabled" class="mx-5 mt-5 flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-        <ExclamationCircleIcon class="w-5 h-5 text-amber-500 flex-shrink-0" />
-        <p class="text-sm font-medium text-amber-800">IA desactivada</p>
-      </div>
-
-      <!-- AI Usage Data -->
-      <div v-if="aiUsage && aiUsage.totals.totalTokens > 0" class="p-5 space-y-4">
-        <!-- Summary row -->
-        <div class="grid grid-cols-2 gap-3">
-          <div class="bg-primary-50 rounded-xl p-3 text-center">
-            <p class="text-lg font-bold text-primary-700">{{ formatTokenCount(aiUsage.totals.totalTokens) }}</p>
-            <p class="text-[10px] text-primary-500 font-medium">TOKENS</p>
+    <!-- Admin cards row: AI + Rating -->
+    <div v-if="authStore.isAdmin" class="grid md:grid-cols-2 gap-4">
+      <!-- AI Usage Card -->
+      <div class="card overflow-hidden">
+        <div class="card-header flex items-center gap-3">
+          <div class="p-2 rounded-xl bg-primary-100">
+            <CpuChipIcon class="w-5 h-5 text-primary-600" />
           </div>
-          <div class="bg-surface-50 rounded-xl p-3 text-center">
-            <p class="text-lg font-bold text-surface-700">{{ aiUsage.totals.requestCount }}</p>
-            <p class="text-[10px] text-surface-500 font-medium">PETICIONES</p>
-          </div>
+          <h2 class="font-semibold text-surface-900">Inteligencia Artificial</h2>
         </div>
 
-        <!-- Progress bar -->
-        <div class="space-y-1">
-          <div class="flex justify-between text-xs text-surface-500">
-            <span>{{ formatTokenCount(aiUsage.totals.totalTokens) }} / {{ formatTokenCount(aiUsage.tokenLimit) }}</span>
-            <span>{{ usagePercent() }}%</span>
-          </div>
-          <div class="w-full bg-surface-100 rounded-full h-2 overflow-hidden">
-            <div 
-              :class="getUsageColor(usagePercent())"
-              class="h-full rounded-full transition-all duration-500"
-              :style="{ width: `${Math.min(usagePercent(), 100)}%` }"
-            ></div>
-          </div>
+        <!-- AI Disabled Banner -->
+        <div v-if="!aiStatus.aiEnabled" class="mx-5 mt-5 flex items-center gap-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <ExclamationCircleIcon class="w-5 h-5 text-amber-500 flex-shrink-0" />
+          <p class="text-sm font-medium text-amber-800">IA desactivada</p>
         </div>
 
-        <!-- Top features -->
-        <div v-if="aiUsage.byFeature.length > 0">
-          <p class="text-xs font-medium text-surface-500 mb-2">Uso por funcionalidad</p>
-          <div class="flex flex-wrap gap-2">
-            <span 
-              v-for="feat in aiUsage.byFeature.slice(0, 4)" 
-              :key="feat.feature"
-              class="inline-flex items-center gap-1.5 text-xs bg-surface-50 text-surface-700 px-2.5 py-1.5 rounded-lg"
-            >
-              <span>{{ featureIcons[feat.feature] || '⚡' }}</span>
-              {{ featureLabels[feat.feature] || feat.feature }}
-              <span class="font-semibold">{{ formatTokenCount(feat.totalTokens) }}</span>
-            </span>
+        <!-- AI Usage Data -->
+        <div v-if="aiUsage && aiUsage.totals.totalTokens > 0" class="p-5 space-y-4">
+          <!-- Summary row -->
+          <div class="grid grid-cols-2 gap-3">
+            <div class="bg-primary-50 rounded-xl p-3 text-center">
+              <p class="text-lg font-bold text-primary-700">{{ formatTokenCount(aiUsage.totals.totalTokens) }}</p>
+              <p class="text-[10px] text-primary-500 font-medium">TOKENS</p>
+            </div>
+            <div class="bg-surface-50 rounded-xl p-3 text-center">
+              <p class="text-lg font-bold text-surface-700">{{ aiUsage.totals.requestCount }}</p>
+              <p class="text-[10px] text-surface-500 font-medium">PETICIONES</p>
+            </div>
           </div>
+
+          <!-- Progress bar -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs text-surface-500">
+              <span>{{ formatTokenCount(aiUsage.totals.totalTokens) }} / {{ formatTokenCount(aiUsage.tokenLimit) }}</span>
+              <span>{{ usagePercent() }}%</span>
+            </div>
+            <div class="w-full bg-surface-100 rounded-full h-2 overflow-hidden">
+              <div 
+                :class="getUsageColor(usagePercent())"
+                class="h-full rounded-full transition-all duration-500"
+                :style="{ width: `${Math.min(usagePercent(), 100)}%` }"
+              ></div>
+            </div>
+          </div>
+
+          <!-- Top features -->
+          <div v-if="aiUsage.byFeature.length > 0">
+            <p class="text-xs font-medium text-surface-500 mb-2">Uso por funcionalidad</p>
+            <div class="flex flex-wrap gap-2">
+              <span 
+                v-for="feat in aiUsage.byFeature.slice(0, 4)" 
+                :key="feat.feature"
+                class="inline-flex items-center gap-1.5 text-xs bg-surface-50 text-surface-700 px-2.5 py-1.5 rounded-lg"
+              >
+                <span>{{ featureIcons[feat.feature] || '⚡' }}</span>
+                {{ featureLabels[feat.feature] || feat.feature }}
+                <span class="font-semibold">{{ formatTokenCount(feat.totalTokens) }}</span>
+              </span>
+            </div>
+          </div>
+
+          <p class="text-[10px] text-surface-400 text-center">Consumo del mes actual · Se reinicia mensualmente</p>
         </div>
 
-        <p class="text-[10px] text-surface-400 text-center">Consumo del mes actual · Se reinicia mensualmente</p>
+        <!-- No usage and AI disabled -->
+        <div v-else-if="!aiStatus.aiEnabled && (!aiUsage || aiUsage.totals.totalTokens === 0)" class="p-5 text-center">
+          <p class="text-sm text-surface-400">Sin consumo de IA este mes</p>
+        </div>
+
+        <!-- Loading -->
+        <div v-else-if="aiStatus.aiEnabled && !aiUsage" class="p-6 flex justify-center">
+          <div class="animate-spin w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full"></div>
+        </div>
       </div>
 
-      <!-- No usage and AI disabled -->
-      <div v-else-if="!aiStatus.aiEnabled && (!aiUsage || aiUsage.totals.totalTokens === 0)" class="p-5 text-center">
-        <p class="text-sm text-surface-400">Sin consumo de IA este mes</p>
-      </div>
+      <!-- Clinic Rating Card -->
+      <div class="card overflow-hidden">
+        <div class="card-header flex items-center gap-3">
+          <div class="p-2 rounded-xl bg-amber-100">
+            <StarIconSolid class="w-5 h-5 text-amber-500" />
+          </div>
+          <h2 class="font-semibold text-surface-900">Valoración</h2>
+        </div>
 
-      <!-- Loading -->
-      <div v-else-if="aiStatus.aiEnabled && !aiUsage" class="p-6 flex justify-center">
-        <div class="animate-spin w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full"></div>
+        <div v-if="!ratingStats" class="p-6 flex justify-center">
+          <div class="animate-spin w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full"></div>
+        </div>
+
+        <div v-else-if="ratingStats.totalRatings === 0" class="p-8 text-center">
+          <p class="text-3xl mb-2">⭐</p>
+          <p class="text-sm text-surface-500">Aún no hay valoraciones</p>
+          <p class="text-xs text-surface-400 mt-1">Aparecerán cuando los pacientes respondan</p>
+        </div>
+
+        <div v-else class="p-5">
+          <div class="flex items-center gap-4 mb-4">
+            <p class="text-4xl font-bold text-surface-900">{{ ratingStats.averageRating }}</p>
+            <div>
+              <div class="flex gap-0.5 mb-1">
+                <StarIconSolid
+                  v-for="i in 5"
+                  :key="i"
+                  class="w-5 h-5"
+                  :class="i <= Math.round(ratingStats.averageRating) ? 'text-amber-400' : 'text-surface-200'"
+                />
+              </div>
+              <p class="text-sm text-surface-500">{{ ratingStats.totalRatings }} valoración{{ ratingStats.totalRatings !== 1 ? 'es' : '' }}</p>
+            </div>
+          </div>
+
+          <!-- Distribution bars -->
+          <div class="space-y-1.5">
+            <div v-for="star in [5, 4, 3, 2, 1]" :key="star" class="flex items-center gap-2">
+              <span class="text-xs text-surface-500 w-3 text-right">{{ star }}</span>
+              <StarIconSolid class="w-3 h-3 text-amber-400 flex-shrink-0" />
+              <div class="flex-1 bg-surface-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-full rounded-full transition-all duration-500"
+                  :class="star >= 4 ? 'bg-amber-400' : star === 3 ? 'bg-amber-300' : 'bg-surface-300'"
+                  :style="{ width: `${(ratingStats.distribution[star] / ratingStats.totalRatings) * 100}%` }"
+                ></div>
+              </div>
+              <span class="text-xs text-surface-400 w-4 text-right">{{ ratingStats.distribution[star] }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

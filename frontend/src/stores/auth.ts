@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '@/services/api'
-import type { User, AuthTokens, LoginResponse, Role, ApiResponse, Clinic, Organization, ModulePermission } from '@/types'
+import type { User, AuthTokens, LoginResponse, TenantOption, Role, ApiResponse, Clinic, Organization, ModulePermission } from '@/types'
 import router from '@/router'
 
 const ACCESS_TOKEN_KEY = 'dental_erp_access_token'
@@ -9,6 +9,7 @@ const REFRESH_TOKEN_KEY = 'dental_erp_refresh_token'
 const USER_KEY = 'dental_erp_user'
 const CURRENT_CLINIC_KEY = 'dental_erp_current_clinic'
 const CURRENT_ORG_KEY = 'dental_erp_current_org'
+const TENANT_SLUG_KEY = 'dental_erp_tenant_slug'
 
 export const useAuthStore = defineStore('auth', () => {
     // State
@@ -25,6 +26,11 @@ export const useAuthStore = defineStore('auth', () => {
     const requires2FA = ref(false)
     const tempEmail = ref<string | null>(null)
     const tempPassword = ref<string | null>(null)
+
+    // Multi-tenant state
+    const tenantSlug = ref<string | null>(null)
+    const requiresTenantSelection = ref(false)
+    const availableTenants = ref<TenantOption[]>([])
 
     // Getters
     const isAuthenticated = computed(() => !!accessToken.value && !!user.value)
@@ -43,16 +49,18 @@ export const useAuthStore = defineStore('auth', () => {
         const storedUser = localStorage.getItem(USER_KEY)
         const storedClinic = localStorage.getItem(CURRENT_CLINIC_KEY)
         const storedOrg = localStorage.getItem(CURRENT_ORG_KEY)
+        const storedTenant = localStorage.getItem(TENANT_SLUG_KEY)
 
         if (storedToken) accessToken.value = storedToken
         if (storedRefreshToken) refreshTokenValue.value = storedRefreshToken
         if (storedUser) user.value = JSON.parse(storedUser)
         if (storedClinic) currentClinicId.value = storedClinic
         if (storedOrg) currentOrganizationId.value = storedOrg
+        if (storedTenant) tenantSlug.value = storedTenant
     }
 
     // Actions
-    const login = async (email: string, password: string, twoFactorCode?: string) => {
+    const login = async (email: string, password: string, twoFactorCode?: string, selectedTenantSlug?: string) => {
         isLoading.value = true
         error.value = null
         requires2FA.value = false
@@ -62,14 +70,29 @@ export const useAuthStore = defineStore('auth', () => {
                 email,
                 password,
                 twoFactorCode,
+                ...(selectedTenantSlug && { tenantSlug: selectedTenantSlug }),
             })
 
             if (response.success && response.data) {
+                // Multi-tenant: user must select a tenant
+                if (response.data.requiresTenantSelection) {
+                    requiresTenantSelection.value = true
+                    availableTenants.value = response.data.availableTenants || []
+                    tempEmail.value = email
+                    tempPassword.value = password
+                    return { requiresTenantSelection: true }
+                }
+
                 if (response.data.requires2FA) {
                     requires2FA.value = true
                     tempEmail.value = email
                     tempPassword.value = password
                     return { requires2FA: true }
+                }
+
+                // Store tenant slug from the login response
+                if (response.data.user.tenantSlug) {
+                    setTenantSlug(response.data.user.tenantSlug)
                 }
 
                 setAuthData(response.data.tokens, response.data.user)
@@ -84,6 +107,15 @@ export const useAuthStore = defineStore('auth', () => {
         } finally {
             isLoading.value = false
         }
+    }
+
+    /** Login with a specific tenant (after tenant selection step) */
+    const loginWithTenant = async (slug: string) => {
+        if (!tempEmail.value || !tempPassword.value) {
+            throw new Error('No pending login data')
+        }
+        requiresTenantSelection.value = false
+        return login(tempEmail.value, tempPassword.value, undefined, slug)
     }
 
     const verify2FA = async (code: string) => {
@@ -174,6 +206,15 @@ export const useAuthStore = defineStore('auth', () => {
         }
     }
 
+    const setTenantSlug = (slug: string) => {
+        tenantSlug.value = slug || null
+        if (slug) {
+            localStorage.setItem(TENANT_SLUG_KEY, slug)
+        } else {
+            localStorage.removeItem(TENANT_SLUG_KEY)
+        }
+    }
+
     const clearAuthData = () => {
         accessToken.value = null
         refreshTokenValue.value = null
@@ -183,21 +224,28 @@ export const useAuthStore = defineStore('auth', () => {
         availableClinics.value = []
         currentOrganization.value = null
         requires2FA.value = false
+        requiresTenantSelection.value = false
+        availableTenants.value = []
         tempEmail.value = null
         tempPassword.value = null
+        tenantSlug.value = null
 
         localStorage.removeItem(ACCESS_TOKEN_KEY)
         localStorage.removeItem(REFRESH_TOKEN_KEY)
         localStorage.removeItem(USER_KEY)
         localStorage.removeItem(CURRENT_CLINIC_KEY)
         localStorage.removeItem(CURRENT_ORG_KEY)
+        localStorage.removeItem(TENANT_SLUG_KEY)
     }
 
     const loadUserContext = async () => {
         if (!user.value) return
 
+        // SUPERADMIN operates at platform level — no tenant clinics to load
+        if (user.value.role === 'SUPERADMIN') return
+
         // Load available clinics based on role
-        if (user.value.role === 'ADMIN' || user.value.role === 'WORKER' || user.value.role === 'SUPERADMIN') {
+        if (user.value.role === 'ADMIN' || user.value.role === 'WORKER') {
             try {
                 const response = await api.get<ApiResponse<Clinic[]>>('/staff/my-clinics')
                 if (response.success && response.data) {
@@ -280,6 +328,9 @@ export const useAuthStore = defineStore('auth', () => {
         isLoading,
         error,
         requires2FA,
+        requiresTenantSelection,
+        availableTenants,
+        tenantSlug,
 
         // Getters
         isAuthenticated,
@@ -293,6 +344,7 @@ export const useAuthStore = defineStore('auth', () => {
 
         // Actions
         login,
+        loginWithTenant,
         verify2FA,
         register,
         refreshToken,
@@ -304,5 +356,6 @@ export const useAuthStore = defineStore('auth', () => {
         canAccess,
         hasPermission,
         ensurePermissionsLoaded,
+        setTenantSlug,
     }
 })

@@ -1,5 +1,5 @@
 import { eq, and, ilike, sql } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { clinics, patients, appointments, users, workerClinics } from '../db/schema.js';
 import { NotFoundError, ConflictError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult } from '../types/index.js';
@@ -38,7 +38,7 @@ export type ClinicType = typeof clinics.$inferSelect;
 /**
  * Get clinics by organization with pagination
  */
-export const getClinicsByOrganization = async (
+export const getClinicsByOrganization = async (db: Database,
     organizationId: string,
     params: PaginationParams,
     search?: string
@@ -75,7 +75,7 @@ export const getClinicsByOrganization = async (
 /**
  * Get all clinics (for Super Admin)
  */
-export const getAllClinics = async (
+export const getAllClinics = async (db: Database,
     params: PaginationParams,
     search?: string
 ): Promise<{ data: ClinicType[]; total: number }> => {
@@ -111,7 +111,7 @@ export const getAllClinics = async (
 /**
  * Get clinic by ID
  */
-export const getClinicById = async (
+export const getClinicById = async (db: Database,
     id: string
 ): Promise<ClinicType | null> => {
     const clinic = await db.query.clinics.findFirst({
@@ -126,7 +126,7 @@ export const getClinicById = async (
 /**
  * Create a new clinic
  */
-export const createClinic = async (
+export const createClinic = async (db: Database,
     input: CreateClinicInput
 ): Promise<ServiceResult<ClinicType>> => {
     // Check if slug is unique within organization
@@ -141,20 +141,22 @@ export const createClinic = async (
         throw new ConflictError('Clinic slug already exists in this organization');
     }
 
+    const values: Record<string, any> = {
+        organizationId: input.organizationId,
+        name: input.name,
+        slug: input.slug.toLowerCase(),
+        country: input.country || 'ES',
+        timezone: input.timezone || 'Europe/Madrid',
+    };
+    if (input.email !== undefined) values.email = input.email;
+    if (input.phone !== undefined) values.phone = input.phone;
+    if (input.address !== undefined) values.address = input.address;
+    if (input.city !== undefined) values.city = input.city;
+    if (input.postalCode !== undefined) values.postalCode = input.postalCode;
+
     const [clinic] = await db
         .insert(clinics)
-        .values({
-            organizationId: input.organizationId,
-            name: input.name,
-            slug: input.slug.toLowerCase(),
-            email: input.email,
-            phone: input.phone,
-            address: input.address,
-            city: input.city,
-            postalCode: input.postalCode,
-            country: input.country || 'ES',
-            timezone: input.timezone || 'Europe/Madrid',
-        })
+        .values(values as any)
         .returning();
 
     // Auto-assign all organization admins to the new clinic
@@ -186,11 +188,11 @@ export const createClinic = async (
 /**
  * Update a clinic
  */
-export const updateClinic = async (
+export const updateClinic = async (db: Database,
     id: string,
     input: UpdateClinicInput
 ): Promise<ServiceResult<ClinicType>> => {
-    const existing = await getClinicById(id);
+    const existing = await getClinicById(db, id);
     if (!existing) {
         throw new NotFoundError('Clinic not found');
     }
@@ -208,13 +210,19 @@ export const updateClinic = async (
         }
     }
 
+    const updateData: Record<string, any> = { ...input, updatedAt: new Date() };
+    if (input.slug) {
+        updateData.slug = input.slug.toLowerCase();
+    } else {
+        delete updateData.slug;
+    }
+    for (const key of Object.keys(updateData)) {
+        if (updateData[key] === undefined) delete updateData[key];
+    }
+
     const [updated] = await db
         .update(clinics)
-        .set({
-            ...input,
-            slug: input.slug?.toLowerCase(),
-            updatedAt: new Date(),
-        })
+        .set(updateData)
         .where(eq(clinics.id, id))
         .returning();
 
@@ -224,8 +232,8 @@ export const updateClinic = async (
 /**
  * Delete a clinic
  */
-export const deleteClinic = async (id: string): Promise<boolean> => {
-    const existing = await getClinicById(id);
+export const deleteClinic = async (db: Database, id: string): Promise<boolean> => {
+    const existing = await getClinicById(db, id);
     if (!existing) {
         throw new NotFoundError('Clinic not found');
     }
@@ -237,8 +245,8 @@ export const deleteClinic = async (id: string): Promise<boolean> => {
 /**
  * Get clinic statistics
  */
-export const getClinicStats = async (clinicId: string) => {
-    const clinic = await getClinicById(clinicId);
+export const getClinicStats = async (db: Database, clinicId: string) => {
+    const clinic = await getClinicById(db, clinicId);
     if (!clinic) {
         throw new NotFoundError('Clinic not found');
     }

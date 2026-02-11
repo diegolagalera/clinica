@@ -1,7 +1,6 @@
 import type { Response } from 'express';
 import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
-import { db } from '../db/index.js';
 import { workerClinics } from '../db/schema.js';
 import * as userService from '../services/user.service.js';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
@@ -52,10 +51,10 @@ export const listUsers = asyncHandler(async (req: AuthenticatedRequest, res: Res
     const organizationId = req.query['organizationId'] as string | undefined;
     const search = req.query['search'] as string | undefined;
 
-    const { data, total } = await userService.getAllUsers(params, {
-        role,
-        organizationId,
-        search,
+    const { data, total } = await userService.getAllUsers(req.db!, params, {
+        ...(role !== undefined && { role }),
+        ...(organizationId !== undefined && { organizationId }),
+        ...(search !== undefined && { search }),
     });
 
     res.json(success(paginated(data, total, params)));
@@ -68,7 +67,7 @@ export const listUsers = asyncHandler(async (req: AuthenticatedRequest, res: Res
 export const getUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const user = await userService.getUserById(id!);
+    const user = await userService.getUserById(req.db!, id!);
 
     res.json(success(user));
 });
@@ -80,7 +79,7 @@ export const getUser = asyncHandler(async (req: AuthenticatedRequest, res: Respo
 export const createUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const input = createUserSchema.parse(req.body);
 
-    const result = await userService.createUser(input as any);
+    const result = await userService.createUser(req.db!, input as any);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'User created successfully'));
@@ -95,7 +94,7 @@ export const updateUser = asyncHandler(async (req: AuthenticatedRequest, res: Re
     const { id } = req.params;
     const input = updateUserSchema.parse(req.body);
 
-    const result = await userService.updateUser(id!, input as any);
+    const result = await userService.updateUser(req.db!, id!, input as any);
 
     if (result.success) {
         res.json(success(result.data, 'User updated successfully'));
@@ -110,7 +109,7 @@ export const resetPassword = asyncHandler(async (req: AuthenticatedRequest, res:
     const { id } = req.params;
     const { newPassword } = resetPasswordSchema.parse(req.body);
 
-    await userService.resetUserPassword(id!, newPassword);
+    await userService.resetUserPassword(req.db!, id!, newPassword);
 
     res.json(success(null, 'Password reset successfully'));
 });
@@ -122,7 +121,7 @@ export const resetPassword = asyncHandler(async (req: AuthenticatedRequest, res:
 export const deleteUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await userService.deleteUser(id!);
+    await userService.deleteUser(req.db!, id!);
 
     res.json(success(null, 'User deleted successfully'));
 });
@@ -134,7 +133,7 @@ export const deleteUser = asyncHandler(async (req: AuthenticatedRequest, res: Re
 export const deactivateUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await userService.deactivateUser(id!);
+    await userService.deactivateUser(req.db!, id!);
 
     res.json(success(null, 'User deactivated successfully'));
 });
@@ -149,7 +148,7 @@ export const getAvailableClinics = asyncHandler(async (req: AuthenticatedRequest
         ? req.query['organizationId'] as string | undefined
         : req.user?.organizationId;
 
-    const clinics = await userService.getAvailableClinics(organizationId!);
+    const clinics = await userService.getAvailableClinics(req.db!, organizationId!);
 
     res.json(success(clinics));
 });
@@ -163,19 +162,20 @@ export const getAvailableClinics = asyncHandler(async (req: AuthenticatedRequest
  * List users in organization (ADMIN only)
  * Only returns ADMIN and WORKER roles (staff), not patients (USER)
  */
-export const listOrgUsers = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const listOrgUsers = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     if (!organizationId) {
-        return res.status(403).json({ success: false, message: 'No organization context' });
+        res.status(403).json({ success: false, message: 'No organization context' });
+        return;
     }
 
     const params = parsePaginationParams(req.query);
     const role = req.query['role'] as Role | undefined;
     const search = req.query['search'] as string | undefined;
 
-    const { data, total } = await userService.getUsersByOrganization(organizationId, params, {
-        role,
-        search,
+    const { data, total } = await userService.getUsersByOrganization(req.db!, organizationId, params, {
+        ...(role !== undefined && { role }),
+        ...(search !== undefined && { search }),
         staffOnly: true, // Only show ADMIN and WORKER, not patients
     });
 
@@ -186,15 +186,16 @@ export const listOrgUsers = asyncHandler(async (req: AuthenticatedRequest, res: 
  * GET /users/org/:id
  * Get user by ID in organization
  */
-export const getOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const getOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     const { id } = req.params;
 
-    const user = await userService.getUserById(id!);
+    const user = await userService.getUserById(req.db!, id!);
 
     // Verify user belongs to same organization
     if (!user || user.organizationId !== organizationId) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
     }
 
     res.json(success(user));
@@ -218,15 +219,16 @@ export const createOrgUserSchema = z.object({
  * POST /users/org
  * Create user in organization (ADMIN only)
  */
-export const createOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const createOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     if (!organizationId) {
-        return res.status(403).json({ success: false, message: 'No organization context' });
+        res.status(403).json({ success: false, message: 'No organization context' });
+        return;
     }
 
     const input = createOrgUserSchema.parse(req.body);
 
-    const result = await userService.createUser({
+    const result = await userService.createUser(req.db!, {
         ...input as any,
         organizationId, // Force to current org
     });
@@ -240,14 +242,15 @@ export const createOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
  * PUT /users/org/:id
  * Update user in organization
  */
-export const updateOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const updateOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     const { id } = req.params;
 
     // Verify user belongs to same organization
-    const existing = await userService.getUserById(id!);
+    const existing = await userService.getUserById(req.db!, id!);
     if (!existing || existing.organizationId !== organizationId) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
     }
 
     const input = updateUserSchema.parse(req.body);
@@ -257,10 +260,11 @@ export const updateOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
 
     // Prevent changing to SUPERADMIN
     if (userInput.role === 'SUPERADMIN') {
-        return res.status(403).json({ success: false, message: 'Cannot assign SUPERADMIN role' });
+        res.status(403).json({ success: false, message: 'Cannot assign SUPERADMIN role' });
+        return;
     }
 
-    const result = await userService.updateUser(id!, {
+    const result = await userService.updateUser(req.db!, id!, {
         ...userInput as any,
         organizationId, // Keep in same org
     });
@@ -268,7 +272,7 @@ export const updateOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
     // Save per-clinic permissions to worker_clinics if provided
     if (clinicPermissions !== undefined && result.success) {
         for (const [clinicId, perms] of Object.entries(clinicPermissions)) {
-            await db.update(workerClinics)
+            await req.db!.update(workerClinics)
                 .set({ permissions: perms, updatedAt: new Date() })
                 .where(
                     and(
@@ -288,19 +292,20 @@ export const updateOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
  * POST /users/org/:id/reset-password
  * Reset password for user in organization
  */
-export const resetOrgPassword = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const resetOrgPassword = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     const { id } = req.params;
 
     // Verify user belongs to same organization
-    const existing = await userService.getUserById(id!);
+    const existing = await userService.getUserById(req.db!, id!);
     if (!existing || existing.organizationId !== organizationId) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
     }
 
     const { newPassword } = resetPasswordSchema.parse(req.body);
 
-    await userService.resetUserPassword(id!, newPassword);
+    await userService.resetUserPassword(req.db!, id!, newPassword);
 
     res.json(success(null, 'Password reset successfully'));
 });
@@ -309,22 +314,24 @@ export const resetOrgPassword = asyncHandler(async (req: AuthenticatedRequest, r
  * DELETE /users/org/:id
  * Delete user in organization
  */
-export const deleteOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const deleteOrgUser = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     const { id } = req.params;
 
     // Verify user belongs to same organization
-    const existing = await userService.getUserById(id!);
+    const existing = await userService.getUserById(req.db!, id!);
     if (!existing || existing.organizationId !== organizationId) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
     }
 
     // Prevent deleting yourself
     if (id === req.user?.userId) {
-        return res.status(403).json({ success: false, message: 'Cannot delete yourself' });
+        res.status(403).json({ success: false, message: 'Cannot delete yourself' });
+        return;
     }
 
-    await userService.deleteUser(id!);
+    await userService.deleteUser(req.db!, id!);
 
     res.json(success(null, 'User deleted successfully'));
 });
@@ -333,24 +340,26 @@ export const deleteOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
  * POST /users/org/:id/toggle-status
  * Toggle user active status in organization
  */
-export const toggleOrgUserStatus = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+export const toggleOrgUserStatus = asyncHandler(async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const organizationId = req.user?.organizationId;
     const { id } = req.params;
 
     // Verify user belongs to same organization
-    const existing = await userService.getUserById(id!);
+    const existing = await userService.getUserById(req.db!, id!);
     if (!existing || existing.organizationId !== organizationId) {
-        return res.status(404).json({ success: false, message: 'User not found' });
+        res.status(404).json({ success: false, message: 'User not found' });
+        return;
     }
 
     // Prevent toggling yourself
     if (id === req.user?.userId) {
-        return res.status(403).json({ success: false, message: 'Cannot change your own status' });
+        res.status(403).json({ success: false, message: 'Cannot change your own status' });
+        return;
     }
 
     // Toggle the isActive status
     const newStatus = !existing.isActive;
-    const result = await userService.updateUser(id!, { isActive: newStatus });
+    const result = await userService.updateUser(req.db!, id!, { isActive: newStatus });
 
     if (result.success) {
         res.json(success(result.data, newStatus ? 'User activated' : 'User deactivated'));

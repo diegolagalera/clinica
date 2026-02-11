@@ -1,5 +1,5 @@
 import { eq, and, or, ilike, sql } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { patients, appointments, clinicalRecords, radiographs } from '../db/schema.js';
 import { NotFoundError, ForbiddenError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult, TenantContext } from '../types/index.js';
@@ -54,7 +54,7 @@ export type PatientType = typeof patients.$inferSelect;
  * Get patients for a clinic with pagination and search
  * @param isActive - Optional filter: true = only active, false = only inactive, undefined = all
  */
-export const getPatients = async (
+export const getPatients = async (db: Database, 
     clinicId: string,
     params: PaginationParams,
     search?: string,
@@ -106,7 +106,7 @@ export const getPatients = async (
 /**
  * Get patient by ID with tenant validation
  */
-export const getPatientById = async (
+export const getPatientById = async (db: Database, 
     id: string,
     tenantContext: TenantContext
 ): Promise<PatientType | null> => {
@@ -129,7 +129,7 @@ export const getPatientById = async (
 /**
  * Get patient with full details
  */
-export const getPatientWithDetails = async (
+export const getPatientWithDetails = async (db: Database, 
     id: string,
     tenantContext: TenantContext
 ) => {
@@ -171,7 +171,7 @@ export const getPatientWithDetails = async (
 /**
  * Create a new patient
  */
-export const createPatient = async (
+export const createPatient = async (db: Database, 
     input: CreatePatientInput
 ): Promise<ServiceResult<PatientType>> => {
     const [patient] = await db
@@ -189,12 +189,12 @@ export const createPatient = async (
 /**
  * Update a patient
  */
-export const updatePatient = async (
+export const updatePatient = async (db: Database, 
     id: string,
     input: UpdatePatientInput,
     tenantContext: TenantContext
 ): Promise<ServiceResult<PatientType>> => {
-    const existing = await getPatientById(id, tenantContext);
+    const existing = await getPatientById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Patient not found');
     }
@@ -221,11 +221,11 @@ export const updatePatient = async (
 /**
  * Delete a patient (soft delete by setting isActive to false)
  */
-export const deletePatient = async (
+export const deletePatient = async (db: Database, 
     id: string,
     tenantContext: TenantContext
 ): Promise<boolean> => {
-    const existing = await getPatientById(id, tenantContext);
+    const existing = await getPatientById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Patient not found');
     }
@@ -241,11 +241,11 @@ export const deletePatient = async (
 /**
  * Get patient statistics
  */
-export const getPatientStats = async (
+export const getPatientStats = async (db: Database, 
     id: string,
     tenantContext: TenantContext
 ) => {
-    const patient = await getPatientById(id, tenantContext);
+    const patient = await getPatientById(db, id, tenantContext);
     if (!patient) {
         throw new NotFoundError('Patient not found');
     }

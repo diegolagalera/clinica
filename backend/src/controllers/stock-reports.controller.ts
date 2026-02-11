@@ -4,7 +4,6 @@ import { asyncHandler } from '../middleware/index.js';
 import { BadRequestError } from '../utils/errors.js';
 import { success } from '../utils/response.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { db } from '../db/index.js';
 import {
     inventoryItems,
     appointmentStockUsage,
@@ -27,7 +26,7 @@ export const getStockSummary = asyncHandler(async (req: AuthenticatedRequest, re
     const clinicId = req.tenantContext.clinicId;
 
     // Total items and value
-    const [totals] = await db
+    const [totals] = await req.db!
         .select({
             totalItems: sql<number>`COUNT(*)`,
             totalStock: sql<number>`SUM(${inventoryItems.currentStock})`,
@@ -40,7 +39,7 @@ export const getStockSummary = asyncHandler(async (req: AuthenticatedRequest, re
         ));
 
     // Low stock count
-    const [lowStock] = await db
+    const [lowStock] = await req.db!
         .select({ count: sql<number>`COUNT(*)` })
         .from(inventoryItems)
         .where(and(
@@ -50,7 +49,7 @@ export const getStockSummary = asyncHandler(async (req: AuthenticatedRequest, re
         ));
 
     // Out of stock count
-    const [outOfStock] = await db
+    const [outOfStock] = await req.db!
         .select({ count: sql<number>`COUNT(*)` })
         .from(inventoryItems)
         .where(and(
@@ -60,7 +59,7 @@ export const getStockSummary = asyncHandler(async (req: AuthenticatedRequest, re
         ));
 
     // Items by category
-    const categoryCounts = await db
+    const categoryCounts = await req.db!
         .select({
             category: inventoryItems.category,
             count: sql<number>`COUNT(*)`,
@@ -97,7 +96,7 @@ export const getLowStockItems = asyncHandler(async (req: AuthenticatedRequest, r
         throw new BadRequestError('Clinic context required');
     }
 
-    const items = await db
+    const items = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -128,7 +127,7 @@ export const getConsumptionReport = asyncHandler(async (req: AuthenticatedReques
     const clinicId = req.tenantContext.clinicId;
 
     // Get consumption by item
-    const consumption = await db
+    const consumption = await req.db!
         .select({
             itemId: appointmentStockUsage.itemId,
             itemName: inventoryItems.name,
@@ -149,7 +148,7 @@ export const getConsumptionReport = asyncHandler(async (req: AuthenticatedReques
         .orderBy(desc(sql`SUM(${appointmentStockUsage.quantity})`));
 
     // Total summary
-    const [totals] = await db
+    const [totals] = await req.db!
         .select({
             totalQuantity: sql<number>`SUM(${appointmentStockUsage.quantity})`,
             totalCost: sql<string>`SUM(${appointmentStockUsage.quantity} * COALESCE(${appointmentStockUsage.unitCost}, 0))`,
@@ -198,7 +197,7 @@ export const getConsumptionByPatient = asyncHandler(async (req: AuthenticatedReq
 
     const clinicId = req.tenantContext.clinicId;
 
-    const consumption = await db
+    const consumption = await req.db!
         .select({
             patientId: appointments.patientId,
             patientFirstName: patients.firstName,
@@ -262,7 +261,7 @@ export const getMovementsReport = asyncHandler(async (req: AuthenticatedRequest,
         conditions.push(eq(stockMovements.itemId, itemId as string));
     }
 
-    const movements = await db
+    const movements = await req.db!
         .select({
             id: stockMovements.id,
             itemId: stockMovements.itemId,
@@ -285,7 +284,7 @@ export const getMovementsReport = asyncHandler(async (req: AuthenticatedRequest,
         .limit(500);
 
     // Summary by type
-    const typeSummary = await db
+    const typeSummary = await req.db!
         .select({
             type: stockMovements.type,
             count: sql<number>`COUNT(*)`,
@@ -322,7 +321,7 @@ export const getExpiringItems = asyncHandler(async (req: AuthenticatedRequest, r
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + daysAhead);
 
-    const items = await db
+    const items = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(

@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { AiUsageService } from './ai-usage.service.js';
+import type { Database } from '../db/index.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -74,6 +75,7 @@ Responde SIEMPRE en formato JSON con la siguiente estructura:
  * Analyze a dental radiograph using OpenAI Vision API
  */
 export const analyzeRadiograph = async (
+    db: Database,
     imageBase64: string,
     mimeType: string = 'image/png',
     clinicId?: string
@@ -83,7 +85,7 @@ export const analyzeRadiograph = async (
     try {
         // Enforce AI quota
         if (clinicId) {
-            await AiUsageService.enforceQuota(clinicId);
+            await AiUsageService.enforceQuota(db, clinicId);
         }
 
         logger.info('Starting radiograph AI analysis');
@@ -149,7 +151,7 @@ export const analyzeRadiograph = async (
             total: response.usage?.total_tokens || 1500,
         };
         if (clinicId) {
-            await AiUsageService.logUsage(clinicId, 'radiograph', 'gpt-4o', tokens);
+            await AiUsageService.logUsage(db, clinicId, 'radiograph', 'gpt-4o', tokens);
         }
 
         return {
@@ -235,6 +237,7 @@ export interface GeneratedImageResult {
  * Generate a stock item image using DALL-E
  */
 export const generateStockItemImage = async (
+    db: Database,
     itemName: string,
     itemDescription?: string,
     clinicId?: string
@@ -244,7 +247,7 @@ export const generateStockItemImage = async (
     try {
         // Enforce AI quota
         if (clinicId) {
-            await AiUsageService.enforceQuota(clinicId);
+            await AiUsageService.enforceQuota(db, clinicId);
         }
         // Validate the item is medical/dental related
         const isValid = isValidMedicalItem(itemName) ||
@@ -290,8 +293,8 @@ El producto debe verse realista y profesional, como para un catálogo de suminis
             style: 'natural',
         });
 
-        const imageUrl = response.data[0]?.url;
-        const revisedPrompt = response.data[0]?.revised_prompt || prompt;
+        const imageUrl = response.data![0]?.url;
+        const revisedPrompt = response.data![0]?.revised_prompt || prompt;
 
         if (!imageUrl) {
             throw new Error('No se pudo generar la imagen');
@@ -302,7 +305,7 @@ El producto debe verse realista y profesional, como para un catálogo de suminis
 
         // Log AI usage (DALL-E: flat $0.04/image, use 1000 token-equivalent for proportional tracking)
         if (clinicId) {
-            await AiUsageService.logUsage(clinicId, 'stock_image', 'dall-e-3', { prompt: 1000, completion: 0, total: 1000 });
+            await AiUsageService.logUsage(db, clinicId, 'stock_image', 'dall-e-3', { prompt: 1000, completion: 0, total: 1000 });
         }
 
         return {

@@ -46,14 +46,14 @@ export function decrypt(encryptedText: string): string {
             throw new Error('Invalid encrypted text format');
         }
 
-        const iv = Buffer.from(parts[0], 'hex');
-        const authTag = Buffer.from(parts[1], 'hex');
-        const ciphertext = parts[2];
+        const iv = Buffer.from(parts[0]!, 'hex');
+        const authTag = Buffer.from(parts[1]!, 'hex');
+        const ciphertext = parts[2]!;
 
         const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
         decipher.setAuthTag(authTag);
 
-        let decrypted = decipher.update(ciphertext, 'hex', 'utf8');
+        let decrypted: string = decipher.update(ciphertext, 'hex', 'utf8');
         decrypted += decipher.final('utf8');
 
         return decrypted;

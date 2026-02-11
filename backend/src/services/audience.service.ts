@@ -1,5 +1,5 @@
 import { eq, and, desc, sql, gte, lte, isNotNull, lt, gt, or, inArray } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { audienceSegments, patients } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
 
@@ -34,7 +34,7 @@ class AudienceService {
     /**
      * Get all audience segments for a clinic
      */
-    async getSegments(clinicId: string) {
+    async getSegments(db: Database, clinicId: string) {
         return db
             .select()
             .from(audienceSegments)
@@ -45,7 +45,7 @@ class AudienceService {
     /**
      * Get a specific segment by ID
      */
-    async getSegmentById(id: string, clinicId: string) {
+    async getSegmentById(db: Database, id: string, clinicId: string) {
         const [segment] = await db
             .select()
             .from(audienceSegments)
@@ -63,9 +63,9 @@ class AudienceService {
     /**
      * Create a new audience segment
      */
-    async createSegment(clinicId: string, userId: string, data: CreateSegmentData) {
+    async createSegment(db: Database, clinicId: string, userId: string, data: CreateSegmentData) {
         // Calculate initial patient count
-        const count = await this.countPatientsForFilters(clinicId, data.filters);
+        const count = await this.countPatientsForFilters(db, clinicId, data.filters);
 
         const [segment] = await db
             .insert(audienceSegments)
@@ -80,19 +80,19 @@ class AudienceService {
             })
             .returning();
 
-        logger.info(`Audience segment created: ${segment.id} for clinic ${clinicId}`);
+        logger.info(`Audience segment created: ${segment!.id} for clinic ${clinicId}`);
         return segment;
     }
 
     /**
      * Update a segment
      */
-    async updateSegment(id: string, clinicId: string, data: UpdateSegmentData) {
+    async updateSegment(db: Database, id: string, clinicId: string, data: UpdateSegmentData) {
         let patientCount: number | undefined;
 
         // If filters changed, recalculate patient count
         if (data.filters) {
-            patientCount = await this.countPatientsForFilters(clinicId, data.filters);
+            patientCount = await this.countPatientsForFilters(db, clinicId, data.filters);
         }
 
         const [updated] = await db
@@ -121,7 +121,7 @@ class AudienceService {
     /**
      * Delete a segment
      */
-    async deleteSegment(id: string, clinicId: string) {
+    async deleteSegment(db: Database, id: string, clinicId: string) {
         const result = await db
             .delete(audienceSegments)
             .where(
@@ -143,12 +143,12 @@ class AudienceService {
     /**
      * Preview patients matching a set of filters
      */
-    async previewFilters(clinicId: string, filters: SegmentFilter[], limit: number = 10): Promise<{
+    async previewFilters(db: Database, clinicId: string, filters: SegmentFilter[], limit: number = 10): Promise<{
         count: number;
         patients: PatientPreview[];
     }> {
-        const count = await this.countPatientsForFilters(clinicId, filters);
-        const matchingPatients = await this.getPatientsForFilters(clinicId, filters, limit);
+        const count = await this.countPatientsForFilters(db, clinicId, filters);
+        const matchingPatients = await this.getPatientsForFilters(db, clinicId, filters, limit);
 
         return {
             count,
@@ -164,20 +164,20 @@ class AudienceService {
     /**
      * Get all patients matching a segment
      */
-    async getPatientsForSegment(segmentId: string, clinicId: string) {
-        const segment = await this.getSegmentById(segmentId, clinicId);
+    async getPatientsForSegment(db: Database, segmentId: string, clinicId: string) {
+        const segment = await this.getSegmentById(db, segmentId, clinicId);
         if (!segment) {
             throw new Error('Segment not found');
         }
 
         const filters = segment.filters as SegmentFilter[];
-        return this.getPatientsForFilters(clinicId, filters);
+        return this.getPatientsForFilters(db, clinicId, filters);
     }
 
     /**
      * Count patients matching filters
      */
-    private async countPatientsForFilters(clinicId: string, filters: SegmentFilter[]): Promise<number> {
+    private async countPatientsForFilters(db: Database, clinicId: string, filters: SegmentFilter[]): Promise<number> {
         const conditions = this.buildFilterConditions(clinicId, filters);
 
         const [result] = await db
@@ -191,7 +191,7 @@ class AudienceService {
     /**
      * Get patients matching filters
      */
-    private async getPatientsForFilters(clinicId: string, filters: SegmentFilter[], limit?: number) {
+    private async getPatientsForFilters(db: Database, clinicId: string, filters: SegmentFilter[], limit?: number) {
         const conditions = this.buildFilterConditions(clinicId, filters);
 
         let query = db
@@ -256,7 +256,6 @@ class AudienceService {
             case 'age':
                 const today = new Date();
                 if (filter.operator === 'between' && filter.value && filter.value2) {
-                    // Calculate date range for age between X and Y
                     const minBirthDate = new Date(today.getFullYear() - filter.value2, today.getMonth(), today.getDate());
                     const maxBirthDate = new Date(today.getFullYear() - filter.value, today.getMonth(), today.getDate());
                     return and(
@@ -276,11 +275,8 @@ class AudienceService {
             case 'birthdayMonth':
                 return sql`EXTRACT(MONTH FROM ${patients.dateOfBirth}) = ${filter.value}`;
 
-            // Days since last visit - requires join with appointments
-            // For now, we'll handle this as a special case in the query
+            // Days since last visit
             case 'daysSinceLastVisit':
-                // This is complex and would require a subquery
-                // For MVP, we'll skip this filter in basic conditions
                 logger.warn('daysSinceLastVisit filter requires special handling');
                 break;
 
@@ -371,14 +367,14 @@ class AudienceService {
     /**
      * Refresh patient count for a segment
      */
-    async refreshSegmentCount(segmentId: string, clinicId: string) {
-        const segment = await this.getSegmentById(segmentId, clinicId);
+    async refreshSegmentCount(db: Database, segmentId: string, clinicId: string) {
+        const segment = await this.getSegmentById(db, segmentId, clinicId);
         if (!segment) {
             throw new Error('Segment not found');
         }
 
         const filters = segment.filters as SegmentFilter[];
-        const count = await this.countPatientsForFilters(clinicId, filters);
+        const count = await this.countPatientsForFilters(db, clinicId, filters);
 
         await db
             .update(audienceSegments)

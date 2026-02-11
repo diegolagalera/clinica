@@ -1,17 +1,18 @@
 import { Router } from 'express';
 import * as staffController from '../controllers/staff.controller.js';
 import { authenticate, requireAdmin, requireStaff, tenantContext } from '../middleware/index.js';
+import { requireTenantDb } from '../middleware/tenant.middleware.js';
 
 const router = Router();
 
 // All routes require authentication
 router.use(authenticate);
 
-// Get clinics accessible to current user
-router.get('/my-clinics', staffController.getMyClinics);
+// Get clinics accessible to current user (requires tenant DB)
+router.get('/my-clinics', requireTenantDb, staffController.getMyClinics);
 
 // Update own profile
-router.put('/profile', requireStaff, staffController.updateMyProfile);
+router.put('/profile', requireTenantDb, requireStaff, staffController.updateMyProfile);
 
 // Routes requiring tenant context
 router.use(tenantContext);

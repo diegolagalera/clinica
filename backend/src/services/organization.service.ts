@@ -1,5 +1,5 @@
 import { eq, and, ilike, sql } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { organizations } from '../db/schema.js';
 import { NotFoundError, ConflictError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult } from '../types/index.js';
@@ -29,7 +29,7 @@ export type OrganizationType = typeof organizations.$inferSelect;
 /**
  * Get all organizations with pagination
  */
-export const getOrganizations = async (
+export const getOrganizations = async (db: Database,
     params: PaginationParams,
     search?: string
 ): Promise<{ data: OrganizationType[]; total: number }> => {
@@ -62,7 +62,7 @@ export const getOrganizations = async (
 /**
  * Get organization by ID
  */
-export const getOrganizationById = async (
+export const getOrganizationById = async (db: Database,
     id: string
 ): Promise<OrganizationType | null> => {
     const org = await db.query.organizations.findFirst({
@@ -74,7 +74,7 @@ export const getOrganizationById = async (
 /**
  * Get organization by slug
  */
-export const getOrganizationBySlug = async (
+export const getOrganizationBySlug = async (db: Database,
     slug: string
 ): Promise<OrganizationType | null> => {
     const org = await db.query.organizations.findFirst({
@@ -86,25 +86,27 @@ export const getOrganizationBySlug = async (
 /**
  * Create a new organization
  */
-export const createOrganization = async (
+export const createOrganization = async (db: Database,
     input: CreateOrganizationInput
 ): Promise<ServiceResult<OrganizationType>> => {
     // Check if slug is unique
-    const existing = await getOrganizationBySlug(input.slug);
+    const existing = await getOrganizationBySlug(db, input.slug);
     if (existing) {
         throw new ConflictError('Organization slug already exists');
     }
 
+    const values: Record<string, any> = {
+        name: input.name,
+        slug: input.slug.toLowerCase(),
+    };
+    if (input.email !== undefined) values.email = input.email;
+    if (input.phone !== undefined) values.phone = input.phone;
+    if (input.address !== undefined) values.address = input.address;
+    if (input.logoUrl !== undefined) values.logoUrl = input.logoUrl;
+
     const [org] = await db
         .insert(organizations)
-        .values({
-            name: input.name,
-            slug: input.slug.toLowerCase(),
-            email: input.email,
-            phone: input.phone,
-            address: input.address,
-            logoUrl: input.logoUrl,
-        })
+        .values(values as any)
         .returning();
 
     return { success: true, data: org! };
@@ -113,30 +115,37 @@ export const createOrganization = async (
 /**
  * Update an organization
  */
-export const updateOrganization = async (
+export const updateOrganization = async (db: Database,
     id: string,
     input: UpdateOrganizationInput
 ): Promise<ServiceResult<OrganizationType>> => {
-    const existing = await getOrganizationById(id);
+    const existing = await getOrganizationById(db, id);
     if (!existing) {
         throw new NotFoundError('Organization not found');
     }
 
     // Check slug uniqueness if changing
     if (input.slug && input.slug !== existing.slug) {
-        const slugExists = await getOrganizationBySlug(input.slug);
+        const slugExists = await getOrganizationBySlug(db, input.slug);
         if (slugExists) {
             throw new ConflictError('Organization slug already exists');
         }
     }
 
+    const updateData: Record<string, any> = { ...input, updatedAt: new Date() };
+    if (input.slug) {
+        updateData.slug = input.slug.toLowerCase();
+    } else {
+        delete updateData.slug;
+    }
+    // Remove undefined values
+    for (const key of Object.keys(updateData)) {
+        if (updateData[key] === undefined) delete updateData[key];
+    }
+
     const [updated] = await db
         .update(organizations)
-        .set({
-            ...input,
-            slug: input.slug?.toLowerCase(),
-            updatedAt: new Date(),
-        })
+        .set(updateData)
         .where(eq(organizations.id, id))
         .returning();
 
@@ -146,8 +155,8 @@ export const updateOrganization = async (
 /**
  * Delete an organization
  */
-export const deleteOrganization = async (id: string): Promise<boolean> => {
-    const existing = await getOrganizationById(id);
+export const deleteOrganization = async (db: Database, id: string): Promise<boolean> => {
+    const existing = await getOrganizationById(db, id);
     if (!existing) {
         throw new NotFoundError('Organization not found');
     }
@@ -159,7 +168,7 @@ export const deleteOrganization = async (id: string): Promise<boolean> => {
 /**
  * Get organization statistics
  */
-export const getOrganizationStats = async (id: string) => {
+export const getOrganizationStats = async (db: Database, id: string) => {
     const org = await db.query.organizations.findFirst({
         where: eq(organizations.id, id),
         with: {

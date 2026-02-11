@@ -3,6 +3,7 @@ import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import type { TemplateBlock } from './email-template.service.js';
 import { AiUsageService } from './ai-usage.service.js';
+import type { Database } from '../db/index.js';
 
 // Initialize OpenAI client
 const openai = config.openai.apiKey
@@ -78,6 +79,7 @@ interface AITemplateResponse {
  * Generate email template blocks using AI
  */
 export const generateEmailTemplate = async (
+    db: Database,
     userPrompt: string,
     clinicId?: string
 ): Promise<{ success: true; data: AITemplateResponse } | { success: false; error: string; code: string }> => {
@@ -94,7 +96,7 @@ export const generateEmailTemplate = async (
     // Enforce AI quota
     if (clinicId) {
         try {
-            await AiUsageService.enforceQuota(clinicId);
+            await AiUsageService.enforceQuota(db, clinicId);
         } catch (e: any) {
             return {
                 success: false,
@@ -188,7 +190,7 @@ export const generateEmailTemplate = async (
                 completion: response.usage?.completion_tokens || 1000,
                 total: response.usage?.total_tokens || 1500,
             };
-            await AiUsageService.logUsage(clinicId, 'email_template', 'gpt-4o-mini', tokens);
+            await AiUsageService.logUsage(db, clinicId, 'email_template', 'gpt-4o-mini', tokens);
         }
 
         return {

@@ -429,7 +429,9 @@ export class WhatsAppService {
             testPhone,
             '✅ Conexión WhatsApp verificada correctamente desde Cuspia.'
         );
-        return { success: result.success, error: result.error };
+        const response: { success: boolean; error?: string } = { success: result.success };
+        if (result.error !== undefined) response.error = result.error;
+        return response;
     }
 
     /**

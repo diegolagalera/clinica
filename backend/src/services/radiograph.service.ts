@@ -1,5 +1,5 @@
 import { eq, and, desc, sql } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { radiographs, radiographAiResults, users } from '../db/schema.js';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../utils/errors.js';
 import { analyzeRadiograph, type RadiographAnalysisResult } from './openai.service.js';
@@ -35,7 +35,7 @@ export interface UpdateRadiographNotesInput {
     annotations?: unknown;
 }
 // Helper to get organizationId from clinicId
-const getOrgIdForClinic = async (clinicId: string): Promise<string> => {
+const getOrgIdForClinic = async (db: Database, clinicId: string): Promise<string> => {
     const clinic = await db.query.clinics.findFirst({
         where: eq(clinics.id, clinicId),
         columns: { organizationId: true },
@@ -46,7 +46,7 @@ const getOrgIdForClinic = async (clinicId: string): Promise<string> => {
 /**
  * Upload and create a new radiograph
  */
-export const createRadiograph = async (
+export const createRadiograph = async (db: Database,
     input: CreateRadiographInput,
     tenantContext: TenantContext
 ): Promise<{ radiograph: RadiographType; aiResult: RadiographAiResultType | null }> => {
@@ -61,7 +61,7 @@ export const createRadiograph = async (
         throw new ForbiddenError('No tiene acceso a esta clínica');
     }
 
-    const orgId = await getOrgIdForClinic(input.clinicId);
+    const orgId = await getOrgIdForClinic(db, input.clinicId);
 
     // Generate unique filename
     const fileExtension = path.extname(input.file.originalname).toLowerCase();
@@ -103,7 +103,7 @@ export const createRadiograph = async (
         aiResult = result!;
 
         // Start async AI analysis
-        processAiAnalysis(radiograph!.id, input.file.buffer, input.file.mimetype, input.clinicId).catch((err) => {
+        processAiAnalysis(db, radiograph!.id, input.file.buffer, input.file.mimetype, input.clinicId).catch((err) => {
             logger.error('Background AI analysis failed:', err);
         });
     }
@@ -115,6 +115,7 @@ export const createRadiograph = async (
  * Process AI analysis asynchronously
  */
 const processAiAnalysis = async (
+    db: Database,
     radiographId: string,
     fileBuffer: Buffer,
     mimeType: string,
@@ -133,7 +134,7 @@ const processAiAnalysis = async (
         const base64Image = fileBuffer.toString('base64');
 
         // Call OpenAI
-        const result = await analyzeRadiograph(base64Image, mimeType, clinicId);
+        const result = await analyzeRadiograph(db, base64Image, mimeType, clinicId);
 
         const processingTime = Date.now() - startTime;
 
@@ -174,7 +175,7 @@ const processAiAnalysis = async (
 /**
  * Get radiographs for a patient
  */
-export const getRadiographsByPatient = async (
+export const getRadiographsByPatient = async (db: Database,
     patientId: string,
     tenantContext: TenantContext
 ): Promise<(RadiographType & { aiResult: RadiographAiResultType | null; uploadedBy: { firstName: string; lastName: string } | null })[]> => {
@@ -216,7 +217,7 @@ export const getRadiographsByPatient = async (
 /**
  * Get radiograph by ID with AI result
  */
-export const getRadiographById = async (
+export const getRadiographById = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<RadiographType & { aiResult: RadiographAiResultType | null } | null> => {
@@ -245,17 +246,17 @@ export const getRadiographById = async (
  * If no AI result exists (skipAnalysis was true on upload), creates one
  * If AI result exists and is not processing, retries the analysis
  */
-export const retryAiAnalysis = async (
+export const retryAiAnalysis = async (db: Database,
     radiographId: string,
     tenantContext: TenantContext
 ): Promise<RadiographAiResultType> => {
-    const radiograph = await getRadiographById(radiographId, tenantContext);
+    const radiograph = await getRadiographById(db, radiographId, tenantContext);
     if (!radiograph) {
         throw new NotFoundError('Radiografía no encontrada');
     }
 
     // Enforce AI quota — return specific error immediately
-    await AiUsageService.enforceQuota(radiograph.clinicId);
+    await AiUsageService.enforceQuota(db, radiograph.clinicId);
 
     let aiResult = radiograph.aiResult;
 
@@ -290,7 +291,7 @@ export const retryAiAnalysis = async (
 
     // Read file from MinIO and start analysis
     const fileBuffer = await storage.getFileBuffer(radiograph.storageKey);
-    processAiAnalysis(radiographId, fileBuffer, radiograph.mimeType, radiograph.clinicId).catch((err) => {
+    processAiAnalysis(db, radiographId, fileBuffer, radiograph.mimeType, radiograph.clinicId).catch((err) => {
         logger.error('AI analysis failed:', err);
     });
 
@@ -300,12 +301,12 @@ export const retryAiAnalysis = async (
 /**
  * Update worker notes for a radiograph
  */
-export const updateRadiographNotes = async (
+export const updateRadiographNotes = async (db: Database,
     id: string,
     input: UpdateRadiographNotesInput,
     tenantContext: TenantContext
 ): Promise<RadiographType> => {
-    const existing = await getRadiographById(id, tenantContext);
+    const existing = await getRadiographById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Radiografía no encontrada');
     }
@@ -326,11 +327,11 @@ export const updateRadiographNotes = async (
 /**
  * Delete a radiograph
  */
-export const deleteRadiograph = async (
+export const deleteRadiograph = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<boolean> => {
-    const existing = await getRadiographById(id, tenantContext);
+    const existing = await getRadiographById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Radiografía no encontrada');
     }
@@ -347,11 +348,11 @@ export const deleteRadiograph = async (
 /**
  * Get file path for serving radiograph image
  */
-export const getRadiographFilePath = async (
+export const getRadiographFilePath = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<{ path: string; mimeType: string; filename: string }> => {
-    const radiograph = await getRadiographById(id, tenantContext);
+    const radiograph = await getRadiographById(db, id, tenantContext);
     if (!radiograph) {
         throw new NotFoundError('Radiografía no encontrada');
     }

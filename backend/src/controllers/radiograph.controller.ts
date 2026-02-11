@@ -20,14 +20,14 @@ export const uploadRadiograph = asyncHandler(async (req: AuthenticatedRequest, r
     }
 
     // Get patient to determine clinicId
-    const patient = await patientService.getPatientById(patientId!, req.tenantContext);
+    const patient = await patientService.getPatientById(req.db!, patientId!, req.tenantContext);
     if (!patient) {
         throw new BadRequestError('Paciente no encontrado');
     }
 
     const { radiographType, notes } = req.body;
 
-    const result = await radiographService.createRadiograph(
+    const result = await radiographService.createRadiograph(req.db!,
         {
             clinicId: patient.clinicId,
             patientId: patientId!,
@@ -55,7 +55,7 @@ export const uploadRadiograph = asyncHandler(async (req: AuthenticatedRequest, r
 export const getPatientRadiographs = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { patientId } = req.params;
 
-    const radiographs = await radiographService.getRadiographsByPatient(
+    const radiographs = await radiographService.getRadiographsByPatient(req.db!,
         patientId!,
         req.tenantContext
     );
@@ -70,7 +70,7 @@ export const getPatientRadiographs = asyncHandler(async (req: AuthenticatedReque
 export const getRadiograph = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const radiograph = await radiographService.getRadiographById(id!, req.tenantContext);
+    const radiograph = await radiographService.getRadiographById(req.db!, id!, req.tenantContext);
 
     if (!radiograph) {
         throw new BadRequestError('Radiografía no encontrada');
@@ -86,7 +86,7 @@ export const getRadiograph = asyncHandler(async (req: AuthenticatedRequest, res:
 export const getRadiographImage = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const fileInfo = await radiographService.getRadiographFilePath(id!, req.tenantContext);
+    const fileInfo = await radiographService.getRadiographFilePath(req.db!, id!, req.tenantContext);
 
     const { stream, contentType } = await storage.getFileStream(fileInfo.path);
 
@@ -102,7 +102,7 @@ export const getRadiographImage = asyncHandler(async (req: AuthenticatedRequest,
 export const retryAnalysis = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const result = await radiographService.retryAiAnalysis(id!, req.tenantContext);
+    const result = await radiographService.retryAiAnalysis(req.db!, id!, req.tenantContext);
 
     res.json(success(result));
 });
@@ -115,7 +115,7 @@ export const updateNotes = asyncHandler(async (req: AuthenticatedRequest, res: R
     const { id } = req.params;
     const { notes, annotations } = req.body;
 
-    const updated = await radiographService.updateRadiographNotes(
+    const updated = await radiographService.updateRadiographNotes(req.db!,
         id!,
         { notes, annotations },
         req.tenantContext
@@ -131,7 +131,7 @@ export const updateNotes = asyncHandler(async (req: AuthenticatedRequest, res: R
 export const deleteRadiograph = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await radiographService.deleteRadiograph(id!, req.tenantContext);
+    await radiographService.deleteRadiograph(req.db!, id!, req.tenantContext);
 
     res.json(success({ deleted: true }));
 });

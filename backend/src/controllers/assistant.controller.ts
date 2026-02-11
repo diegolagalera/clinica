@@ -83,7 +83,7 @@ export const chat = asyncHandler(async (req: AuthenticatedRequest, res: Response
 
     // Get response from assistant
     const clinicId = req.tenantContext?.clinicId || undefined;
-    const response = await chatWithAssistant(message.trim(), conversationHistory, clinicId);
+    const response = await chatWithAssistant(req.db!, message.trim(), conversationHistory, clinicId);
 
     if (!response.success) {
         res.status(500).json({

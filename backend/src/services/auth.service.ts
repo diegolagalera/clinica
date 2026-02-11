@@ -2,8 +2,11 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { eq, and } from 'drizzle-orm';
 import { authenticator } from 'otplib';
-import { db } from '../db/index.js';
-import { users, refreshTokens, organizations, clinics } from '../db/schema.js';
+import type { Database } from '../db/index.js';
+import { centralDb } from '../db/central-db.js';
+import { superadmins, globalUsers } from '../db/central-schema.js';
+import { tenantManager } from '../db/tenant-manager.js';
+import { users, refreshTokens } from '../db/schema.js';
 import { config } from '../config/env.js';
 import { UnauthorizedError, BadRequestError, NotFoundError, ConflictError } from '../utils/errors.js';
 import type { AccessTokenPayload, RefreshTokenPayload, ServiceResult, Role } from '../types/index.js';
@@ -21,12 +24,14 @@ export interface RegisterInput {
     role?: Role;
     organizationId?: string;
     clinicId?: string;
+    tenantSlug?: string; // Required for multi-tenant registration
 }
 
 export interface LoginInput {
     email: string;
     password: string;
-    twoFactorCode?: string;
+    twoFactorCode?: string | undefined;
+    tenantSlug?: string | undefined; // When user selects a specific tenant
 }
 
 export interface AuthTokens {
@@ -46,6 +51,21 @@ export interface UserInfo {
     clinicId: string | null;
     twoFactorEnabled: boolean;
     emailVerified: boolean;
+    tenantSlug?: string | undefined;
+}
+
+export interface TenantOption {
+    slug: string;
+    name: string;
+    role: string;
+}
+
+export interface LoginResult {
+    tokens: AuthTokens;
+    user: UserInfo;
+    requires2FA?: boolean;
+    requiresTenantSelection?: boolean;
+    availableTenants?: TenantOption[];
 }
 
 /**
@@ -66,8 +86,9 @@ export const verifyPassword = async (password: string, hash: string): Promise<bo
  * Generate access token
  */
 export const generateAccessToken = (payload: AccessTokenPayload): string => {
-    return jwt.sign(payload, config.jwt.accessSecret, {
-        expiresIn: config.jwt.accessExpiry,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return jwt.sign(payload as any, config.jwt.accessSecret, {
+        expiresIn: config.jwt.accessExpiry as any,
     });
 };
 
@@ -75,8 +96,9 @@ export const generateAccessToken = (payload: AccessTokenPayload): string => {
  * Generate refresh token
  */
 export const generateRefreshToken = (payload: RefreshTokenPayload): string => {
-    return jwt.sign(payload, config.jwt.refreshSecret, {
-        expiresIn: config.jwt.refreshExpiry,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return jwt.sign(payload as any, config.jwt.refreshSecret, {
+        expiresIn: config.jwt.refreshExpiry as any,
     });
 };
 
@@ -100,80 +122,201 @@ const parseExpiry = (expiry: string): number => {
 };
 
 /**
- * Register a new user
+ * Build a UserInfo object from a user record
  */
-export const register = async (input: RegisterInput): ServiceResult<{ user: UserInfo; requiresVerification: boolean }> => {
-    try {
-        // Check if email already exists
-        const existingUser = await db.query.users.findFirst({
-            where: eq(users.email, input.email.toLowerCase()),
-        });
+const buildUserInfo = (user: any, tenantSlug?: string): UserInfo => ({
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    phone: user.phone,
+    role: user.role as Role,
+    organizationId: user.organizationId ?? null,
+    clinicId: user.clinicId ?? null,
+    twoFactorEnabled: user.twoFactorEnabled,
+    emailVerified: user.emailVerified ?? true,
+    tenantSlug,
+});
 
-        if (existingUser) {
-            throw new ConflictError('Email already registered');
-        }
+// ============================================================================
+// LOGIN — Multi-tenant flow
+// ============================================================================
 
-        // Hash password
-        const passwordHash = await hashPassword(input.password);
+/**
+ * Login user (multi-tenant)
+ *
+ * Flow:
+ * 1. Check if email belongs to a SUPERADMIN (central DB only)
+ * 2. Look up email in global_users → find which tenant(s) it belongs to
+ * 3. If multiple tenants and no tenantSlug provided → return tenant selector
+ * 4. Connect to tenant DB → verify password → generate tokens
+ */
+export const login = async (input: LoginInput): Promise<ServiceResult<LoginResult>> => {
+    const emailLower = input.email.toLowerCase();
 
-        // Generate verification token
-        const emailVerificationToken = crypto.randomUUID();
+    // ── Step 1: Check if SUPERADMIN ──────────────────────────
+    const superadmin = await centralDb.query.superadmins.findFirst({
+        where: and(
+            eq(superadmins.email, emailLower),
+            eq(superadmins.isActive, true),
+        ),
+    });
 
-        // Create user
-        const [user] = await db.insert(users)
-            .values({
-                email: input.email.toLowerCase(),
-                passwordHash,
-                firstName: input.firstName,
-                lastName: input.lastName,
-                phone: input.phone,
-                role: input.role || 'USER',
-                organizationId: input.organizationId,
-                clinicId: input.clinicId,
-                emailVerificationToken,
-                emailVerified: false,
-            })
-            .returning();
+    if (superadmin) {
+        return loginAsSuperadmin(superadmin, input.password, input.twoFactorCode);
+    }
 
-        if (!user) {
-            throw new Error('Failed to create user');
-        }
+    // ── Step 2: Find user in global_users ────────────────────
+    const globalUserRecords = await centralDb.query.globalUsers.findMany({
+        where: and(
+            eq(globalUsers.email, emailLower),
+            eq(globalUsers.isActive, true),
+        ),
+        with: {
+            tenant: true,
+        },
+    });
 
+    if (globalUserRecords.length === 0) {
+        throw new UnauthorizedError('Invalid email or password');
+    }
+
+    // ── Step 3: Multiple tenants → require selection ─────────
+    if (globalUserRecords.length > 1 && !input.tenantSlug) {
         return {
             success: true,
             data: {
+                tokens: { accessToken: '', refreshToken: '', expiresIn: 0 },
                 user: {
-                    id: user.id,
-                    email: user.email,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    phone: user.phone,
-                    role: user.role as Role,
-                    organizationId: user.organizationId,
-                    clinicId: user.clinicId,
-                    twoFactorEnabled: user.twoFactorEnabled,
-                    emailVerified: user.emailVerified,
+                    id: '',
+                    email: emailLower,
+                    firstName: '',
+                    lastName: '',
+                    phone: null,
+                    role: 'USER' as Role,
+                    organizationId: null,
+                    clinicId: null,
+                    twoFactorEnabled: false,
+                    emailVerified: false,
                 },
-                requiresVerification: true,
+                requiresTenantSelection: true,
+                availableTenants: globalUserRecords
+                    .filter((gu) => gu.tenant.isActive)
+                    .map((gu) => ({
+                        slug: gu.tenant.slug,
+                        name: gu.tenant.name,
+                        role: gu.role,
+                    })),
             },
         };
-    } catch (error) {
-        if (error instanceof ConflictError) {
-            return { success: false, error: error.message, code: 'CONFLICT' };
-        }
-        throw error;
     }
+
+    // ── Step 4: Resolve single tenant ────────────────────────
+    const targetGlobalUser = input.tenantSlug
+        ? globalUserRecords.find((gu) => gu.tenant.slug === input.tenantSlug)
+        : globalUserRecords[0];
+
+    if (!targetGlobalUser || !targetGlobalUser.tenant.isActive) {
+        throw new UnauthorizedError('Invalid email or password');
+    }
+
+    // ── Step 5: Connect to tenant DB and verify credentials ──
+    const tenantDb = await tenantManager.getConnection(targetGlobalUser.tenant.slug);
+    return loginAgainstTenantDb(tenantDb, emailLower, input.password, input.twoFactorCode, targetGlobalUser.tenant.slug);
 };
 
 /**
- * Login user
+ * Login as SUPERADMIN (against central DB)
  */
-export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: AuthTokens; user: UserInfo; requires2FA?: boolean }>> => {
-    // Find user
+const loginAsSuperadmin = async (
+    superadmin: typeof superadmins.$inferSelect,
+    password: string,
+    twoFactorCode?: string,
+): Promise<ServiceResult<LoginResult>> => {
+    const isValidPassword = await verifyPassword(password, superadmin.passwordHash);
+    if (!isValidPassword) {
+        throw new UnauthorizedError('Invalid email or password');
+    }
+
+    // 2FA check
+    if (superadmin.twoFactorEnabled && superadmin.twoFactorSecret) {
+        if (!twoFactorCode) {
+            return {
+                success: true,
+                data: {
+                    tokens: { accessToken: '', refreshToken: '', expiresIn: 0 },
+                    user: buildUserInfo({
+                        ...superadmin,
+                        role: 'SUPERADMIN',
+                        organizationId: null,
+                        clinicId: null,
+                    }),
+                    requires2FA: true,
+                },
+            };
+        }
+
+        const isValid2FA = authenticator.verify({
+            token: twoFactorCode,
+            secret: superadmin.twoFactorSecret,
+        });
+
+        if (!isValid2FA) {
+            throw new UnauthorizedError('Invalid 2FA code');
+        }
+    }
+
+    // Generate tokens — SUPERADMIN has no tenantSlug
+    const accessPayload: AccessTokenPayload = {
+        userId: superadmin.id,
+        email: superadmin.email,
+        role: 'SUPERADMIN' as Role,
+        organizationId: null,
+        clinicId: null,
+        // No tenantSlug for SUPERADMIN
+    };
+
+    const refreshPayload: RefreshTokenPayload = {
+        userId: superadmin.id,
+        tokenVersion: 0,
+        jti: crypto.randomUUID(),
+    };
+
+    const accessToken = generateAccessToken(accessPayload);
+    const refreshToken = generateRefreshToken(refreshPayload);
+
+    return {
+        success: true,
+        data: {
+            tokens: {
+                accessToken,
+                refreshToken,
+                expiresIn: parseExpiry(config.jwt.accessExpiry),
+            },
+            user: buildUserInfo({
+                ...superadmin,
+                role: 'SUPERADMIN',
+                organizationId: null,
+                clinicId: null,
+            }),
+        },
+    };
+};
+
+/**
+ * Login against a specific tenant database
+ */
+const loginAgainstTenantDb = async (
+    db: Database,
+    email: string,
+    password: string,
+    twoFactorCode: string | undefined,
+    tenantSlug: string,
+): Promise<ServiceResult<LoginResult>> => {
     const user = await db.query.users.findFirst({
         where: and(
-            eq(users.email, input.email.toLowerCase()),
-            eq(users.isActive, true)
+            eq(users.email, email),
+            eq(users.isActive, true),
         ),
     });
 
@@ -181,38 +324,26 @@ export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: 
         throw new UnauthorizedError('Invalid email or password');
     }
 
-    // Verify password
-    const isValidPassword = await verifyPassword(input.password, user.passwordHash);
+    const isValidPassword = await verifyPassword(password, user.passwordHash);
     if (!isValidPassword) {
         throw new UnauthorizedError('Invalid email or password');
     }
 
-    // Check 2FA if enabled
+    // 2FA check
     if (user.twoFactorEnabled && user.twoFactorSecret) {
-        if (!input.twoFactorCode) {
+        if (!twoFactorCode) {
             return {
                 success: true,
                 data: {
                     tokens: { accessToken: '', refreshToken: '', expiresIn: 0 },
-                    user: {
-                        id: user.id,
-                        email: user.email,
-                        firstName: user.firstName,
-                        lastName: user.lastName,
-                        phone: user.phone,
-                        role: user.role as Role,
-                        organizationId: user.organizationId,
-                        clinicId: user.clinicId,
-                        twoFactorEnabled: user.twoFactorEnabled,
-                        emailVerified: user.emailVerified,
-                    },
+                    user: buildUserInfo(user, tenantSlug),
                     requires2FA: true,
                 },
             };
         }
 
         const isValid2FA = authenticator.verify({
-            token: input.twoFactorCode,
+            token: twoFactorCode,
             secret: user.twoFactorSecret,
         });
 
@@ -221,27 +352,28 @@ export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: 
         }
     }
 
-    // Generate tokens
+    // Generate tokens with tenantSlug
     const accessPayload: AccessTokenPayload = {
         userId: user.id,
         email: user.email,
         role: user.role as Role,
         organizationId: user.organizationId,
         clinicId: user.clinicId,
+        tenantSlug,
     };
 
     const refreshPayload: RefreshTokenPayload = {
         userId: user.id,
         tokenVersion: user.tokenVersion,
-        jti: crypto.randomUUID(), // Unique ID to prevent duplicate tokens
+        jti: crypto.randomUUID(),
     };
 
     const accessToken = generateAccessToken(accessPayload);
     const refreshToken = generateRefreshToken(refreshPayload);
 
-    // Store refresh token
+    // Store refresh token in tenant DB
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7); // 7 days
+    expiresAt.setDate(expiresAt.getDate() + 7);
 
     await db.insert(refreshTokens).values({
         userId: user.id,
@@ -262,31 +394,112 @@ export const login = async (input: LoginInput): Promise<ServiceResult<{ tokens: 
                 refreshToken,
                 expiresIn: parseExpiry(config.jwt.accessExpiry),
             },
-            user: {
-                id: user.id,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                phone: user.phone,
-                role: user.role as Role,
-                organizationId: user.organizationId,
-                clinicId: user.clinicId,
-                twoFactorEnabled: user.twoFactorEnabled,
-                emailVerified: user.emailVerified,
-            },
+            user: buildUserInfo(user, tenantSlug),
         },
     };
 };
 
+// ============================================================================
+// REGISTER — Multi-tenant
+// ============================================================================
+
+/**
+ * Register a new user (creates in tenant DB + global_users in central DB)
+ */
+export const register = async (db: Database, input: RegisterInput, tenantSlug: string, tenantId: string): Promise<ServiceResult<{ user: UserInfo; requiresVerification: boolean }>> => {
+    try {
+        const emailLower = input.email.toLowerCase();
+
+        // Check if email already exists in this tenant (global_users)
+        const existingGlobal = await centralDb.query.globalUsers.findFirst({
+            where: and(
+                eq(globalUsers.email, emailLower),
+                eq(globalUsers.tenantId, tenantId),
+            ),
+        });
+
+        if (existingGlobal) {
+            throw new ConflictError('Email already registered');
+        }
+
+        // Reserve email in central DB first
+        const [globalUserRecord] = await centralDb.insert(globalUsers)
+            .values({
+                email: emailLower,
+                tenantId,
+                role: input.role || 'USER',
+                isActive: true,
+            })
+            .returning();
+
+        try {
+            // Hash password
+            const passwordHash = await hashPassword(input.password);
+
+            // Generate verification token
+            const emailVerificationToken = crypto.randomUUID();
+
+            // Create user in tenant DB
+            const [user] = await db.insert(users)
+                .values({
+                    email: emailLower,
+                    passwordHash,
+                    firstName: input.firstName,
+                    lastName: input.lastName,
+                    phone: input.phone ?? null,
+                    role: input.role || 'USER',
+                    organizationId: input.organizationId ?? null,
+                    clinicId: input.clinicId ?? null,
+                    emailVerificationToken,
+                    emailVerified: false,
+                })
+                .returning();
+
+            if (!user) {
+                throw new Error('Failed to create user');
+            }
+
+            // Update global_users with the tenant user ID
+            if (globalUserRecord) {
+                await centralDb.update(globalUsers)
+                    .set({ userId: user.id })
+                    .where(eq(globalUsers.id, globalUserRecord.id));
+            }
+
+            return {
+                success: true,
+                data: {
+                    user: buildUserInfo(user, tenantSlug),
+                    requiresVerification: true,
+                },
+            };
+        } catch (error) {
+            // Rollback: remove from global_users if tenant DB insert fails
+            if (globalUserRecord) {
+                await centralDb.delete(globalUsers)
+                    .where(eq(globalUsers.id, globalUserRecord.id));
+            }
+            throw error;
+        }
+    } catch (error) {
+        if (error instanceof ConflictError) {
+            return { success: false, error: error.message, code: 'CONFLICT' };
+        }
+        throw error;
+    }
+};
+
+// ============================================================================
+// TOKEN REFRESH — Multi-tenant
+// ============================================================================
+
 /**
  * Refresh access token
  */
-export const refreshAccessToken = async (token: string): Promise<ServiceResult<AuthTokens>> => {
+export const refreshAccessToken = async (db: Database, token: string, tenantSlug?: string): Promise<ServiceResult<AuthTokens>> => {
     try {
-        // Verify refresh token
         const decoded = jwt.verify(token, config.jwt.refreshSecret) as RefreshTokenPayload;
 
-        // Find token in database
         const storedToken = await db.query.refreshTokens.findFirst({
             where: and(
                 eq(refreshTokens.token, token),
@@ -303,7 +516,6 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
 
         // Handle race condition: token already revoked by another tab
         if (storedToken.revokedAt) {
-            // If this token was replaced by another, use that one
             if (storedToken.replacedByToken) {
                 const replacementToken = await db.query.refreshTokens.findFirst({
                     where: and(
@@ -315,7 +527,6 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
                     },
                 });
 
-                // If replacement exists and is valid, generate new access token
                 if (replacementToken && !replacementToken.revokedAt && new Date() < replacementToken.expiresAt) {
                     const user = replacementToken.user;
                     if (user.tokenVersion === decoded.tokenVersion) {
@@ -325,6 +536,7 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
                             role: user.role as Role,
                             organizationId: user.organizationId,
                             clinicId: user.clinicId,
+                            tenantSlug,
                         };
                         const newAccessToken = generateAccessToken(accessPayload);
 
@@ -348,35 +560,32 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
 
         const user = storedToken.user;
 
-        // Check token version
         if (user.tokenVersion !== decoded.tokenVersion) {
             throw new UnauthorizedError('Token version mismatch');
         }
 
-        // Generate new tokens
         const accessPayload: AccessTokenPayload = {
             userId: user.id,
             email: user.email,
             role: user.role as Role,
             organizationId: user.organizationId,
             clinicId: user.clinicId,
+            tenantSlug,
         };
 
         const refreshPayload: RefreshTokenPayload = {
             userId: user.id,
             tokenVersion: user.tokenVersion,
-            jti: crypto.randomUUID(), // Unique ID to prevent duplicate tokens
+            jti: crypto.randomUUID(),
         };
 
         const newAccessToken = generateAccessToken(accessPayload);
         const newRefreshToken = generateRefreshToken(refreshPayload);
 
-        // Rotate refresh token
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 7);
 
         await db.transaction(async (tx) => {
-            // Revoke old token
             await tx.update(refreshTokens)
                 .set({
                     revokedAt: new Date(),
@@ -384,7 +593,6 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
                 })
                 .where(eq(refreshTokens.id, storedToken.id));
 
-            // Store new token
             await tx.insert(refreshTokens).values({
                 userId: user.id,
                 token: newRefreshToken,
@@ -408,12 +616,15 @@ export const refreshAccessToken = async (token: string): Promise<ServiceResult<A
     }
 };
 
+// ============================================================================
+// LOGOUT
+// ============================================================================
+
 /**
  * Logout user (revoke refresh token)
  */
-export const logout = async (userId: string, token?: string): Promise<void> => {
+export const logout = async (db: Database, userId: string, token?: string): Promise<void> => {
     if (token) {
-        // Revoke specific token
         await db.update(refreshTokens)
             .set({ revokedAt: new Date() })
             .where(and(
@@ -421,17 +632,20 @@ export const logout = async (userId: string, token?: string): Promise<void> => {
                 eq(refreshTokens.token, token)
             ));
     } else {
-        // Revoke all tokens for user
         await db.update(refreshTokens)
             .set({ revokedAt: new Date() })
             .where(eq(refreshTokens.userId, userId));
     }
 };
 
+// ============================================================================
+// 2FA
+// ============================================================================
+
 /**
  * Setup 2FA for user
  */
-export const setup2FA = async (userId: string): Promise<ServiceResult<{ secret: string; qrCodeUrl: string }>> => {
+export const setup2FA = async (db: Database, userId: string): Promise<ServiceResult<{ secret: string; qrCodeUrl: string }>> => {
     const user = await db.query.users.findFirst({
         where: eq(users.id, userId),
     });
@@ -443,7 +657,6 @@ export const setup2FA = async (userId: string): Promise<ServiceResult<{ secret: 
     const secret = authenticator.generateSecret();
     const otpAuthUrl = authenticator.keyuri(user.email, 'DentalERP', secret);
 
-    // Store secret temporarily (not enabled yet)
     await db.update(users)
         .set({ twoFactorSecret: secret })
         .where(eq(users.id, userId));
@@ -460,7 +673,7 @@ export const setup2FA = async (userId: string): Promise<ServiceResult<{ secret: 
 /**
  * Verify and enable 2FA
  */
-export const verify2FA = async (userId: string, code: string): Promise<ServiceResult<boolean>> => {
+export const verify2FA = async (db: Database, userId: string, code: string): Promise<ServiceResult<boolean>> => {
     const user = await db.query.users.findFirst({
         where: eq(users.id, userId),
     });
@@ -488,7 +701,7 @@ export const verify2FA = async (userId: string, code: string): Promise<ServiceRe
 /**
  * Disable 2FA
  */
-export const disable2FA = async (userId: string, code: string): Promise<ServiceResult<boolean>> => {
+export const disable2FA = async (db: Database, userId: string, code: string): Promise<ServiceResult<boolean>> => {
     const user = await db.query.users.findFirst({
         where: eq(users.id, userId),
     });
@@ -516,34 +729,52 @@ export const disable2FA = async (userId: string, code: string): Promise<ServiceR
     return { success: true, data: true };
 };
 
+// ============================================================================
+// PASSWORD RESET
+// ============================================================================
+
 /**
  * Request password reset
+ * Note: This needs to find the user across tenants via global_users
  */
 export const requestPasswordReset = async (email: string): Promise<ServiceResult<boolean>> => {
-    const user = await db.query.users.findFirst({
-        where: eq(users.email, email.toLowerCase()),
+    const emailLower = email.toLowerCase();
+
+    // Find all tenants this email belongs to
+    const globalUserRecords = await centralDb.query.globalUsers.findMany({
+        where: eq(globalUsers.email, emailLower),
+        with: { tenant: true },
     });
 
     // Always return success to prevent email enumeration
-    if (!user) {
+    if (globalUserRecords.length === 0) {
         return { success: true, data: true };
     }
 
+    // Generate reset token and apply to ALL tenant DBs where this email exists
     const resetToken = crypto.randomUUID();
     const resetExpires = new Date();
-    resetExpires.setHours(resetExpires.getHours() + 1); // 1 hour expiry
+    resetExpires.setHours(resetExpires.getHours() + 1);
 
-    await db.update(users)
-        .set({
-            passwordResetToken: resetToken,
-            passwordResetExpires: resetExpires,
-        })
-        .where(eq(users.id, user.id));
+    for (const gu of globalUserRecords) {
+        if (!gu.tenant.isActive) continue;
+        try {
+            const tenantDb = await tenantManager.getConnection(gu.tenant.slug);
+            await tenantDb.update(users)
+                .set({
+                    passwordResetToken: resetToken,
+                    passwordResetExpires: resetExpires,
+                })
+                .where(eq(users.email, emailLower));
+        } catch (err) {
+            logger.warn({ tenant: gu.tenant.slug, err }, 'Failed to set reset token in tenant DB');
+        }
+    }
 
     // Send password reset email
-    const emailResult = await sendPasswordResetEmail(user.email, resetToken);
+    const emailResult = await sendPasswordResetEmail(email, resetToken);
     if (!emailResult.success) {
-        logger.warn(`Failed to send password reset email to ${user.email}: ${emailResult.error}`);
+        logger.warn(`Failed to send password reset email to ${email}: ${emailResult.error}`);
     }
 
     return { success: true, data: true };
@@ -551,56 +782,85 @@ export const requestPasswordReset = async (email: string): Promise<ServiceResult
 
 /**
  * Reset password
+ * Note: Token could belong to any tenant, so we search all
  */
 export const resetPassword = async (token: string, newPassword: string): Promise<ServiceResult<boolean>> => {
-    const user = await db.query.users.findFirst({
-        where: eq(users.passwordResetToken, token),
+    // We need to find which tenant DB has this reset token
+    const allTenants = await centralDb.query.tenants.findMany({
+        where: eq((await import('../db/central-schema.js')).tenants.isActive, true),
     });
 
-    if (!user || !user.passwordResetExpires || new Date() > user.passwordResetExpires) {
-        throw new BadRequestError('Invalid or expired reset token');
+    for (const tenant of allTenants) {
+        try {
+            const tenantDb = await tenantManager.getConnection(tenant.slug);
+            const user = await tenantDb.query.users.findFirst({
+                where: eq(users.passwordResetToken, token),
+            });
+
+            if (user && user.passwordResetExpires && new Date() <= user.passwordResetExpires) {
+                const passwordHash = await hashPassword(newPassword);
+                await tenantDb.update(users)
+                    .set({
+                        passwordHash,
+                        passwordResetToken: null,
+                        passwordResetExpires: null,
+                        tokenVersion: user.tokenVersion + 1,
+                    })
+                    .where(eq(users.id, user.id));
+
+                return { success: true, data: true };
+            }
+        } catch (err) {
+            logger.warn({ tenant: tenant.slug, err }, 'Error checking reset token in tenant');
+        }
     }
 
-    const passwordHash = await hashPassword(newPassword);
-
-    await db.update(users)
-        .set({
-            passwordHash,
-            passwordResetToken: null,
-            passwordResetExpires: null,
-            tokenVersion: user.tokenVersion + 1, // Invalidate all existing tokens
-        })
-        .where(eq(users.id, user.id));
-
-    return { success: true, data: true };
+    throw new BadRequestError('Invalid or expired reset token');
 };
 
 /**
  * Verify email
+ * Note: Token could belong to any tenant, so we search all
  */
 export const verifyEmail = async (token: string): Promise<ServiceResult<boolean>> => {
-    const user = await db.query.users.findFirst({
-        where: eq(users.emailVerificationToken, token),
+    const allTenants = await centralDb.query.tenants.findMany({
+        where: eq((await import('../db/central-schema.js')).tenants.isActive, true),
     });
 
-    if (!user) {
-        throw new BadRequestError('Invalid verification token');
+    for (const tenant of allTenants) {
+        try {
+            const tenantDb = await tenantManager.getConnection(tenant.slug);
+            const user = await tenantDb.query.users.findFirst({
+                where: eq(users.emailVerificationToken, token),
+            });
+
+            if (user) {
+                await tenantDb.update(users)
+                    .set({
+                        emailVerified: true,
+                        emailVerificationToken: null,
+                    })
+                    .where(eq(users.id, user.id));
+
+                return { success: true, data: true };
+            }
+        } catch (err) {
+            logger.warn({ tenant: tenant.slug, err }, 'Error checking email token in tenant');
+        }
     }
 
-    await db.update(users)
-        .set({
-            emailVerified: true,
-            emailVerificationToken: null,
-        })
-        .where(eq(users.id, user.id));
-
-    return { success: true, data: true };
+    throw new BadRequestError('Invalid verification token');
 };
+
+// ============================================================================
+// USER PROFILE
+// ============================================================================
 
 /**
  * Update user's basic info (firstName, lastName, phone)
  */
 export const updateUserInfo = async (
+    db: Database,
     userId: string,
     data: { firstName?: string | undefined; lastName?: string | undefined; phone?: string | undefined }
 ): Promise<UserInfo> => {
@@ -622,24 +882,14 @@ export const updateUserInfo = async (
         .where(eq(users.id, userId))
         .returning();
 
-    return {
-        id: updated!.id,
-        email: updated!.email,
-        firstName: updated!.firstName,
-        lastName: updated!.lastName,
-        phone: updated!.phone,
-        role: updated!.role as Role,
-        organizationId: updated!.organizationId,
-        clinicId: updated!.clinicId,
-        twoFactorEnabled: updated!.twoFactorEnabled,
-        emailVerified: updated!.emailVerified,
-    };
+    return buildUserInfo(updated!);
 };
 
 /**
  * Change user's password (requires current password verification)
  */
 export const changePassword = async (
+    db: Database,
     userId: string,
     currentPassword: string,
     newPassword: string
@@ -652,16 +902,13 @@ export const changePassword = async (
         throw new NotFoundError('User not found');
     }
 
-    // Verify current password
     const isValidPassword = await verifyPassword(currentPassword, user.passwordHash);
     if (!isValidPassword) {
         throw new BadRequestError('La contraseña actual es incorrecta');
     }
 
-    // Hash new password
     const passwordHash = await hashPassword(newPassword);
 
-    // Update password and increment token version to invalidate all existing tokens
     await db.update(users)
         .set({
             passwordHash,
@@ -672,4 +919,3 @@ export const changePassword = async (
 
     return { success: true, data: true };
 };
-

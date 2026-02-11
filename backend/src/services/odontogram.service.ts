@@ -1,5 +1,5 @@
 import { eq, and, desc } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     odontograms,
     odontogramTeeth,
@@ -94,7 +94,7 @@ const DEFAULT_SURFACES: ToothSurfaces = {
 /**
  * Get or create odontogram for a patient
  */
-export const getOrCreateOdontogram = async (
+export const getOrCreateOdontogram = async (db: Database, 
     patientId: string,
     clinicId: string,
     isChild: boolean = false,
@@ -116,8 +116,9 @@ export const getOrCreateOdontogram = async (
                 ...t,
                 generalCondition: (t.generalCondition || 'HEALTHY') as DentalCondition,
                 surfaces: (t.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
+                rootCondition: (t.rootCondition || 'HEALTHY') as DentalCondition,
             })),
-        };
+        } as Odontogram;
     }
 
     // Create new odontogram
@@ -133,7 +134,7 @@ export const getOrCreateOdontogram = async (
     // Initialize all teeth
     const teethNumbers = isChild ? CHILD_TEETH : ADULT_TEETH;
     const teethData = teethNumbers.map((toothNumber) => ({
-        odontogramId: newOdontogram.id,
+        odontogramId: newOdontogram!.id,
         toothNumber,
         generalCondition: 'HEALTHY' as const,
         surfaces: DEFAULT_SURFACES,
@@ -142,21 +143,21 @@ export const getOrCreateOdontogram = async (
     const createdTeeth = await db.insert(odontogramTeeth).values(teethData).returning();
 
     return {
-        ...newOdontogram,
-        isChild: newOdontogram.isChild ?? false,
+        ...newOdontogram!,
+        isChild: newOdontogram!.isChild ?? false,
         teeth: createdTeeth.map((t) => ({
             ...t,
             generalCondition: (t.generalCondition || 'HEALTHY') as DentalCondition,
             surfaces: (t.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
             rootCondition: (t.rootCondition || 'HEALTHY') as DentalCondition,
         })),
-    };
+    } as Odontogram;
 };
 
 /**
  * Get odontogram by patient ID
  */
-export const getOdontogramByPatientId = async (
+export const getOdontogramByPatientId = async (db: Database, 
     patientId: string,
     _tenantContext: TenantContext
 ): Promise<Odontogram | null> => {
@@ -184,7 +185,7 @@ export const getOdontogramByPatientId = async (
 /**
  * Update tooth condition
  */
-export const updateToothCondition = async (
+export const updateToothCondition = async (db: Database, 
     odontogramId: string,
     toothNumber: number,
     condition: DentalCondition,
@@ -255,7 +256,7 @@ export const updateToothCondition = async (
         previousCondition: previousCondition as string,
         newCondition: condition,
         changedById: userId,
-        notes,
+        ...(notes !== undefined && { notes }),
     });
 
     // Update odontogram last updated
@@ -268,17 +269,17 @@ export const updateToothCondition = async (
         .where(eq(odontograms.id, odontogramId));
 
     return {
-        ...updatedTooth,
-        generalCondition: (updatedTooth.generalCondition || 'HEALTHY') as DentalCondition,
-        surfaces: (updatedTooth.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
-        rootCondition: (updatedTooth.rootCondition || 'HEALTHY') as DentalCondition,
-    };
+        ...updatedTooth!,
+        generalCondition: (updatedTooth!.generalCondition || 'HEALTHY') as DentalCondition,
+        surfaces: (updatedTooth!.surfaces || DEFAULT_SURFACES) as ToothSurfaces,
+        rootCondition: (updatedTooth!.rootCondition || 'HEALTHY') as DentalCondition,
+    } as OdontogramTooth;
 };
 
 /**
  * Get tooth history
  */
-export const getToothHistory = async (
+export const getToothHistory = async (db: Database, 
     odontogramId: string,
     toothNumber: number
 ): Promise<Array<{
@@ -304,7 +305,7 @@ export const getToothHistory = async (
 /**
  * Get full odontogram history
  */
-export const getOdontogramHistory = async (
+export const getOdontogramHistory = async (db: Database, 
     odontogramId: string,
     limit: number = 50
 ): Promise<Array<{
@@ -329,7 +330,7 @@ export const getOdontogramHistory = async (
 /**
  * Update odontogram notes
  */
-export const updateOdontogramNotes = async (
+export const updateOdontogramNotes = async (db: Database, 
     odontogramId: string,
     notes: string,
     userId: string
@@ -347,7 +348,7 @@ export const updateOdontogramNotes = async (
 /**
  * Update tooth notes
  */
-export const updateToothNotes = async (
+export const updateToothNotes = async (db: Database, 
     odontogramId: string,
     toothNumber: number,
     notes: string
@@ -385,7 +386,7 @@ export interface OdontogramSnapshot {
 /**
  * Create a snapshot of current odontogram state
  */
-export const createSnapshot = async (
+export const createSnapshot = async (db: Database, 
     odontogramId: string,
     name: string,
     description: string | null,
@@ -421,7 +422,7 @@ export const createSnapshot = async (
 /**
  * Get all snapshots for an odontogram
  */
-export const getSnapshots = async (
+export const getSnapshots = async (db: Database, 
     odontogramId: string
 ): Promise<OdontogramSnapshot[]> => {
     const snapshots = await db.query.odontogramSnapshots.findMany({
@@ -435,7 +436,7 @@ export const getSnapshots = async (
 /**
  * Get a single snapshot
  */
-export const getSnapshot = async (
+export const getSnapshot = async (db: Database, 
     snapshotId: string
 ): Promise<OdontogramSnapshot | null> => {
     const snapshot = await db.query.odontogramSnapshots.findFirst({
@@ -448,6 +449,6 @@ export const getSnapshot = async (
 /**
  * Delete a snapshot
  */
-export const deleteSnapshot = async (snapshotId: string): Promise<void> => {
+export const deleteSnapshot = async (db: Database, snapshotId: string): Promise<void> => {
     await db.delete(odontogramSnapshots).where(eq(odontogramSnapshots.id, snapshotId));
 };

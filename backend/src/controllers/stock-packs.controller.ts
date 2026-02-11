@@ -4,7 +4,6 @@ import { asyncHandler } from '../middleware/index.js';
 import { BadRequestError, NotFoundError } from '../utils/errors.js';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { db } from '../db/index.js';
 import { stockPacks, stockPackItems, inventoryItems } from '../db/schema.js';
 import { eq, and, ilike, sql, asc, desc } from 'drizzle-orm';
 
@@ -61,7 +60,7 @@ export const listPacks = asyncHandler(async (req: AuthenticatedRequest, res: Res
     }
 
     // Count total
-    const [countResult] = await db
+    const [countResult] = await req.db!
         .select({ count: sql<number>`count(*)` })
         .from(stockPacks)
         .where(whereClause);
@@ -69,7 +68,7 @@ export const listPacks = asyncHandler(async (req: AuthenticatedRequest, res: Res
     const total = Number(countResult?.count ?? 0);
 
     // Get packs with item count using LEFT JOIN
-    const packsWithCounts = await db
+    const packsWithCounts = await req.db!
         .select({
             id: stockPacks.id,
             clinicId: stockPacks.clinicId,
@@ -90,7 +89,7 @@ export const listPacks = asyncHandler(async (req: AuthenticatedRequest, res: Res
     // Get item counts for each pack
     const packIds = packsWithCounts.map(p => p.id);
     const itemCounts = packIds.length > 0
-        ? await db
+        ? await req.db!
             .select({
                 packId: stockPackItems.packId,
                 count: sql<number>`count(*)`.as('count'),
@@ -119,7 +118,7 @@ export const getPackCategories = asyncHandler(async (req: AuthenticatedRequest, 
         throw new BadRequestError('Clinic context required');
     }
 
-    const categories = await db
+    const categories = await req.db!
         .selectDistinct({ category: stockPacks.category })
         .from(stockPacks)
         .where(and(
@@ -143,7 +142,7 @@ export const getPack = asyncHandler(async (req: AuthenticatedRequest, res: Respo
     }
 
     // Get pack
-    const [pack] = await db
+    const [pack] = await req.db!
         .select()
         .from(stockPacks)
         .where(and(
@@ -156,7 +155,7 @@ export const getPack = asyncHandler(async (req: AuthenticatedRequest, res: Respo
     }
 
     // Get pack items with inventory details
-    const items = await db
+    const items = await req.db!
         .select({
             id: stockPackItems.id,
             itemId: stockPackItems.itemId,
@@ -193,7 +192,7 @@ export const createPack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     const input = createPackSchema.parse(req.body);
 
     // Create pack
-    const [pack] = await db
+    const [pack] = await req.db!
         .insert(stockPacks)
         .values({
             clinicId: req.tenantContext.clinicId,
@@ -206,9 +205,9 @@ export const createPack = asyncHandler(async (req: AuthenticatedRequest, res: Re
 
     // Add items if provided
     if (input.items && input.items.length > 0) {
-        await db.insert(stockPackItems).values(
+        await req.db!.insert(stockPackItems).values(
             input.items.map(item => ({
-                packId: pack.id,
+                packId: pack!.id,
                 itemId: item.itemId,
                 quantity: item.quantity,
             }))
@@ -217,7 +216,7 @@ export const createPack = asyncHandler(async (req: AuthenticatedRequest, res: Re
 
     // Return pack with items
     const items = input.items && input.items.length > 0
-        ? await db
+        ? await req.db!
             .select({
                 id: stockPackItems.id,
                 itemId: stockPackItems.itemId,
@@ -230,7 +229,7 @@ export const createPack = asyncHandler(async (req: AuthenticatedRequest, res: Re
             })
             .from(stockPackItems)
             .innerJoin(inventoryItems, eq(stockPackItems.itemId, inventoryItems.id))
-            .where(eq(stockPackItems.packId, pack.id))
+            .where(eq(stockPackItems.packId, pack!.id))
         : [];
 
     res.status(201).json(success({ ...pack, items }, 'Pack created successfully'));
@@ -250,7 +249,7 @@ export const updatePack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     const input = updatePackSchema.parse(req.body);
 
     // Check pack exists
-    const [existing] = await db
+    const [existing] = await req.db!
         .select()
         .from(stockPacks)
         .where(and(
@@ -269,7 +268,7 @@ export const updatePack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     if (input.category !== undefined) updateData.category = input.category ?? null;
     if (input.isActive !== undefined) updateData.isActive = input.isActive;
 
-    const [pack] = await db
+    const [pack] = await req.db!
         .update(stockPacks)
         .set(updateData)
         .where(eq(stockPacks.id, id!))
@@ -278,11 +277,11 @@ export const updatePack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     // Update items if provided (replace all)
     if (input.items !== undefined) {
         // Delete existing items
-        await db.delete(stockPackItems).where(eq(stockPackItems.packId, id!));
+        await req.db!.delete(stockPackItems).where(eq(stockPackItems.packId, id!));
 
         // Insert new items
         if (input.items.length > 0) {
-            await db.insert(stockPackItems).values(
+            await req.db!.insert(stockPackItems).values(
                 input.items.map(item => ({
                     packId: id!,
                     itemId: item.itemId,
@@ -293,7 +292,7 @@ export const updatePack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     }
 
     // Get updated items
-    const items = await db
+    const items = await req.db!
         .select({
             id: stockPackItems.id,
             itemId: stockPackItems.itemId,
@@ -323,7 +322,7 @@ export const deletePack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     }
 
     // Check pack exists
-    const [existing] = await db
+    const [existing] = await req.db!
         .select()
         .from(stockPacks)
         .where(and(
@@ -336,7 +335,7 @@ export const deletePack = asyncHandler(async (req: AuthenticatedRequest, res: Re
     }
 
     // Soft delete
-    await db
+    await req.db!
         .update(stockPacks)
         .set({ isActive: false, updatedAt: new Date() })
         .where(eq(stockPacks.id, id!));
@@ -361,7 +360,7 @@ export const addPackItem = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     // Check pack exists
-    const [pack] = await db
+    const [pack] = await req.db!
         .select()
         .from(stockPacks)
         .where(and(
@@ -374,7 +373,7 @@ export const addPackItem = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     // Check item exists and belongs to clinic
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -387,7 +386,7 @@ export const addPackItem = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     // Check if item already in pack
-    const [existingItem] = await db
+    const [existingItem] = await req.db!
         .select()
         .from(stockPackItems)
         .where(and(
@@ -397,13 +396,13 @@ export const addPackItem = asyncHandler(async (req: AuthenticatedRequest, res: R
 
     if (existingItem) {
         // Update quantity
-        await db
+        await req.db!
             .update(stockPackItems)
             .set({ quantity: existingItem.quantity + quantity })
             .where(eq(stockPackItems.id, existingItem.id));
     } else {
         // Add new item
-        await db.insert(stockPackItems).values({
+        await req.db!.insert(stockPackItems).values({
             packId: id!,
             itemId,
             quantity,
@@ -411,7 +410,7 @@ export const addPackItem = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     // Update pack timestamp
-    await db
+    await req.db!
         .update(stockPacks)
         .set({ updatedAt: new Date() })
         .where(eq(stockPacks.id, id!));
@@ -431,7 +430,7 @@ export const removePackItem = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     // Check pack exists
-    const [pack] = await db
+    const [pack] = await req.db!
         .select()
         .from(stockPacks)
         .where(and(
@@ -444,7 +443,7 @@ export const removePackItem = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     // Delete item from pack
-    await db
+    await req.db!
         .delete(stockPackItems)
         .where(and(
             eq(stockPackItems.packId, id!),
@@ -452,7 +451,7 @@ export const removePackItem = asyncHandler(async (req: AuthenticatedRequest, res
         ));
 
     // Update pack timestamp
-    await db
+    await req.db!
         .update(stockPacks)
         .set({ updatedAt: new Date() })
         .where(eq(stockPacks.id, id!));

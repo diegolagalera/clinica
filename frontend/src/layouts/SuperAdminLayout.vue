@@ -1,20 +1,20 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { RouterView, RouterLink, useRoute } from 'vue-router'
+import { ref } from 'vue'
+import { RouterView, RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import {
   HomeIcon,
   BuildingOffice2Icon,
   BuildingStorefrontIcon,
   UsersIcon,
-  Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
   Bars3Icon,
-  XMarkIcon,
+  ArrowsRightLeftIcon,
 } from '@heroicons/vue/24/outline'
 
 const authStore = useAuthStore()
 const route = useRoute()
+const router = useRouter()
 const sidebarOpen = ref(false)
 
 const navigation = [
@@ -26,6 +26,11 @@ const navigation = [
 
 const isActiveRoute = (href: string) => {
   return route.path.startsWith(href)
+}
+
+const switchTenant = () => {
+  authStore.setTenantSlug('')
+  router.push('/admin/tenants')
 }
 </script>
 
@@ -56,6 +61,23 @@ const isActiveRoute = (href: string) => {
           <h1 class="font-display font-bold text-surface-900">CUSPIA-ERP</h1>
           <p class="text-xs text-surface-500">Super Admin</p>
         </div>
+      </div>
+
+      <!-- Tenant badge -->
+      <div class="px-4 py-3 border-b border-surface-200">
+        <button
+          @click="switchTenant"
+          class="w-full flex items-center gap-3 p-2 rounded-lg bg-primary-50 hover:bg-primary-100 transition-colors group"
+        >
+          <div class="w-8 h-8 bg-primary-500 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0">
+            {{ (authStore.tenantSlug || '?').charAt(0).toUpperCase() }}
+          </div>
+          <div class="flex-1 min-w-0 text-left">
+            <p class="text-sm font-medium text-primary-900 truncate">{{ authStore.tenantSlug }}</p>
+            <p class="text-xs text-primary-600">Empresa activa</p>
+          </div>
+          <ArrowsRightLeftIcon class="w-4 h-4 text-primary-400 group-hover:text-primary-600 shrink-0" />
+        </button>
       </div>
 
       <!-- Navigation -->

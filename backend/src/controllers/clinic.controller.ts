@@ -40,16 +40,16 @@ export const listClinics = asyncHandler(async (req: AuthenticatedRequest, res: R
     const params = parsePaginationParams(req.query);
     const search = req.query['search'] as string | undefined;
 
-    let data, total;
+    let data: any[], total: number;
 
     // Super Admin sees all clinics
     if (req.user.role === 'SUPERADMIN') {
-        const result = await clinicService.getAllClinics(params, search);
+        const result = await clinicService.getAllClinics(req.db!, params, search);
         data = result.data;
         total = result.total;
     } else if (req.tenantContext.organizationId) {
         // Admin/Worker see their organization's clinics
-        const result = await clinicService.getClinicsByOrganization(
+        const result = await clinicService.getClinicsByOrganization(req.db!, 
             req.tenantContext.organizationId,
             params,
             search
@@ -71,7 +71,7 @@ export const listClinics = asyncHandler(async (req: AuthenticatedRequest, res: R
 export const getClinic = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const clinic = await clinicService.getClinicById(id!);
+    const clinic = await clinicService.getClinicById(req.db!, id!);
 
     res.json(success(clinic));
 });
@@ -85,7 +85,7 @@ export const getCurrentClinic = asyncHandler(async (req: AuthenticatedRequest, r
         throw new Error('No clinic context available');
     }
 
-    const clinic = await clinicService.getClinicById(req.tenantContext.clinicId);
+    const clinic = await clinicService.getClinicById(req.db!, req.tenantContext.clinicId);
 
     res.json(success(clinic));
 });
@@ -104,7 +104,7 @@ export const updateCurrentClinic = asyncHandler(async (req: AuthenticatedRequest
         settings: z.record(z.unknown()).optional(),
     }).parse(req.body);
 
-    const result = await clinicService.updateClinic(req.tenantContext.clinicId, input as Parameters<typeof clinicService.updateClinic>[1]);
+    const result = await clinicService.updateClinic(req.db!, req.tenantContext.clinicId, input as any);
 
     if (result.success) {
         res.json(success(result.data, 'Clinic settings updated successfully'));
@@ -118,7 +118,7 @@ export const updateCurrentClinic = asyncHandler(async (req: AuthenticatedRequest
 export const getClinicStats = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const stats = await clinicService.getClinicStats(id!);
+    const stats = await clinicService.getClinicStats(req.db!, id!);
 
     res.json(success(stats));
 });
@@ -130,7 +130,7 @@ export const getClinicStats = asyncHandler(async (req: AuthenticatedRequest, res
 export const createClinic = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const input = createClinicSchema.parse(req.body);
 
-    const result = await clinicService.createClinic(input);
+    const result = await clinicService.createClinic(req.db!, input as any);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'Clinic created successfully'));
@@ -145,7 +145,7 @@ export const updateClinic = asyncHandler(async (req: AuthenticatedRequest, res: 
     const { id } = req.params;
     const input = updateClinicSchema.parse(req.body);
 
-    const result = await clinicService.updateClinic(id!, input);
+    const result = await clinicService.updateClinic(req.db!, id!, input as any);
 
     if (result.success) {
         res.json(success(result.data, 'Clinic updated successfully'));
@@ -159,7 +159,7 @@ export const updateClinic = asyncHandler(async (req: AuthenticatedRequest, res: 
 export const deleteClinic = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await clinicService.deleteClinic(id!);
+    await clinicService.deleteClinic(req.db!, id!);
 
     res.json(success(null, 'Clinic deleted successfully'));
 });

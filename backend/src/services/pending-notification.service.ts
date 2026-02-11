@@ -1,5 +1,5 @@
 import { eq, lte, and } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { pendingNotifications, appointments, patients, whatsappSettings, clinics, users, notificationLogs } from '../db/schema.js';
 import { sendAppointmentNotification } from './notification.service.js';
 import { ChatbotConversationService } from './chatbot-conversation.service.js';
@@ -20,7 +20,7 @@ interface QueueNotificationData {
  * Queue a notification for sending after a delay.
  * If a pending notification already exists for this appointment, it will be updated (upsert).
  */
-export const queueNotification = async (data: QueueNotificationData): Promise<void> => {
+export const queueNotification = async (db: Database, data: QueueNotificationData): Promise<void> => {
     const scheduledFor = new Date();
     scheduledFor.setMinutes(scheduledFor.getMinutes() + NOTIFICATION_DELAY_MINUTES);
 
@@ -56,7 +56,7 @@ export const queueNotification = async (data: QueueNotificationData): Promise<vo
  * Cancel a pending notification for an appointment.
  * Called when appointment is cancelled (we send cancellation immediately instead).
  */
-export const cancelPendingNotification = async (appointmentId: string): Promise<void> => {
+export const cancelPendingNotification = async (db: Database, appointmentId: string): Promise<void> => {
     try {
         await db
             .delete(pendingNotifications)
@@ -72,7 +72,7 @@ export const cancelPendingNotification = async (appointmentId: string): Promise<
  * Send WhatsApp notification for an appointment event (CREATED/MODIFIED/CANCELLED).
  * Checks if WA is configured, template exists, and patient has phone.
  */
-export const sendWaAppointmentNotification = async (
+export const sendWaAppointmentNotification = async (db: Database,
     appointmentId: string,
     clinicId: string,
     patientId: string,
@@ -222,6 +222,7 @@ export const sendWaAppointmentNotification = async (
         // Send via ChatbotConversationService
         try {
             await ChatbotConversationService.sendTemplateMessage(
+                db,
                 clinicId,
                 undefined, // No userId in background job
                 patient.phone,
@@ -280,7 +281,7 @@ export const sendWaAppointmentNotification = async (
  * Process all pending notifications that are due.
  * Called by the CRON scheduler every minute.
  */
-export const processPendingNotifications = async (): Promise<number> => {
+export const processPendingNotifications = async (db: Database): Promise<number> => {
     const now = new Date();
     let processedCount = 0;
 
@@ -299,7 +300,7 @@ export const processPendingNotifications = async (): Promise<number> => {
         for (const notification of pending) {
             try {
                 // Send email notification
-                await sendAppointmentNotification({
+                await sendAppointmentNotification(db, {
                     appointmentId: notification.appointmentId,
                     clinicId: notification.clinicId,
                     patientId: notification.patientId,
@@ -327,7 +328,7 @@ export const processPendingNotifications = async (): Promise<number> => {
                         }
                     }
                 }
-                await sendWaAppointmentNotification(
+                await sendWaAppointmentNotification(db,
                     notification.appointmentId,
                     notification.clinicId,
                     notification.patientId,

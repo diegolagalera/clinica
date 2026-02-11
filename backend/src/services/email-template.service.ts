@@ -1,5 +1,5 @@
 import { eq, and, ne } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { emailTemplates } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
 
@@ -114,7 +114,7 @@ const DEFAULT_TEMPLATES: Record<EmailTemplateType, { name: string; subject: stri
 /**
  * Get all templates for a clinic
  */
-export const getTemplates = async (clinicId: string) => {
+export const getTemplates = async (db: Database, clinicId: string) => {
     return db.query.emailTemplates.findMany({
         where: eq(emailTemplates.clinicId, clinicId),
         orderBy: (t, { asc }) => [asc(t.type), asc(t.name)],
@@ -124,7 +124,7 @@ export const getTemplates = async (clinicId: string) => {
 /**
  * Get a specific template by ID
  */
-export const getTemplateById = async (id: string, clinicId: string) => {
+export const getTemplateById = async (db: Database, id: string, clinicId: string) => {
     return db.query.emailTemplates.findFirst({
         where: and(eq(emailTemplates.id, id), eq(emailTemplates.clinicId, clinicId)),
     });
@@ -133,7 +133,7 @@ export const getTemplateById = async (id: string, clinicId: string) => {
 /**
  * Get active template for a specific type
  */
-export const getActiveTemplate = async (clinicId: string, type: EmailTemplateType) => {
+export const getActiveTemplate = async (db: Database, clinicId: string, type: EmailTemplateType) => {
     logger.info(`getActiveTemplate called with clinicId=${clinicId}, type=${type}`);
 
     // First try to get clinic's custom template
@@ -164,7 +164,7 @@ export const getActiveTemplate = async (clinicId: string, type: EmailTemplateTyp
 /**
  * Create a new template
  */
-export const createTemplate = async (
+export const createTemplate = async (db: Database, 
     clinicId: string,
     data: {
         type: EmailTemplateType;
@@ -190,7 +190,7 @@ export const createTemplate = async (
 /**
  * Update a template
  */
-export const updateTemplate = async (
+export const updateTemplate = async (db: Database, 
     id: string,
     clinicId: string,
     data: {
@@ -237,7 +237,7 @@ export const updateTemplate = async (
 /**
  * Delete a template
  */
-export const deleteTemplate = async (id: string, clinicId: string) => {
+export const deleteTemplate = async (db: Database, id: string, clinicId: string) => {
     await db
         .delete(emailTemplates)
         .where(and(eq(emailTemplates.id, id), eq(emailTemplates.clinicId, clinicId)));

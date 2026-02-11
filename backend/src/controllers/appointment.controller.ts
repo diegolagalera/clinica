@@ -1,7 +1,6 @@
 import type { Response } from 'express';
 import { z } from 'zod';
 import { eq, and, count } from 'drizzle-orm';
-import { db } from '../db/index.js';
 import { clinics, appointmentStockUsage, appointments, patients, users, whatsappSettings, notificationLogs } from '../db/schema.js';
 import { WhatsAppService } from '../services/whatsapp.service.js';
 import * as appointmentService from '../services/appointment.service.js';
@@ -71,7 +70,7 @@ export const listAppointments = asyncHandler(async (req: AuthenticatedRequest, r
         endDate.setDate(endDate.getDate() + 7);
     }
 
-    const data = await appointmentService.getAppointments(
+    const data = await appointmentService.getAppointments(req.db!, 
         req.tenantContext.clinicId,
         startDate,
         endDate,
@@ -93,7 +92,7 @@ export const getTodayAppointments = asyncHandler(async (req: AuthenticatedReques
     // If worker, show only their appointments
     const workerId = req.user.role === 'WORKER' ? req.user.userId : undefined;
 
-    const data = await appointmentService.getTodayAppointments(
+    const data = await appointmentService.getTodayAppointments(req.db!, 
         req.tenantContext.clinicId,
         workerId
     );
@@ -109,7 +108,7 @@ export const getPatientAppointments = asyncHandler(async (req: AuthenticatedRequ
     const { patientId } = req.params;
     const params = parsePaginationParams(req.query);
 
-    const { data, total } = await appointmentService.getPatientAppointments(
+    const { data, total } = await appointmentService.getPatientAppointments(req.db!, 
         patientId!,
         req.tenantContext,
         params
@@ -125,7 +124,7 @@ export const getPatientAppointments = asyncHandler(async (req: AuthenticatedRequ
 export const getAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const appointment = await appointmentService.getAppointmentById(id!, req.tenantContext);
+    const appointment = await appointmentService.getAppointmentById(req.db!, id!, req.tenantContext);
 
     res.json(success(appointment));
 });
@@ -146,7 +145,7 @@ export const createAppointment = asyncHandler(async (req: AuthenticatedRequest, 
         throw new BadRequestError('End time must be after start time');
     }
 
-    const result = await appointmentService.createAppointment({
+    const result = await appointmentService.createAppointment(req.db!, {
         ...input,
         clinicId: req.tenantContext.clinicId,
         createdById: req.user.userId,
@@ -154,7 +153,7 @@ export const createAppointment = asyncHandler(async (req: AuthenticatedRequest, 
 
     if (result.success) {
         // Queue confirmation notification (5 min delay for debouncing)
-        queueNotification({
+        queueNotification(req.db!, {
             appointmentId: result.data.id,
             clinicId: req.tenantContext.clinicId,
             patientId: input.patientId,
@@ -179,12 +178,12 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
     }
 
     // Get current appointment to check for status changes
-    const currentAppointment = await appointmentService.getAppointmentById(id!, req.tenantContext);
+    const currentAppointment = await appointmentService.getAppointmentById(req.db!, id!, req.tenantContext);
 
     // Validate stock requirement when marking as COMPLETED
     if (input.status === 'COMPLETED' && currentAppointment?.status !== 'COMPLETED') {
         // Check if clinic requires stock on completion
-        const [clinic] = await db
+        const [clinic] = await req.db!
             .select({ settings: clinics.settings })
             .from(clinics)
             .where(eq(clinics.id, req.tenantContext.clinicId!));
@@ -193,7 +192,7 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
 
         if (settings?.requireStockOnCompletion) {
             // Check if there's any stock usage for this appointment
-            const stockUsageCount = await db
+            const stockUsageCount = await req.db!
                 .select({ count: count() })
                 .from(appointmentStockUsage)
                 .where(and(
@@ -207,7 +206,7 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
         }
     }
 
-    const result = await appointmentService.updateAppointment(id!, input, req.tenantContext);
+    const result = await appointmentService.updateAppointment(req.db!, id!, input, req.tenantContext);
 
     if (result.success && req.tenantContext.clinicId) {
         // Determine which notification to send based on what changed
@@ -239,7 +238,7 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
 
         // Queue notification if needed (debounced - 5 min delay)
         if (notificationType === 'APPOINTMENT_CREATED') {
-            queueNotification({
+            queueNotification(req.db!, {
                 appointmentId: result.data.id,
                 clinicId: req.tenantContext.clinicId,
                 patientId: result.data.patientId,
@@ -247,15 +246,15 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
             }).catch(err => logger.error(`Failed to queue appointment notification: ${err.message}`));
         } else if (notificationType === 'APPOINTMENT_CANCELLED') {
             // Cancellations are sent immediately, also cancel any pending notification
-            cancelPendingNotification(result.data.id).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
-            notificationService.sendAppointmentNotification({
+            cancelPendingNotification(req.db!, result.data.id).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
+            notificationService.sendAppointmentNotification(req.db!, {
                 appointmentId: result.data.id,
                 clinicId: req.tenantContext.clinicId,
                 patientId: result.data.patientId,
                 type: notificationType,
             }).catch(err => logger.error(`Failed to send cancellation notification: ${err.message}`));
             // Also send WhatsApp cancellation immediately
-            sendWaAppointmentNotification(
+            sendWaAppointmentNotification(req.db!, 
                 result.data.id,
                 req.tenantContext.clinicId,
                 result.data.patientId,
@@ -265,7 +264,7 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
 
         // Create rating request when appointment is marked as COMPLETED
         if (input.status === 'COMPLETED' && currentAppointment?.status !== 'COMPLETED') {
-            ratingService.createRatingRequest(
+            ratingService.createRatingRequest(req.db!, 
                 result.data.id,
                 req.tenantContext.clinicId,
                 result.data.patientId
@@ -284,15 +283,15 @@ export const cancelAppointment = asyncHandler(async (req: AuthenticatedRequest, 
     const { id } = req.params;
 
     // Get appointment data before cancelling for email
-    const appointment = await appointmentService.getAppointmentById(id!, req.tenantContext);
+    const appointment = await appointmentService.getAppointmentById(req.db!, id!, req.tenantContext);
 
-    await appointmentService.cancelAppointment(id!, req.tenantContext);
+    await appointmentService.cancelAppointment(req.db!, id!, req.tenantContext);
 
     // Send cancellation immediately (no debounce for cancellations)
     // Also cancel any pending notifications for this appointment
     if (appointment && req.tenantContext.clinicId) {
-        cancelPendingNotification(id!).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
-        notificationService.sendAppointmentNotification({
+        cancelPendingNotification(req.db!, id!).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
+        notificationService.sendAppointmentNotification(req.db!, {
             appointmentId: id!,
             clinicId: req.tenantContext.clinicId,
             patientId: appointment.patientId,
@@ -316,7 +315,7 @@ export const getWorkerSchedule = asyncHandler(async (req: AuthenticatedRequest, 
     const dateStr = req.query['date'] as string;
     const date = dateStr ? new Date(dateStr) : new Date();
 
-    const schedule = await appointmentService.getWorkerSchedule(
+    const schedule = await appointmentService.getWorkerSchedule(req.db!, 
         workerId!,
         req.tenantContext.clinicId,
         date
@@ -338,7 +337,7 @@ export const getActiveAppointments = asyncHandler(async (req: AuthenticatedReque
         throw new BadRequestError('Clinic context required');
     }
 
-    const activeAppointments = await appointmentService.getActiveAppointments(
+    const activeAppointments = await appointmentService.getActiveAppointments(req.db!, 
         req.tenantContext.clinicId,
         req.user.userId
     );
@@ -357,7 +356,7 @@ export const startAppointment = asyncHandler(async (req: AuthenticatedRequest, r
 
     const { id } = req.params;
 
-    const result = await appointmentService.startAppointment(
+    const result = await appointmentService.startAppointment(req.db!, 
         id!,
         req.user.userId,
         req.tenantContext
@@ -373,7 +372,7 @@ export const startAppointment = asyncHandler(async (req: AuthenticatedRequest, r
 export const pauseAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const result = await appointmentService.pauseAppointment(id!, req.tenantContext);
+    const result = await appointmentService.pauseAppointment(req.db!, id!, req.tenantContext);
 
     res.json(success(result, 'Cita pausada'));
 });
@@ -385,7 +384,7 @@ export const pauseAppointment = asyncHandler(async (req: AuthenticatedRequest, r
 export const resumeAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const result = await appointmentService.resumeAppointment(id!, req.tenantContext);
+    const result = await appointmentService.resumeAppointment(req.db!, id!, req.tenantContext);
 
     res.json(success(result, 'Cita reanudada'));
 });
@@ -402,7 +401,7 @@ export const completeAppointment = asyncHandler(async (req: AuthenticatedRequest
     const { id } = req.params;
 
     // Check if clinic requires stock on completion
-    const [clinic] = await db
+    const [clinic] = await req.db!
         .select({ settings: clinics.settings })
         .from(clinics)
         .where(eq(clinics.id, req.tenantContext.clinicId));
@@ -411,7 +410,7 @@ export const completeAppointment = asyncHandler(async (req: AuthenticatedRequest
         'requireStockOnCompletion' in clinic.settings &&
         clinic.settings.requireStockOnCompletion === true) {
         // Check if any stock has been used
-        const usageCount = await db
+        const usageCount = await req.db!
             .select({ count: count() })
             .from(appointmentStockUsage)
             .where(and(
@@ -424,11 +423,11 @@ export const completeAppointment = asyncHandler(async (req: AuthenticatedRequest
         }
     }
 
-    const result = await appointmentService.completeAppointment(id!, req.tenantContext);
+    const result = await appointmentService.completeAppointment(req.db!, id!, req.tenantContext);
 
     // Create rating request after completion
     if (result) {
-        ratingService.createRatingRequest(
+        ratingService.createRatingRequest(req.db!, 
             id!,
             req.tenantContext.clinicId,
             result.patientId
@@ -461,7 +460,7 @@ export const updateRealTime = asyncHandler(async (req: AuthenticatedRequest, res
     const { id } = req.params;
     const input = updateRealTimeSchema.parse(req.body);
 
-    const result = await appointmentService.updateRealTime(
+    const result = await appointmentService.updateRealTime(req.db!, 
         id!,
         input,
         req.user.userId,
@@ -483,7 +482,7 @@ export const resetRealTime = asyncHandler(async (req: AuthenticatedRequest, res:
 
     const { id } = req.params;
 
-    const result = await appointmentService.resetRealTime(
+    const result = await appointmentService.resetRealTime(req.db!, 
         id!,
         req.user.userId,
         req.tenantContext
@@ -500,7 +499,7 @@ export const resetRealTime = asyncHandler(async (req: AuthenticatedRequest, res:
 export const cancelActiveAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const result = await appointmentService.cancelActiveAppointment(
+    const result = await appointmentService.cancelActiveAppointment(req.db!, 
         id!,
         req.user.userId,
         req.tenantContext
@@ -508,8 +507,8 @@ export const cancelActiveAppointment = asyncHandler(async (req: AuthenticatedReq
 
     // Cancel any pending notifications
     if (result && req.tenantContext.clinicId) {
-        cancelPendingNotification(id!).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
-        notificationService.sendAppointmentNotification({
+        cancelPendingNotification(req.db!, id!).catch(err => logger.error(`Failed to cancel pending notification: ${err.message}`));
+        notificationService.sendAppointmentNotification(req.db!, {
             appointmentId: id!,
             clinicId: req.tenantContext.clinicId,
             patientId: result.patientId,
@@ -544,7 +543,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     const clinicId = req.tenantContext.clinicId;
 
     // Get appointment with patient data
-    const appointment = await db.query.appointments.findFirst({
+    const appointment = await req.db!.query.appointments.findFirst({
         where: eq(appointments.id, id!),
         with: { patient: true, worker: true },
     });
@@ -554,7 +553,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     }
 
     // Get patient phone
-    const patient = await db.query.patients.findFirst({
+    const patient = await req.db!.query.patients.findFirst({
         where: eq(patients.id, appointment.patientId),
     });
 
@@ -563,7 +562,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     }
 
     // Get WhatsApp settings
-    const waSettings = await db.query.whatsappSettings.findFirst({
+    const waSettings = await req.db!.query.whatsappSettings.findFirst({
         where: eq(whatsappSettings.clinicId, clinicId),
     });
 
@@ -592,13 +591,13 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     }
 
     // Get clinic and worker info for variables
-    const clinic = await db.query.clinics.findFirst({
+    const clinic = await req.db!.query.clinics.findFirst({
         where: eq(clinics.id, clinicId),
     });
 
     let doctorName = 'Equipo médico';
     if (appointment.workerId) {
-        const worker = await db.query.users.findFirst({
+        const worker = await req.db!.query.users.findFirst({
             where: eq(users.id, appointment.workerId),
         });
         if (worker) {
@@ -659,7 +658,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     const templateBody = `${eventLabels[input.eventType]}\n📅 ${appointmentDate}\n🕐 ${appointmentTime}\n👤 ${patient.firstName} ${patient.lastName}\n🏥 ${clinic?.name || 'Clínica'}\n👨‍⚕️ ${doctorName}`;
 
     // Send via ChatbotConversationService
-    const result = await ChatbotConversationService.sendTemplateMessage(
+    const result = await ChatbotConversationService.sendTemplateMessage(req.db!, 
         clinicId,
         req.user.userId,
         patient.phone,
@@ -670,7 +669,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     );
 
     // Log in notification_logs
-    await db.insert(notificationLogs).values({
+    await req.db!.insert(notificationLogs).values({
         clinicId,
         patientId: appointment.patientId,
         appointmentId: id!,
@@ -685,7 +684,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     });
 
     // Update waNotificationSentAt on appointment
-    await db.update(appointments)
+    await req.db!.update(appointments)
         .set({ waNotificationSentAt: new Date(), updatedAt: new Date() })
         .where(eq(appointments.id, id!));
 

@@ -3,9 +3,9 @@ import { config } from '../config/env.js';
 import { WhatsAppService } from '../services/whatsapp.service.js';
 import { ChatbotConversationService } from '../services/chatbot-conversation.service.js';
 import { whatsappSettings } from '../db/schema.js';
-import { db } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
+import type { Database } from '../db/index.js';
 
 const router = Router();
 
@@ -25,12 +25,14 @@ router.get('/webhook', async (req: Request, res: Response) => {
         return res.sendStatus(403);
     }
 
+    const db = (req as any).db as Database;
+
     // 1. Check against tokens stored in the DB (from the Settings page)
     const clinicSettings = await db
         .select({ webhookVerifyToken: whatsappSettings.webhookVerifyToken })
         .from(whatsappSettings);
 
-    const dbMatch = clinicSettings.some(s => s.webhookVerifyToken === token);
+    const dbMatch = clinicSettings.some((s: any) => s.webhookVerifyToken === token);
 
     // 2. Fallback: check against env var
     const envToken = config.whatsapp.verifyToken;
@@ -54,6 +56,8 @@ router.post('/webhook', async (req: Request, res: Response) => {
     // Always respond 200 immediately to Meta (they require it within 15s)
     res.sendStatus(200);
 
+    const db = (req as any).db as Database;
+
     try {
         const parsed = WhatsAppService.parseWebhookPayload(req.body);
 
@@ -70,10 +74,10 @@ router.post('/webhook', async (req: Request, res: Response) => {
             }
 
             if (message.type === 'message') {
-                await ChatbotConversationService.processIncomingMessage(message, settings.clinicId);
+                await ChatbotConversationService.processIncomingMessage(db, message, settings.clinicId);
                 // WebSocket events (inbound + AI reply) are emitted inside processIncomingMessage
             } else if (message.type === 'status') {
-                await ChatbotConversationService.processStatusUpdate(message);
+                await ChatbotConversationService.processStatusUpdate(db, message);
             }
         }
     } catch (error) {

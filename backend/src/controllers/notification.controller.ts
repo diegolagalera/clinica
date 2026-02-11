@@ -50,7 +50,7 @@ export const getStatus = asyncHandler(async (req: AuthenticatedRequest, res: Res
         return;
     }
 
-    const settings = await emailService.getEmailSettings(clinicId);
+    const settings = await emailService.getEmailSettings(req.db!, clinicId);
     const emailEnabled = settings?.isEnabled && !!settings?.smtpHost && !!settings?.smtpUser;
 
     res.json(success({
@@ -69,7 +69,7 @@ export const getSettings = asyncHandler(async (req: AuthenticatedRequest, res: R
         return;
     }
 
-    const settings = await emailService.getEmailSettings(clinicId);
+    const settings = await emailService.getEmailSettings(req.db!, clinicId);
 
     // Don't expose password
     const safeSettings = settings ? {
@@ -91,11 +91,11 @@ export const updateSettings = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     const input = settingsSchema.parse(req.body);
-    const settings = await emailService.updateEmailSettings(clinicId, input);
+    const settings = await emailService.updateEmailSettings(req.db!, clinicId, input as any);
 
     res.json(success({
         ...settings,
-        smtpPass: settings.smtpPass ? '********' : null,
+        smtpPass: settings!.smtpPass ? '********' : null,
     }, 'Configuración actualizada'));
 });
 
@@ -109,7 +109,7 @@ export const testConnection = asyncHandler(async (req: AuthenticatedRequest, res
         return;
     }
 
-    const result = await emailService.testConnection(clinicId);
+    const result = await emailService.testConnection(req.db!, clinicId);
 
     if (result.success) {
         res.json(success(null, 'Conexión exitosa'));
@@ -134,7 +134,7 @@ export const sendTestEmail = asyncHandler(async (req: AuthenticatedRequest, res:
         return;
     }
 
-    const result = await emailService.sendTestEmail(clinicId, email);
+    const result = await emailService.sendTestEmail(req.db!, clinicId, email);
 
     if (result.success) {
         res.json(success(null, 'Email de prueba enviado'));
@@ -159,7 +159,7 @@ export const sendCustomTestEmail = asyncHandler(async (req: AuthenticatedRequest
         return;
     }
 
-    const result = await emailService.sendCustomEmail(clinicId, email, subject || 'Email de prueba', html);
+    const result = await emailService.sendCustomEmail(req.db!, clinicId, email, subject || 'Email de prueba', html);
 
     if (result.success) {
         res.json(success(null, 'Email de prueba enviado'));
@@ -178,7 +178,7 @@ export const getTemplates = asyncHandler(async (req: AuthenticatedRequest, res: 
         return;
     }
 
-    const templates = await templateService.getTemplates(clinicId);
+    const templates = await templateService.getTemplates(req.db!, clinicId);
     res.json(success(templates));
 });
 
@@ -211,7 +211,7 @@ export const getTemplate = asyncHandler(async (req: AuthenticatedRequest, res: R
         return;
     }
 
-    const template = await templateService.getTemplateById(id!, clinicId);
+    const template = await templateService.getTemplateById(req.db!, id!, clinicId);
 
     if (!template) {
         res.status(404).json({ success: false, message: 'Plantilla no encontrada' });
@@ -232,7 +232,7 @@ export const createTemplate = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     const input = templateSchema.parse(req.body);
-    const template = await templateService.createTemplate(clinicId, input);
+    const template = await templateService.createTemplate(req.db!, clinicId, input);
 
     res.status(201).json(success(template, 'Plantilla creada'));
 });
@@ -250,7 +250,7 @@ export const updateTemplate = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     const input = templateSchema.partial().parse(req.body);
-    const template = await templateService.updateTemplate(id!, clinicId, input);
+    const template = await templateService.updateTemplate(req.db!, id!, clinicId, input as any);
 
     if (!template) {
         res.status(404).json({ success: false, message: 'Plantilla no encontrada' });
@@ -272,7 +272,7 @@ export const deleteTemplate = asyncHandler(async (req: AuthenticatedRequest, res
         return;
     }
 
-    await templateService.deleteTemplate(id!, clinicId);
+    await templateService.deleteTemplate(req.db!, id!, clinicId);
     res.json(success(null, 'Plantilla eliminada'));
 });
 
@@ -293,7 +293,7 @@ export const previewTemplate = asyncHandler(async (req: AuthenticatedRequest, re
         const { type } = req.body;
         template = templateService.getDefaultTemplate(type || 'APPOINTMENT_CREATED');
     } else {
-        template = await templateService.getTemplateById(id!, clinicId);
+        template = await templateService.getTemplateById(req.db!, id!, clinicId);
     }
 
     if (!template) {
@@ -344,7 +344,7 @@ export const testTemplate = asyncHandler(async (req: AuthenticatedRequest, res: 
         const { type } = req.body;
         template = templateService.getDefaultTemplate(type || 'APPOINTMENT_CREATED');
     } else {
-        template = await templateService.getTemplateById(id!, clinicId);
+        template = await templateService.getTemplateById(req.db!, id!, clinicId);
     }
 
     if (!template) {
@@ -369,7 +369,7 @@ export const testTemplate = asyncHandler(async (req: AuthenticatedRequest, res: 
     const finalHtml = templateService.replaceVariables(html, sampleVariables);
     const finalSubject = templateService.replaceVariables(template.subject, sampleVariables);
 
-    const result = await emailService.sendEmail(clinicId, {
+    const result = await emailService.sendEmail(req.db!, clinicId, {
         to: email,
         subject: `[PRUEBA] ${finalSubject}`,
         html: finalHtml,
@@ -395,7 +395,7 @@ export const getLogs = asyncHandler(async (req: AuthenticatedRequest, res: Respo
     const limit = parseInt(req.query['limit'] as string) || 50;
     const offset = parseInt(req.query['offset'] as string) || 0;
 
-    const logs = await notificationService.getNotificationLogs(clinicId, { limit, offset });
+    const logs = await notificationService.getNotificationLogs(req.db!, clinicId, { limit, offset });
     res.json(success(logs));
 });
 
@@ -409,7 +409,7 @@ export const getStats = asyncHandler(async (req: AuthenticatedRequest, res: Resp
         return;
     }
 
-    const stats = await notificationService.getNotificationStats(clinicId);
+    const stats = await notificationService.getNotificationStats(req.db!, clinicId);
     res.json(success(stats));
 });
 
@@ -439,7 +439,7 @@ export const generateTemplateWithAI = asyncHandler(async (req: AuthenticatedRequ
     }
 
     const clinicId = req.tenantContext?.clinicId || undefined;
-    const result = await aiService.generateEmailTemplate(prompt, clinicId);
+    const result = await aiService.generateEmailTemplate(req.db!, prompt, clinicId);
 
     if (!result.success) {
         const statusCode = result.code === 'INVALID_REQUEST' ? 400 :

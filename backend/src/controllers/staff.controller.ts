@@ -27,10 +27,10 @@ export const getStaff = asyncHandler(async (req: AuthenticatedRequest, res: Resp
     const clinicId = req.headers['x-clinic-id'] as string | undefined;
 
     if (clinicId) {
-        const staff = await staffService.getStaffByClinic(clinicId);
+        const staff = await staffService.getStaffByClinic(req.db!, clinicId);
         res.json(success(staff));
     } else if (req.tenantContext?.organizationId) {
-        const staff = await staffService.getStaffByOrganization(req.tenantContext.organizationId);
+        const staff = await staffService.getStaffByOrganization(req.db!, req.tenantContext.organizationId);
         res.json(success(staff));
     } else {
         res.json(success([]));
@@ -44,7 +44,7 @@ export const getStaff = asyncHandler(async (req: AuthenticatedRequest, res: Resp
 export const getMyClinics = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { userId, role, organizationId } = req.user!;
 
-    const clinics = await staffService.getAccessibleClinics(userId, role, organizationId);
+    const clinics = await staffService.getAccessibleClinics(req.db!, userId, role, organizationId);
 
     res.json(success(clinics));
 });
@@ -56,7 +56,7 @@ export const getMyClinics = asyncHandler(async (req: AuthenticatedRequest, res: 
 export const assignWorker = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { userId, clinicId, role } = assignWorkerSchema.parse(req.body);
 
-    const assignment = await staffService.assignWorkerToClinic(userId, clinicId, role);
+    const assignment = await staffService.assignWorkerToClinic(req.db!, userId, clinicId, role);
 
     res.status(201).json(success(assignment, 'Worker assigned successfully'));
 });
@@ -68,7 +68,7 @@ export const assignWorker = asyncHandler(async (req: AuthenticatedRequest, res: 
 export const removeWorker = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { userId, clinicId } = req.params;
 
-    await staffService.removeWorkerFromClinic(userId!, clinicId!);
+    await staffService.removeWorkerFromClinic(req.db!, userId!, clinicId!);
 
     res.json(success(null, 'Worker removed from clinic'));
 });
@@ -80,7 +80,7 @@ export const removeWorker = asyncHandler(async (req: AuthenticatedRequest, res: 
 export const updateMyProfile = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const data = updateProfileSchema.parse(req.body);
 
-    const profile = await staffService.updateStaffProfile(req.user!.userId, data);
+    const profile = await staffService.updateStaffProfile(req.db!, req.user!.userId, data as any);
 
     res.json(success(profile, 'Profile updated'));
 });
@@ -93,7 +93,7 @@ export const updateStaffProfile = asyncHandler(async (req: AuthenticatedRequest,
     const { userId } = req.params;
     const data = updateProfileSchema.parse(req.body);
 
-    const profile = await staffService.updateStaffProfile(userId!, data);
+    const profile = await staffService.updateStaffProfile(req.db!, userId!, data as any);
 
     res.json(success(profile, 'Profile updated'));
 });

@@ -15,6 +15,7 @@ const ClinicLayout = () => import('@/layouts/ClinicLayout.vue')
 const PatientLayout = () => import('@/layouts/PatientLayout.vue')
 
 // Super Admin pages
+const SATenantSelector = () => import('@/pages/super-admin/TenantSelector.vue')
 const SADashboard = () => import('@/pages/super-admin/Dashboard.vue')
 const SAOrganizations = () => import('@/pages/super-admin/Organizations.vue')
 const SAOrganizationDetail = () => import('@/pages/super-admin/OrganizationDetail.vue')
@@ -80,7 +81,15 @@ const routes: RouteRecordRaw[] = [
         ],
     },
 
-    // Super Admin routes
+    // Super Admin: Tenant selector (standalone, no layout)
+    {
+        path: '/admin/tenants',
+        name: 'admin-tenant-selector',
+        component: SATenantSelector,
+        meta: { requiresAuth: true, roles: [Role.SUPERADMIN] },
+    },
+
+    // Super Admin routes (requires tenant selected)
     {
         path: '/admin',
         component: SuperAdminLayout,
@@ -324,6 +333,16 @@ router.beforeEach(async (to, _from, next) => {
         return next(redirectPath)
     }
 
+    // SUPERADMIN: must select a tenant before accessing admin pages
+    if (
+        authStore.userRole === Role.SUPERADMIN &&
+        to.path.startsWith('/admin') &&
+        to.name !== 'admin-tenant-selector' &&
+        !authStore.tenantSlug
+    ) {
+        return next('/admin/tenants')
+    }
+
     // Check permission-based access
     const requiredPermission = to.matched.reduce<string | null>((perm, record) => {
         if (record.meta.permission) {
@@ -347,7 +366,7 @@ router.beforeEach(async (to, _from, next) => {
 function getHomeRouteForRole(role: Role): string {
     switch (role) {
         case Role.SUPERADMIN:
-            return '/admin/dashboard'
+            return '/admin/tenants'
         case Role.ADMIN:
         case Role.WORKER:
             return '/clinic/dashboard'

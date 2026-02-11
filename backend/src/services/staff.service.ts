@@ -1,5 +1,5 @@
 import { eq, and, inArray, sql } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { users, staffProfiles, workerClinics, clinics } from '../db/schema.js';
 import { NotFoundError, ConflictError } from '../utils/errors.js';
 import type { TenantContext } from '../types/index.js';
@@ -8,7 +8,7 @@ import type { TenantContext } from '../types/index.js';
  * Get staff members for an organization (all clinics)
  * Excludes USER role (patients)
  */
-export const getStaffByOrganization = async (organizationId: string) => {
+export const getStaffByOrganization = async (db: Database, organizationId: string) => {
     return db.query.users.findMany({
         where: and(
             eq(users.organizationId, organizationId),
@@ -35,7 +35,7 @@ export const getStaffByOrganization = async (organizationId: string) => {
  * Get staff members for a specific clinic
  * This includes both workers assigned via workerClinics AND users with clinicId directly in their profile
  */
-export const getStaffByClinic = async (clinicId: string) => {
+export const getStaffByClinic = async (db: Database, clinicId: string) => {
     // Get workers assigned via workerClinics table
     const assignments = await db.query.workerClinics.findMany({
         where: and(
@@ -98,7 +98,7 @@ export const getStaffByClinic = async (clinicId: string) => {
 /**
  * Assign a worker to a clinic
  */
-export const assignWorkerToClinic = async (
+export const assignWorkerToClinic = async (db: Database, 
     userId: string,
     clinicId: string,
     role?: string
@@ -139,7 +139,7 @@ export const assignWorkerToClinic = async (
 /**
  * Remove a worker from a clinic
  */
-export const removeWorkerFromClinic = async (userId: string, clinicId: string) => {
+export const removeWorkerFromClinic = async (db: Database, userId: string, clinicId: string) => {
     const existing = await db.query.workerClinics.findFirst({
         where: and(
             eq(workerClinics.userId, userId),
@@ -162,7 +162,7 @@ export const removeWorkerFromClinic = async (userId: string, clinicId: string) =
 /**
  * Get clinics for a worker
  */
-export const getClinicsForWorker = async (userId: string) => {
+export const getClinicsForWorker = async (db: Database, userId: string) => {
     const assignments = await db.query.workerClinics.findMany({
         where: and(
             eq(workerClinics.userId, userId),
@@ -187,7 +187,7 @@ export const getClinicsForWorker = async (userId: string) => {
 /**
  * Get accessible clinics for a user based on their role
  */
-export const getAccessibleClinics = async (userId: string, role: string, organizationId?: string | null) => {
+export const getAccessibleClinics = async (db: Database, userId: string, role: string, organizationId?: string | null) => {
     // For SUPERADMIN, return all clinics
     if (role === 'SUPERADMIN') {
         return db.query.clinics.findMany({
@@ -212,7 +212,7 @@ export const getAccessibleClinics = async (userId: string, role: string, organiz
 
     // For WORKER, return assigned clinics from workerClinics table
     if (role === 'WORKER') {
-        const workerClinicsList = await getClinicsForWorker(userId);
+        const workerClinicsList = await getClinicsForWorker(db, userId);
 
         // If no assignments in workerClinics, check for direct clinicId on user
         if (workerClinicsList.length === 0) {
@@ -246,7 +246,7 @@ export const getAccessibleClinics = async (userId: string, role: string, organiz
 /**
  * Update staff profile
  */
-export const updateStaffProfile = async (
+export const updateStaffProfile = async (db: Database, 
     userId: string,
     data: {
         licenseNumber?: string;

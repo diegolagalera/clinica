@@ -1,16 +1,19 @@
 import cron from 'node-cron';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { appointments, clinics, emailSettings, notificationLogs, whatsappSettings, patients, users } from '../db/schema.js';
 import { and, eq, gte, lte, isNull, ne, desc, sql } from 'drizzle-orm';
 import { sendAppointmentNotification } from '../services/notification.service.js';
 import { ChatbotConversationService } from '../services/chatbot-conversation.service.js';
 import { processPendingNotifications } from '../services/pending-notification.service.js';
 import { logger } from '../utils/logger.js';
+import { centralDb } from '../db/central-db.js';
+import { tenants } from '../db/central-schema.js';
+import { tenantManager } from '../db/tenant-manager.js';
 
 /**
  * Check if reminder was already sent for this appointment
  */
-const wasReminderSent = async (appointmentId: string, templateType: string, channel?: string): Promise<boolean> => {
+const wasReminderSent = async (db: Database, appointmentId: string, templateType: string, channel?: string): Promise<boolean> => {
     const conditions = [
         eq(notificationLogs.appointmentId, appointmentId),
         eq(notificationLogs.templateType, templateType as any),
@@ -26,14 +29,10 @@ const wasReminderSent = async (appointmentId: string, templateType: string, chan
 };
 
 /**
- * Process appointment reminders
- * Runs every 5 minutes
+ * Process appointment reminders for a single tenant
  */
-export const processReminders = async () => {
-    logger.info('Processing appointment reminders...');
-
+const processRemindersForTenant = async (db: Database, tenantSlug: string) => {
     const now = new Date();
-    logger.info(`Current time: ${now.toISOString()}`);
 
     // Get clinics with enabled notifications
     const activeSettings = await db.query.emailSettings.findMany({
@@ -43,20 +42,22 @@ export const processReminders = async () => {
         ),
     });
 
-    logger.info(`Found ${activeSettings.length} clinics with active notifications`);
+    if (activeSettings.length === 0) return;
+
+    logger.info(`[${tenantSlug}] Found ${activeSettings.length} clinics with active notifications`);
 
     for (const settings of activeSettings) {
         try {
             // 24h reminder (check if enabled, default to true if undefined)
             const reminder24hEnabled = settings.reminder24hEnabled !== false;
             if (reminder24hEnabled) {
-                await processReminderType(settings.clinicId, '24h', now);
+                await processReminderType(db, settings.clinicId, '24h', now);
             }
 
             // 1h reminder (check if enabled, default to true if undefined)
             const reminder1hEnabled = settings.reminder1hEnabled !== false;
             if (reminder1hEnabled) {
-                await processReminderType(settings.clinicId, '1h', now);
+                await processReminderType(db, settings.clinicId, '1h', now);
             }
         } catch (err: any) {
             logger.error(`Error processing reminders for clinic ${settings.clinicId}: ${err.message}`);
@@ -64,7 +65,31 @@ export const processReminders = async () => {
     }
 
     // Also process WhatsApp reminders for clinics that have WA enabled
-    await processWhatsAppReminders(now);
+    await processWhatsAppReminders(db, now);
+};
+
+/**
+ * Process appointment reminders across all tenants
+ */
+export const processReminders = async () => {
+    logger.info('Processing appointment reminders...');
+
+    try {
+        const activeTenants = await centralDb.query.tenants.findMany({
+            where: eq(tenants.isActive, true),
+        });
+
+        for (const tenant of activeTenants) {
+            try {
+                const db = await tenantManager.getConnection(tenant.slug);
+                await processRemindersForTenant(db, tenant.slug);
+            } catch (error: any) {
+                logger.error({ tenantSlug: tenant.slug, error: error.message }, 'Failed to process reminders for tenant');
+            }
+        }
+    } catch (error: any) {
+        logger.error('Error in reminder processor:', error);
+    }
 
     logger.info('Reminder processing complete');
 };
@@ -72,7 +97,7 @@ export const processReminders = async () => {
 /**
  * Process a specific reminder type for a clinic
  */
-const processReminderType = async (clinicId: string, type: '24h' | '1h', now: Date) => {
+const processReminderType = async (db: Database, clinicId: string, type: '24h' | '1h', now: Date) => {
     const hoursBefore = type === '24h' ? 24 : 1;
     const reminderType = type === '24h' ? 'APPOINTMENT_REMINDER_24H' : 'APPOINTMENT_REMINDER_1H';
 
@@ -103,13 +128,13 @@ const processReminderType = async (clinicId: string, type: '24h' | '1h', now: Da
     for (const appointment of pendingAppointments) {
         try {
             // Check if reminder was already sent
-            const alreadySent = await wasReminderSent(appointment.id, reminderType);
+            const alreadySent = await wasReminderSent(db, appointment.id, reminderType);
             if (alreadySent) {
                 logger.info(`Reminder ${type} already sent for appointment ${appointment.id}, skipping`);
                 continue;
             }
 
-            await sendAppointmentNotification({
+            await sendAppointmentNotification(db, {
                 appointmentId: appointment.id,
                 clinicId,
                 patientId: appointment.patientId,
@@ -125,7 +150,7 @@ const processReminderType = async (clinicId: string, type: '24h' | '1h', now: Da
 /**
  * Process WhatsApp reminders for all clinics that have WA notifications enabled
  */
-const processWhatsAppReminders = async (now: Date) => {
+const processWhatsAppReminders = async (db: Database, now: Date) => {
     // Get clinics with WA notifications enabled
     const waSettingsList = await db.query.whatsappSettings.findMany({
         where: and(
@@ -139,12 +164,12 @@ const processWhatsAppReminders = async (now: Date) => {
         try {
             // 24h WhatsApp reminder
             if (waSettings.waReminder24hEnabled && waSettings.waTemplateReminder24h) {
-                await processWaReminderType(waSettings.clinicId, '24h', now, waSettings.waTemplateReminder24h, waSettings.waTemplateMappingReminder24h as Record<string, string> | null);
+                await processWaReminderType(db, waSettings.clinicId, '24h', now, waSettings.waTemplateReminder24h, waSettings.waTemplateMappingReminder24h as Record<string, string> | null);
             }
 
             // 1h WhatsApp reminder
             if (waSettings.waReminder1hEnabled && waSettings.waTemplateReminder1h) {
-                await processWaReminderType(waSettings.clinicId, '1h', now, waSettings.waTemplateReminder1h, waSettings.waTemplateMappingReminder1h as Record<string, string> | null);
+                await processWaReminderType(db, waSettings.clinicId, '1h', now, waSettings.waTemplateReminder1h, waSettings.waTemplateMappingReminder1h as Record<string, string> | null);
             }
         } catch (err: any) {
             logger.error(`Error processing WA reminders for clinic ${waSettings.clinicId}: ${err.message}`);
@@ -155,7 +180,7 @@ const processWhatsAppReminders = async (now: Date) => {
 /**
  * Process WhatsApp reminder for a specific type
  */
-const processWaReminderType = async (clinicId: string, type: '24h' | '1h', now: Date, templateName: string, mapping: Record<string, string> | null) => {
+const processWaReminderType = async (db: Database, clinicId: string, type: '24h' | '1h', now: Date, templateName: string, mapping: Record<string, string> | null) => {
     const hoursBefore = type === '24h' ? 24 : 1;
     const reminderType = type === '24h' ? 'APPOINTMENT_REMINDER_24H' : 'APPOINTMENT_REMINDER_1H';
 
@@ -186,7 +211,7 @@ const processWaReminderType = async (clinicId: string, type: '24h' | '1h', now: 
     for (const appointment of pendingAppointments) {
         try {
             // Check if WA reminder was already sent for this appointment+type
-            const alreadySent = await wasReminderSent(appointment.id, reminderType, 'whatsapp');
+            const alreadySent = await wasReminderSent(db, appointment.id, reminderType, 'whatsapp');
             if (alreadySent) {
                 logger.info(`WA reminder ${type} already sent for appointment ${appointment.id}, skipping`);
                 continue;
@@ -253,6 +278,7 @@ const processWaReminderType = async (clinicId: string, type: '24h' | '1h', now: 
 
             // Send via ChatbotConversationService (userId null for automated)
             await ChatbotConversationService.sendTemplateMessage(
+                db,
                 clinicId,
                 '', // system-sent, no user id
                 patient.phone,
@@ -310,9 +336,21 @@ export const startReminderScheduler = () => {
 
     cron.schedule('* * * * *', async () => {
         try {
-            const count = await processPendingNotifications();
-            if (count > 0) {
-                logger.info(`Processed ${count} pending notification(s)`);
+            // Process pending notifications for all active tenants
+            const activeTenants = await centralDb.query.tenants.findMany({
+                where: eq(tenants.isActive, true),
+            });
+
+            for (const tenant of activeTenants) {
+                try {
+                    const db = await tenantManager.getConnection(tenant.slug);
+                    const count = await processPendingNotifications(db);
+                    if (count > 0) {
+                        logger.info(`[${tenant.slug}] Processed ${count} pending notification(s)`);
+                    }
+                } catch (err: any) {
+                    logger.error(`[${tenant.slug}] Pending notifications processor error: ${err.message}`);
+                }
             }
         } catch (err: any) {
             logger.error(`Pending notifications processor error: ${err.message}`);

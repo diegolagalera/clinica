@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { AiUsageService } from './ai-usage.service.js';
+import type { Database } from '../db/index.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -45,6 +46,7 @@ Responde SIEMPRE en formato JSON con esta estructura:
  * Transcribe audio using OpenAI Whisper API
  */
 export const transcribeAudio = async (
+    db: Database,
     audioBuffer: Buffer,
     filename: string = 'audio.webm',
     clinicId?: string
@@ -69,7 +71,7 @@ export const transcribeAudio = async (
 
         // Log whisper usage
         if (clinicId) {
-            await AiUsageService.logUsage(clinicId, 'voice_notes', 'whisper-1', { prompt: 750, completion: 0, total: 750 });
+            await AiUsageService.logUsage(db, clinicId, 'voice_notes', 'whisper-1', { prompt: 750, completion: 0, total: 750 });
         }
 
         return response;
@@ -83,6 +85,7 @@ export const transcribeAudio = async (
  * Extract structured fields from transcription using GPT-4
  */
 export const extractFieldsFromTranscription = async (
+    db: Database,
     transcription: string,
     clinicId?: string
 ): Promise<TranscriptionResult> => {
@@ -142,7 +145,7 @@ export const extractFieldsFromTranscription = async (
                 completion: response.usage?.completion_tokens || 300,
                 total: response.usage?.total_tokens || 500,
             };
-            await AiUsageService.logUsage(clinicId, 'voice_notes', 'gpt-4o', tokens);
+            await AiUsageService.logUsage(db, clinicId, 'voice_notes', 'gpt-4o', tokens);
         }
 
         return {
@@ -159,24 +162,25 @@ export const extractFieldsFromTranscription = async (
  * Full pipeline: transcribe audio and extract fields
  */
 export const processVoiceRecording = async (
+    db: Database,
     audioBuffer: Buffer,
     filename: string = 'audio.webm',
     clinicId?: string
 ): Promise<TranscriptionResult> => {
     // Enforce AI quota
     if (clinicId) {
-        await AiUsageService.enforceQuota(clinicId);
+        await AiUsageService.enforceQuota(db, clinicId);
     }
 
     // Step 1: Transcribe audio to text
-    const transcription = await transcribeAudio(audioBuffer, filename, clinicId);
+    const transcription = await transcribeAudio(db, audioBuffer, filename, clinicId);
 
     if (!transcription || transcription.trim().length === 0) {
         throw new Error('No se pudo transcribir el audio. Por favor intente de nuevo.');
     }
 
     // Step 2: Extract structured fields
-    const result = await extractFieldsFromTranscription(transcription, clinicId);
+    const result = await extractFieldsFromTranscription(db, transcription, clinicId);
 
     return result;
 };

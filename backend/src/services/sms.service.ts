@@ -1,6 +1,6 @@
 import twilio from 'twilio';
 import { eq, and, desc } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { smsSettings, smsTemplates, notificationLogs, patients, appointments, clinics } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
 
@@ -69,7 +69,7 @@ const sanitizeSenderId = (senderId: string): string => {
 /**
  * Get SMS settings for a clinic
  */
-export const getSmsSettings = async (clinicId: string) => {
+export const getSmsSettings = async (db: Database, clinicId: string) => {
     return db.query.smsSettings.findFirst({
         where: eq(smsSettings.clinicId, clinicId),
     });
@@ -78,7 +78,7 @@ export const getSmsSettings = async (clinicId: string) => {
 /**
  * Update or create SMS settings
  */
-export const updateSmsSettings = async (
+export const updateSmsSettings = async (db: Database,
     clinicId: string,
     data: {
         accountSid?: string;
@@ -91,7 +91,7 @@ export const updateSmsSettings = async (
         reminder1hEnabled?: boolean;
     }
 ) => {
-    const existing = await getSmsSettings(clinicId);
+    const existing = await getSmsSettings(db, clinicId);
 
     // Mask auth token if it's already saved and user sends asterisks
     const isMaskedToken = data.authToken && /^\*+$/.test(data.authToken);
@@ -148,8 +148,8 @@ export const updateSmsSettings = async (
 /**
  * Create Twilio client for a clinic
  */
-const getTwilioClient = async (clinicId: string) => {
-    const settings = await getSmsSettings(clinicId);
+const getTwilioClient = async (db: Database, clinicId: string) => {
+    const settings = await getSmsSettings(db, clinicId);
     if (!settings?.accountSid || !settings?.authToken) {
         throw new Error('Twilio not configured');
     }
@@ -159,9 +159,9 @@ const getTwilioClient = async (clinicId: string) => {
 /**
  * Test Twilio connection
  */
-export const testConnection = async (clinicId: string): Promise<{ success: boolean; error?: string }> => {
+export const testConnection = async (db: Database, clinicId: string): Promise<{ success: boolean; error?: string }> => {
     try {
-        const client = await getTwilioClient(clinicId);
+        const client = await getTwilioClient(db, clinicId);
         // Verify account by fetching account info
         await client.api.accounts(client.accountSid).fetch();
         return { success: true };
@@ -174,9 +174,9 @@ export const testConnection = async (clinicId: string): Promise<{ success: boole
 /**
  * Send test SMS
  */
-export const sendTestSms = async (clinicId: string, toNumber: string): Promise<{ success: boolean; error?: string }> => {
+export const sendTestSms = async (db: Database, clinicId: string, toNumber: string): Promise<{ success: boolean; error?: string }> => {
     try {
-        const settings = await getSmsSettings(clinicId);
+        const settings = await getSmsSettings(db, clinicId);
         if (!settings?.fromNumber) {
             throw new Error('Número de origen no configurado');
         }
@@ -184,7 +184,7 @@ export const sendTestSms = async (clinicId: string, toNumber: string): Promise<{
         // Sanitize the fromNumber in case it has legacy bad values
         const sanitizedFrom = sanitizeSenderId(settings.fromNumber);
 
-        const client = await getTwilioClient(clinicId);
+        const client = await getTwilioClient(db, clinicId);
         const result = await client.messages.create({
             body: '🔔 SMS de prueba desde tu clínica. ¡La configuración de Twilio funciona correctamente!',
             from: sanitizedFrom,
@@ -202,13 +202,13 @@ export const sendTestSms = async (clinicId: string, toNumber: string): Promise<{
 /**
  * Send SMS
  */
-export const sendSms = async (
+export const sendSms = async (db: Database,
     clinicId: string,
     toNumber: string,
     content: string
 ): Promise<{ success: boolean; sid?: string; error?: string }> => {
     try {
-        const settings = await getSmsSettings(clinicId);
+        const settings = await getSmsSettings(db, clinicId);
         if (!settings?.isEnabled || !settings?.isConfigured) {
             return { success: false, error: 'SMS no habilitado o configurado' };
         }
@@ -216,7 +216,7 @@ export const sendSms = async (
         // Sanitize the fromNumber in case it has legacy bad values
         const sanitizedFrom = sanitizeSenderId(settings.fromNumber!);
 
-        const client = await getTwilioClient(clinicId);
+        const client = await getTwilioClient(db, clinicId);
         const result = await client.messages.create({
             body: content,
             from: sanitizedFrom,
@@ -238,7 +238,7 @@ export const sendSms = async (
 /**
  * Get all SMS templates for a clinic
  */
-export const getSmsTemplates = async (clinicId: string) => {
+export const getSmsTemplates = async (db: Database, clinicId: string) => {
     return db.query.smsTemplates.findMany({
         where: eq(smsTemplates.clinicId, clinicId),
         orderBy: [desc(smsTemplates.createdAt)],
@@ -248,7 +248,7 @@ export const getSmsTemplates = async (clinicId: string) => {
 /**
  * Get active SMS template by type
  */
-export const getActiveSmsTemplate = async (clinicId: string, type: SmsTemplateType) => {
+export const getActiveSmsTemplate = async (db: Database, clinicId: string, type: SmsTemplateType) => {
     // First try to get an active custom template
     const customTemplate = await db.query.smsTemplates.findFirst({
         where: and(
@@ -281,7 +281,7 @@ export const getActiveSmsTemplate = async (clinicId: string, type: SmsTemplateTy
 /**
  * Create SMS template
  */
-export const createSmsTemplate = async (
+export const createSmsTemplate = async (db: Database,
     clinicId: string,
     data: {
         type: SmsTemplateType;
@@ -303,7 +303,7 @@ export const createSmsTemplate = async (
 /**
  * Update SMS template
  */
-export const updateSmsTemplate = async (
+export const updateSmsTemplate = async (db: Database,
     templateId: string,
     data: {
         name?: string;
@@ -325,7 +325,7 @@ export const updateSmsTemplate = async (
 /**
  * Delete SMS template
  */
-export const deleteSmsTemplate = async (templateId: string) => {
+export const deleteSmsTemplate = async (db: Database, templateId: string) => {
     await db.delete(smsTemplates).where(eq(smsTemplates.id, templateId));
 };
 

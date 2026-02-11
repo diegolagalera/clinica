@@ -1,5 +1,5 @@
 import { eq, and, gte, lte, sql, or, inArray } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { appointments, patients, users, appointmentWorkers, auditLogs, ratingRequests, workerClinics } from '../db/schema.js';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult, TenantContext } from '../types/index.js';
@@ -39,7 +39,7 @@ export type AppointmentType_ = typeof appointments.$inferSelect;
  * Helper to get all worker IDs assigned to an appointment
  * Includes both legacy workerId and new appointmentWorkers
  */
-async function getAppointmentWorkerIds(appointmentId: string): Promise<string[]> {
+async function getAppointmentWorkerIds(db: Database, appointmentId: string): Promise<string[]> {
     const appointment = await db.query.appointments.findFirst({
         where: eq(appointments.id, appointmentId),
         columns: { workerId: true },
@@ -71,7 +71,7 @@ async function getAppointmentWorkerIds(appointmentId: string): Promise<string[]>
  * Get appointments for a date range
  * If workerIds provided, returns appointments where ANY of the workers are assigned
  */
-export const getAppointments = async (
+export const getAppointments = async (db: Database,
     clinicId: string,
     startDate: Date,
     endDate: Date,
@@ -121,7 +121,7 @@ export const getAppointments = async (
 /**
  * Get appointments for today
  */
-export const getTodayAppointments = async (
+export const getTodayAppointments = async (db: Database,
     clinicId: string,
     workerId?: string
 ) => {
@@ -130,13 +130,13 @@ export const getTodayAppointments = async (
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    return getAppointments(clinicId, today, tomorrow, workerId);
+    return getAppointments(db, clinicId, today, tomorrow, workerId);
 };
 
 /**
  * Get upcoming appointments for a patient
  */
-export const getPatientAppointments = async (
+export const getPatientAppointments = async (db: Database,
     patientId: string,
     tenantContext: TenantContext,
     params: PaginationParams
@@ -188,7 +188,7 @@ export const getPatientAppointments = async (
 /**
  * Get appointment by ID
  */
-export const getAppointmentById = async (
+export const getAppointmentById = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_ | null> => {
@@ -221,7 +221,7 @@ export const getAppointmentById = async (
 /**
  * Check for scheduling conflicts
  */
-export const checkConflicts = async (
+export const checkConflicts = async (db: Database,
     workerId: string,
     startTime: Date,
     endTime: Date,
@@ -255,7 +255,7 @@ export const checkConflicts = async (
 /**
  * Create a new appointment
  */
-export const createAppointment = async (
+export const createAppointment = async (db: Database,
     input: CreateAppointmentInput
 ): Promise<ServiceResult<AppointmentType_>> => {
     // Validate patient exists and belongs to clinic
@@ -309,7 +309,7 @@ export const createAppointment = async (
 
     // Check for conflicts with any of the assigned workers
     for (const wId of effectiveWorkerIds) {
-        const hasConflict = await checkConflicts(wId, input.startTime, input.endTime);
+        const hasConflict = await checkConflicts(db, wId, input.startTime, input.endTime);
         if (hasConflict) {
             throw new BadRequestError('This time slot conflicts with an existing appointment for one of the workers');
         }
@@ -354,12 +354,12 @@ export const createAppointment = async (
 /**
  * Update an appointment
  */
-export const updateAppointment = async (
+export const updateAppointment = async (db: Database,
     id: string,
     input: UpdateAppointmentInput,
     tenantContext: TenantContext
 ): Promise<ServiceResult<AppointmentType_>> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -376,7 +376,7 @@ export const updateAppointment = async (
         const workerIdsToCheck = newWorkerIds || (existing.workerId ? [existing.workerId] : []);
 
         for (const wId of workerIdsToCheck) {
-            const hasConflict = await checkConflicts(wId, startTime, endTime, id);
+            const hasConflict = await checkConflicts(db, wId, startTime, endTime, id);
             if (hasConflict) {
                 throw new BadRequestError('This time slot conflicts with an existing appointment for one of the workers');
             }
@@ -433,11 +433,11 @@ export const updateAppointment = async (
 /**
  * Cancel an appointment
  */
-export const cancelAppointment = async (
+export const cancelAppointment = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<boolean> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -453,7 +453,7 @@ export const cancelAppointment = async (
 /**
  * Get worker schedule summary
  */
-export const getWorkerSchedule = async (
+export const getWorkerSchedule = async (db: Database,
     workerId: string,
     clinicId: string,
     date: Date
@@ -492,7 +492,7 @@ export const getWorkerSchedule = async (
  * Get all active (IN_PROGRESS) appointments for a user
  * Returns appointments where the user is one of the assigned workers
  */
-export const getActiveAppointments = async (
+export const getActiveAppointments = async (db: Database,
     clinicId: string,
     userId: string
 ): Promise<AppointmentType_[]> => {
@@ -522,12 +522,12 @@ export const getActiveAppointments = async (
 /**
  * Start an appointment (transition to IN_PROGRESS)
  */
-export const startAppointment = async (
+export const startAppointment = async (db: Database,
     id: string,
     startedById: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -574,7 +574,7 @@ export const startAppointment = async (
     });
 
     // Emit WebSocket event only to assigned workers
-    const workerIds = await getAppointmentWorkerIds(id);
+    const workerIds = await getAppointmentWorkerIds(db, id);
     appointmentEvents.started(workerIds, updated);
 
     return updated!;
@@ -584,11 +584,11 @@ export const startAppointment = async (
  * Pause an active appointment
  * Note: pausedDuration tracks cumulative paused time in minutes
  */
-export const pauseAppointment = async (
+export const pauseAppointment = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -611,7 +611,7 @@ export const pauseAppointment = async (
         .returning();
 
     // Emit WebSocket event only to assigned workers
-    const workerIds = await getAppointmentWorkerIds(id);
+    const workerIds = await getAppointmentWorkerIds(db, id);
     appointmentEvents.updated(workerIds, updated);
 
     return updated!;
@@ -620,11 +620,11 @@ export const pauseAppointment = async (
 /**
  * Resume a paused appointment
  */
-export const resumeAppointment = async (
+export const resumeAppointment = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -658,7 +658,7 @@ export const resumeAppointment = async (
         .returning();
 
     // Emit WebSocket event only to assigned workers
-    const workerIds = await getAppointmentWorkerIds(id);
+    const workerIds = await getAppointmentWorkerIds(db, id);
     appointmentEvents.updated(workerIds, updated);
 
     return updated!;
@@ -667,11 +667,11 @@ export const resumeAppointment = async (
 /**
  * Complete an active appointment
  */
-export const completeAppointment = async (
+export const completeAppointment = async (db: Database,
     id: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -691,7 +691,7 @@ export const completeAppointment = async (
         .returning();
 
     // Emit WebSocket event only to assigned workers
-    const workerIds = await getAppointmentWorkerIds(id);
+    const workerIds = await getAppointmentWorkerIds(db, id);
     appointmentEvents.completed(workerIds, id);
 
     return updated!;
@@ -711,13 +711,13 @@ export interface UpdateRealTimeInput {
  * Update real time fields (Admin only)
  * Allows correcting errors when workers start/end appointments incorrectly
  */
-export const updateRealTime = async (
+export const updateRealTime = async (db: Database,
     id: string,
     input: UpdateRealTimeInput,
     adminUserId: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -770,12 +770,12 @@ export const updateRealTime = async (
  * Clears realStartTime, realEndTime, pausedDuration, reverts status to SCHEDULED
  * Also cancels any pending rating requests
  */
-export const resetRealTime = async (
+export const resetRealTime = async (db: Database,
     id: string,
     adminUserId: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }
@@ -846,12 +846,12 @@ export const resetRealTime = async (
  * Cancel an active (IN_PROGRESS) appointment
  * Clears realStartTime, realEndTime, pausedDuration and sets status to CANCELLED
  */
-export const cancelActiveAppointment = async (
+export const cancelActiveAppointment = async (db: Database,
     id: string,
     cancelledById: string,
     tenantContext: TenantContext
 ): Promise<AppointmentType_> => {
-    const existing = await getAppointmentById(id, tenantContext);
+    const existing = await getAppointmentById(db, id, tenantContext);
     if (!existing) {
         throw new NotFoundError('Appointment not found');
     }

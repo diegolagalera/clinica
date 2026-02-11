@@ -1,23 +1,24 @@
 import cron from 'node-cron';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { chatMessages, chatConversations } from '../db/schema.js';
 import { and, lt, sql, inArray, isNotNull, eq } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import * as storage from '../services/storage.service.js';
+import { centralDb } from '../db/central-db.js';
+import { tenants } from '../db/central-schema.js';
+import { tenantManager } from '../db/tenant-manager.js';
 
 const RETENTION_MONTHS = 2;
 const MIN_MESSAGES_TO_KEEP = 100;
 
 /**
- * Process cleanup of old messages and media files.
+ * Process cleanup of old messages and media files for a single tenant.
  * Rules:
  *  - Delete messages older than RETENTION_MONTHS
  *  - BUT always keep the last MIN_MESSAGES_TO_KEEP messages per conversation
  *  - Delete associated media files from MinIO for removed messages
  */
-export const processCleanup = async () => {
-    logger.info('🧹 Starting message & media cleanup...');
-
+const processCleanupForTenant = async (db: Database, tenantSlug: string) => {
     const cutoffDate = new Date();
     cutoffDate.setMonth(cutoffDate.getMonth() - RETENTION_MONTHS);
 
@@ -38,7 +39,9 @@ export const processCleanup = async () => {
             .groupBy(chatConversations.id)
             .having(sql`count(${chatMessages.id}) > ${MIN_MESSAGES_TO_KEEP}`);
 
-        logger.info(`Found ${conversations.length} conversations with more than ${MIN_MESSAGES_TO_KEEP} messages`);
+        if (conversations.length === 0) return;
+
+        logger.info(`[${tenantSlug}] Found ${conversations.length} conversations with more than ${MIN_MESSAGES_TO_KEEP} messages`);
 
         for (const conv of conversations) {
             try {
@@ -111,15 +114,44 @@ export const processCleanup = async () => {
             }
         }
 
-        logger.info(
-            {
-                conversationsProcessed,
-                totalMessagesDeleted,
-                totalFilesDeleted,
-                totalFileErrors,
-            },
-            '🧹 Message & media cleanup complete'
-        );
+        if (totalMessagesDeleted > 0) {
+            logger.info(
+                {
+                    tenantSlug,
+                    conversationsProcessed,
+                    totalMessagesDeleted,
+                    totalFilesDeleted,
+                    totalFileErrors,
+                },
+                '🧹 Tenant message & media cleanup complete'
+            );
+        }
+    } catch (err: any) {
+        logger.error({ err, tenantSlug }, 'Fatal error during tenant message cleanup');
+    }
+};
+
+/**
+ * Process cleanup across all active tenants
+ */
+export const processCleanup = async () => {
+    logger.info('🧹 Starting message & media cleanup across all tenants...');
+
+    try {
+        const activeTenants = await centralDb.query.tenants.findMany({
+            where: eq(tenants.isActive, true),
+        });
+
+        for (const tenant of activeTenants) {
+            try {
+                const db = await tenantManager.getConnection(tenant.slug);
+                await processCleanupForTenant(db, tenant.slug);
+            } catch (error: any) {
+                logger.error({ tenantSlug: tenant.slug, error: error.message }, 'Failed to process cleanup for tenant');
+            }
+        }
+
+        logger.info('🧹 Message & media cleanup complete');
     } catch (err: any) {
         logger.error({ err }, 'Fatal error during message cleanup');
     }

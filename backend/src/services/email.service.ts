@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { emailSettings } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
 
@@ -24,7 +24,7 @@ export interface SmtpConfig {
 /**
  * Get email settings for a clinic
  */
-export const getEmailSettings = async (clinicId: string) => {
+export const getEmailSettings = async (db: Database, clinicId: string) => {
     const settings = await db.query.emailSettings.findFirst({
         where: eq(emailSettings.clinicId, clinicId),
     });
@@ -35,6 +35,7 @@ export const getEmailSettings = async (clinicId: string) => {
  * Update or create email settings for a clinic
  */
 export const updateEmailSettings = async (
+    db: Database,
     clinicId: string,
     data: {
         smtpHost?: string;
@@ -51,15 +52,17 @@ export const updateEmailSettings = async (
         reminder1hEnabled?: boolean;
     }
 ) => {
-    const existing = await getEmailSettings(clinicId);
+    const existing = await getEmailSettings(db, clinicId);
 
     // Clean smtpPass - remove spaces (Google shows app passwords with spaces: xxxx xxxx xxxx xxxx)
     // Also ignore masked passwords (********) - don't overwrite real password with asterisks
     const isMaskedPassword = data.smtpPass && /^\*+$/.test(data.smtpPass);
-    const cleanedData = {
-        ...data,
-        smtpPass: isMaskedPassword ? undefined : data.smtpPass?.replace(/\s/g, ''),
-    };
+    const cleanedData: Record<string, any> = { ...data };
+    if (isMaskedPassword) {
+        delete cleanedData.smtpPass;
+    } else if (data.smtpPass) {
+        cleanedData.smtpPass = data.smtpPass.replace(/\s/g, '');
+    }
 
     // Determine if fully configured (fromEmail optional, will use smtpUser)
     const isConfigured = Boolean(
@@ -94,8 +97,8 @@ export const updateEmailSettings = async (
 /**
  * Create a nodemailer transporter for a clinic
  */
-export const createTransporter = async (clinicId: string): Promise<Transporter | null> => {
-    const settings = await getEmailSettings(clinicId);
+export const createTransporter = async (db: Database, clinicId: string): Promise<Transporter | null> => {
+    const settings = await getEmailSettings(db, clinicId);
 
     if (!settings || !settings.isConfigured || !settings.isEnabled) {
         logger.warn(`Email not configured for clinic ${clinicId}`);
@@ -124,10 +127,11 @@ export const createTransporter = async (clinicId: string): Promise<Transporter |
  * Send an email using clinic's SMTP settings
  */
 export const sendEmail = async (
+    db: Database,
     clinicId: string,
     options: EmailOptions
 ): Promise<{ success: boolean; messageId?: string; error?: string }> => {
-    const settings = await getEmailSettings(clinicId);
+    const settings = await getEmailSettings(db, clinicId);
 
     if (!settings || !settings.isConfigured || !settings.isEnabled) {
         return {
@@ -136,7 +140,7 @@ export const sendEmail = async (
         };
     }
 
-    const transporter = await createTransporter(clinicId);
+    const transporter = await createTransporter(db, clinicId);
 
     if (!transporter) {
         return {
@@ -176,9 +180,10 @@ export const sendEmail = async (
  * Test SMTP connection
  */
 export const testConnection = async (
+    db: Database,
     clinicId: string
 ): Promise<{ success: boolean; error?: string }> => {
-    const transporter = await createTransporter(clinicId);
+    const transporter = await createTransporter(db, clinicId);
 
     if (!transporter) {
         return {
@@ -202,10 +207,11 @@ export const testConnection = async (
  * Send a test email
  */
 export const sendTestEmail = async (
+    db: Database,
     clinicId: string,
     to: string
 ): Promise<{ success: boolean; error?: string }> => {
-    return sendEmail(clinicId, {
+    return sendEmail(db, clinicId, {
         to,
         subject: '🧪 Prueba de correo - Sistema de Notificaciones',
         html: `
@@ -226,12 +232,13 @@ export const sendTestEmail = async (
  * Send a custom HTML email (for template preview)
  */
 export const sendCustomEmail = async (
+    db: Database,
     clinicId: string,
     to: string,
     subject: string,
     html: string
 ): Promise<{ success: boolean; error?: string }> => {
-    return sendEmail(clinicId, {
+    return sendEmail(db, clinicId, {
         to,
         subject,
         html,

@@ -57,6 +57,13 @@
       "when": 1770742800860,
       "tag": "0007_furry_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1770846604252,
+      "tag": "0008_cultured_gabe_jones",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 import { eq, and, desc, sql, ilike, or } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { clinicalRecords, patients, users, appointments } from '../db/schema.js';
 import { NotFoundError, ForbiddenError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult } from '../types/index.js';
@@ -38,7 +38,7 @@ export type ClinicalRecordType = typeof clinicalRecords.$inferSelect;
 /**
  * Get clinical records by patient
  */
-export const getRecordsByPatient = async (
+export const getRecordsByPatient = async (db: Database,
     patientId: string,
     clinicId: string,
     params: PaginationParams,
@@ -106,7 +106,7 @@ export const getRecordsByPatient = async (
 /**
  * Get clinical records by clinic
  */
-export const getRecordsByClinic = async (
+export const getRecordsByClinic = async (db: Database,
     clinicId: string,
     params: PaginationParams,
     filters?: { recordType?: string; search?: string; patientId?: string }
@@ -174,7 +174,7 @@ export const getRecordsByClinic = async (
 /**
  * Get clinical record by ID
  */
-export const getRecordById = async (
+export const getRecordById = async (db: Database,
     id: string,
     clinicId: string
 ): Promise<any | null> => {
@@ -210,7 +210,7 @@ export const getRecordById = async (
 /**
  * Create a clinical record
  */
-export const createRecord = async (
+export const createRecord = async (db: Database,
     input: CreateClinicalRecordInput
 ): Promise<ServiceResult<ClinicalRecordType>> => {
     // Verify patient exists and belongs to clinic
@@ -266,12 +266,12 @@ export const createRecord = async (
 /**
  * Update a clinical record
  */
-export const updateRecord = async (
+export const updateRecord = async (db: Database,
     id: string,
     clinicId: string,
     input: UpdateClinicalRecordInput
 ): Promise<ServiceResult<any>> => {
-    const existing = await getRecordById(id, clinicId);
+    const existing = await getRecordById(db, id, clinicId);
     if (!existing) {
         throw new NotFoundError('Clinical record not found');
     }
@@ -298,18 +298,18 @@ export const updateRecord = async (
         .where(eq(clinicalRecords.id, id))
         .returning();
 
-    return { success: true, data: await getRecordById(id, clinicId) };
+    return { success: true, data: await getRecordById(db, id, clinicId) };
 };
 
 /**
  * Sign a clinical record (makes it immutable)
  */
-export const signRecord = async (
+export const signRecord = async (db: Database,
     id: string,
     clinicId: string,
     signedById: string
 ): Promise<ServiceResult<any>> => {
-    const existing = await getRecordById(id, clinicId);
+    const existing = await getRecordById(db, id, clinicId);
     if (!existing) {
         throw new NotFoundError('Clinical record not found');
     }
@@ -328,17 +328,17 @@ export const signRecord = async (
         })
         .where(eq(clinicalRecords.id, id));
 
-    return { success: true, data: await getRecordById(id, clinicId) };
+    return { success: true, data: await getRecordById(db, id, clinicId) };
 };
 
 /**
  * Delete a clinical record (only if not signed)
  */
-export const deleteRecord = async (
+export const deleteRecord = async (db: Database,
     id: string,
     clinicId: string
 ): Promise<boolean> => {
-    const existing = await getRecordById(id, clinicId);
+    const existing = await getRecordById(db, id, clinicId);
     if (!existing) {
         throw new NotFoundError('Clinical record not found');
     }

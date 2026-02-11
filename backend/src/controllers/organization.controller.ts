@@ -33,7 +33,7 @@ export const listOrganizations = asyncHandler(async (req: AuthenticatedRequest, 
     const params = parsePaginationParams(req.query);
     const search = req.query['search'] as string | undefined;
 
-    const { data, total } = await organizationService.getOrganizations(params, search);
+    const { data, total } = await organizationService.getOrganizations(req.db!, params, search);
 
     res.json(success(paginated(data, total, params)));
 });
@@ -45,7 +45,7 @@ export const listOrganizations = asyncHandler(async (req: AuthenticatedRequest, 
 export const getOrganization = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const org = await organizationService.getOrganizationById(id!);
+    const org = await organizationService.getOrganizationById(req.db!, id!);
 
     res.json(success(org));
 });
@@ -57,7 +57,7 @@ export const getOrganization = asyncHandler(async (req: AuthenticatedRequest, re
 export const getOrganizationStats = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const stats = await organizationService.getOrganizationStats(id!);
+    const stats = await organizationService.getOrganizationStats(req.db!, id!);
 
     res.json(success(stats));
 });
@@ -69,7 +69,7 @@ export const getOrganizationStats = asyncHandler(async (req: AuthenticatedReques
 export const createOrganization = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const input = createOrganizationSchema.parse(req.body);
 
-    const result = await organizationService.createOrganization(input);
+    const result = await organizationService.createOrganization(req.db!, input as any);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'Organization created successfully'));
@@ -84,7 +84,7 @@ export const updateOrganization = asyncHandler(async (req: AuthenticatedRequest,
     const { id } = req.params;
     const input = updateOrganizationSchema.parse(req.body);
 
-    const result = await organizationService.updateOrganization(id!, input);
+    const result = await organizationService.updateOrganization(req.db!, id!, input as any);
 
     if (result.success) {
         res.json(success(result.data, 'Organization updated successfully'));
@@ -98,7 +98,7 @@ export const updateOrganization = asyncHandler(async (req: AuthenticatedRequest,
 export const deleteOrganization = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await organizationService.deleteOrganization(id!);
+    await organizationService.deleteOrganization(req.db!, id!);
 
     res.json(success(null, 'Organization deleted successfully'));
 });

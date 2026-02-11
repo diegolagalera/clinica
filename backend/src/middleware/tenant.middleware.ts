@@ -1,14 +1,14 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { eq, and } from 'drizzle-orm';
-import { db } from '../db/index.js';
 import { clinics, users, workerClinics } from '../db/schema.js';
 import { ForbiddenError, BadRequestError } from '../utils/errors.js';
 import type { AuthenticatedRequest, TenantContext, Role } from '../types/index.js';
 
 /**
- * Multi-tenant middleware that sets up tenant context based on user role
+ * Multi-tenant middleware that sets up tenant context based on user role.
+ * Uses req.db (set by auth middleware) instead of global db import.
  * 
- * - SUPERADMIN: Can access all organizations and clinics
+ * - SUPERADMIN: Can access all organizations and clinics (via X-Tenant-Slug)
  * - ADMIN: Can access their organization's clinics
  * - WORKER: Can access only their assigned clinic
  * - USER: Can access only their linked clinic
@@ -25,6 +25,7 @@ export const tenantContext: RequestHandler = async (
         }
 
         const { role, organizationId, clinicId, userId } = authReq.user;
+        const db = authReq.db;
 
         // Initialize tenant context
         const context: TenantContext = {
@@ -38,7 +39,7 @@ export const tenantContext: RequestHandler = async (
             const requestedClinicId = req.headers['x-clinic-id'] as string | undefined;
             const requestedOrgId = req.headers['x-organization-id'] as string | undefined;
 
-            if (requestedClinicId) {
+            if (db && requestedClinicId) {
                 context.clinicId = requestedClinicId;
                 context.clinicIds = [requestedClinicId];
 
@@ -49,7 +50,7 @@ export const tenantContext: RequestHandler = async (
                 if (clinic) {
                     context.organizationId = clinic.organizationId;
                 }
-            } else if (requestedOrgId) {
+            } else if (db && requestedOrgId) {
                 context.organizationId = requestedOrgId;
                 // Get all clinics in organization
                 const orgClinics = await db.query.clinics.findMany({
@@ -60,6 +61,11 @@ export const tenantContext: RequestHandler = async (
 
             authReq.tenantContext = context;
             return next();
+        }
+
+        // All non-SUPERADMIN users require a tenant DB
+        if (!db) {
+            return next(new ForbiddenError('No tenant database context'));
         }
 
         // For ADMIN, WORKER, USER - must have organization context
@@ -94,7 +100,6 @@ export const tenantContext: RequestHandler = async (
 
         // WORKER can access their assigned clinics via workerClinics or direct clinicId
         if (role === ('WORKER' as Role)) {
-            // Get all clinics the worker has access to
             const workerAssignments = await db.query.workerClinics.findMany({
                 where: and(
                     eq(workerClinics.userId, userId),
@@ -102,7 +107,6 @@ export const tenantContext: RequestHandler = async (
                 ),
             });
 
-            // Accessible clinic IDs: from workerClinics + direct clinicId (if exists)
             const accessibleClinicIds = workerAssignments.map(a => a.clinicId);
             if (clinicId && !accessibleClinicIds.includes(clinicId)) {
                 accessibleClinicIds.push(clinicId);
@@ -114,7 +118,6 @@ export const tenantContext: RequestHandler = async (
 
             context.clinicIds = accessibleClinicIds;
 
-            // Check if request specifies a clinic via header
             const requestedClinicId = req.headers['x-clinic-id'] as string | undefined;
             if (requestedClinicId) {
                 if (!accessibleClinicIds.includes(requestedClinicId)) {
@@ -122,7 +125,6 @@ export const tenantContext: RequestHandler = async (
                 }
                 context.clinicId = requestedClinicId;
             } else {
-                // Default to first accessible clinic or the direct clinicId
                 context.clinicId = clinicId || accessibleClinicIds[0] || null;
             }
 
@@ -137,7 +139,6 @@ export const tenantContext: RequestHandler = async (
             });
 
             if (!user?.clinicId) {
-                // User not linked to any clinic yet
                 context.clinicId = null;
                 context.clinicIds = [];
             } else {
@@ -199,4 +200,25 @@ export const validateTenantAccess = async (
     }
 
     return tenantContext.clinicIds.includes(clinicId);
+};
+
+/**
+ * Guard: require req.db to be set (i.e., a tenant database must be resolved).
+ * Place this on any route that MUST have a tenant DB.
+ * Returns 403 with a clear message instead of crashing with 500.
+ */
+export const requireTenantDb: RequestHandler = (
+    req: Request,
+    _res: Response,
+    next: NextFunction
+): void => {
+    const authReq = req as AuthenticatedRequest;
+    if (!authReq.db) {
+        return next(
+            new ForbiddenError(
+                'This endpoint requires a tenant context. SUPERADMIN must provide X-Tenant-Slug header.'
+            )
+        );
+    }
+    next();
 };

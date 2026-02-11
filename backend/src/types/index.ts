@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import type { Role } from './enums.js';
+import type { Database } from '../db/index.js';
 
 // Re-export enums
 export * from './enums.js';
@@ -11,6 +12,7 @@ export interface AccessTokenPayload {
     role: Role;
     organizationId: string | null;
     clinicId: string | null;
+    tenantSlug?: string | undefined; // For resolving tenant DB without central lookup
 }
 
 export interface RefreshTokenPayload {
@@ -30,6 +32,7 @@ export interface TenantContext {
 export interface AuthenticatedRequest extends Request {
     user: AccessTokenPayload;
     tenantContext: TenantContext;
+    db: Database; // Tenant-specific database connection
 }
 
 // Pagination

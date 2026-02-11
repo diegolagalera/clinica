@@ -1,5 +1,5 @@
 import { eq, and, desc, inArray } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     marketingCampaigns,
     campaignRecipients,
@@ -45,7 +45,7 @@ class CampaignService {
     /**
      * Get all campaigns for a clinic
      */
-    async getCampaigns(clinicId: string) {
+    async getCampaigns(db: Database, clinicId: string) {
         return db
             .select({
                 id: marketingCampaigns.id,
@@ -70,7 +70,7 @@ class CampaignService {
     /**
      * Get a specific campaign with details
      */
-    async getCampaignById(id: string, clinicId: string) {
+    async getCampaignById(db: Database, id: string, clinicId: string) {
         const [campaign] = await db
             .select()
             .from(marketingCampaigns)
@@ -88,7 +88,7 @@ class CampaignService {
     /**
      * Create a new campaign
      */
-    async createCampaign(clinicId: string, userId: string, data: CreateCampaignData) {
+    async createCampaign(db: Database, clinicId: string, userId: string, data: CreateCampaignData) {
         const [campaign] = await db
             .insert(marketingCampaigns)
             .values({
@@ -104,15 +104,15 @@ class CampaignService {
             })
             .returning();
 
-        logger.info(`Campaign created: ${campaign.id} for clinic ${clinicId}`);
+        logger.info(`Campaign created: ${campaign!.id} for clinic ${clinicId}`);
         return campaign;
     }
 
     /**
      * Update a campaign (only if not sent)
      */
-    async updateCampaign(id: string, clinicId: string, data: UpdateCampaignData) {
-        const existing = await this.getCampaignById(id, clinicId);
+    async updateCampaign(db: Database, id: string, clinicId: string, data: UpdateCampaignData) {
+        const existing = await this.getCampaignById(db, id, clinicId);
         if (!existing) {
             throw new Error('Campaign not found');
         }
@@ -137,8 +137,8 @@ class CampaignService {
     /**
      * Delete a campaign (only if draft or cancelled)
      */
-    async deleteCampaign(id: string, clinicId: string) {
-        const existing = await this.getCampaignById(id, clinicId);
+    async deleteCampaign(db: Database, id: string, clinicId: string) {
+        const existing = await this.getCampaignById(db, id, clinicId);
         if (!existing) {
             throw new Error('Campaign not found');
         }
@@ -155,8 +155,8 @@ class CampaignService {
     /**
      * Send a campaign immediately
      */
-    async sendCampaign(id: string, clinicId: string, options: SendCampaignOptions = {}) {
-        const campaign = await this.getCampaignById(id, clinicId);
+    async sendCampaign(db: Database, id: string, clinicId: string, options: SendCampaignOptions = {}) {
+        const campaign = await this.getCampaignById(db, id, clinicId);
         if (!campaign) {
             throw new Error('Campaign not found');
         }
@@ -184,7 +184,7 @@ class CampaignService {
 
             if (campaign.segmentId) {
                 // Get patients from segment
-                recipientPatients = await audienceService.getPatientsForSegment(
+                recipientPatients = await audienceService.getPatientsForSegment(db,
                     campaign.segmentId,
                     clinicId
                 );
@@ -230,6 +230,7 @@ class CampaignService {
             let htmlContent = campaign.htmlContent;
             if (campaign.templateId && !htmlContent) {
                 const template = await marketingTemplateService.getTemplateById(
+                    db,
                     campaign.templateId,
                     clinicId
                 );
@@ -268,7 +269,7 @@ class CampaignService {
                         const personalizedSubject = marketingTemplateService.replaceVariables(campaign.subject, variables);
 
                         // Send email
-                        await sendEmail(clinicId, {
+                        await sendEmail(db, clinicId, {
                             to: patient.email,
                             subject: personalizedSubject,
                             html: personalizedHtml,
@@ -356,8 +357,8 @@ class CampaignService {
     /**
      * Cancel a campaign in progress
      */
-    async cancelCampaign(id: string, clinicId: string) {
-        const existing = await this.getCampaignById(id, clinicId);
+    async cancelCampaign(db: Database, id: string, clinicId: string) {
+        const existing = await this.getCampaignById(db, id, clinicId);
         if (!existing) {
             throw new Error('Campaign not found');
         }
@@ -378,9 +379,9 @@ class CampaignService {
     /**
      * Get recipients for a campaign
      */
-    async getCampaignRecipients(campaignId: string, clinicId: string) {
+    async getCampaignRecipients(db: Database, campaignId: string, clinicId: string) {
         // Verify campaign belongs to clinic
-        const campaign = await this.getCampaignById(campaignId, clinicId);
+        const campaign = await this.getCampaignById(db, campaignId, clinicId);
         if (!campaign) {
             throw new Error('Campaign not found');
         }

@@ -6,6 +6,7 @@ import { success, error } from '../utils/response.js';
 import { BadRequestError, NotFoundError } from '../utils/errors.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import type { Database } from '../db/index.js';
 
 // Validation schemas
 const submitRatingSchema = z.object({
@@ -24,7 +25,7 @@ export const validateRatingToken = asyncHandler(async (req: Request, res: Respon
         throw new BadRequestError('Token inválido');
     }
 
-    const validation = await ratingService.validateToken(token);
+    const validation = await ratingService.validateToken((req as any).db as Database, token);
 
     if (!validation.valid) {
         // Return appropriate message based on status
@@ -77,7 +78,7 @@ export const submitRating = asyncHandler(async (req: Request, res: Response) => 
 
     const input = submitRatingSchema.parse(req.body);
 
-    const result = await ratingService.submitRating(token, input.rating, input.comment);
+    const result = await ratingService.submitRating((req as any).db as Database, token, input.rating, input.comment);
 
     if (!result.success) {
         // Map error status to user-friendly message
@@ -102,7 +103,7 @@ export const getClinicStats = asyncHandler(async (req: AuthenticatedRequest, res
         throw new BadRequestError('Clinic context required');
     }
 
-    const stats = await ratingService.getClinicRatingStats(req.tenantContext.clinicId);
+    const stats = await ratingService.getClinicRatingStats(req.db!, req.tenantContext.clinicId);
     res.json(success(stats));
 });
 
@@ -117,7 +118,7 @@ export const getWorkerStats = asyncHandler(async (req: AuthenticatedRequest, res
         throw new BadRequestError('Worker ID required');
     }
 
-    const stats = await ratingService.getWorkerRatingStats(
+    const stats = await ratingService.getWorkerRatingStats(req.db!,
         workerId,
         req.tenantContext.clinicId || undefined
     );
@@ -135,7 +136,7 @@ export const getRecentRatings = asyncHandler(async (req: AuthenticatedRequest, r
     }
 
     const limit = parseInt(req.query.limit as string) || 10;
-    const ratings = await ratingService.getRecentRatings(req.tenantContext.clinicId, limit);
+    const ratings = await ratingService.getRecentRatings(req.db!, req.tenantContext.clinicId, limit);
 
     res.json(success(ratings));
 });
@@ -149,7 +150,7 @@ export const getAllRatingRequests = asyncHandler(async (req: AuthenticatedReques
         throw new BadRequestError('Clinic context required');
     }
 
-    const requests = await ratingService.getClinicRatingRequests(req.tenantContext.clinicId);
+    const requests = await ratingService.getClinicRatingRequests(req.db!, req.tenantContext.clinicId);
     res.json(success(requests));
 });
 
@@ -168,7 +169,7 @@ export const sendTestRatingEmail = asyncHandler(async (req: AuthenticatedRequest
         throw new BadRequestError('Clinic context required');
     }
 
-    const result = await ratingService.sendRatingEmailNow(appointmentId, req.tenantContext.clinicId);
+    const result = await ratingService.sendRatingEmailNow(req.db!, appointmentId, req.tenantContext.clinicId);
 
     if (!result.success) {
         throw new BadRequestError(result.error || 'Error al enviar email de valoración');

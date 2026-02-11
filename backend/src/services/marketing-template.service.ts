@@ -1,5 +1,5 @@
 import { eq, and, isNull, or, desc, asc } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { marketingTemplates } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
 import { SYSTEM_TEMPLATES, MARKETING_TEMPLATE_VARIABLES } from '../data/system-templates.js';
@@ -31,7 +31,7 @@ class MarketingTemplateService {
     /**
      * Get all templates for a clinic (including system templates)
      */
-    async getTemplates(clinicId: string) {
+    async getTemplates(db: Database, clinicId: string) {
         const templates = await db
             .select()
             .from(marketingTemplates)
@@ -52,7 +52,7 @@ class MarketingTemplateService {
     /**
      * Get clinic-only templates (not system templates)
      */
-    async getClinicTemplates(clinicId: string) {
+    async getClinicTemplates(db: Database, clinicId: string) {
         return db
             .select()
             .from(marketingTemplates)
@@ -68,7 +68,7 @@ class MarketingTemplateService {
     /**
      * Get system templates only
      */
-    async getSystemTemplates() {
+    async getSystemTemplates(db: Database) {
         return db
             .select()
             .from(marketingTemplates)
@@ -79,7 +79,7 @@ class MarketingTemplateService {
     /**
      * Get a specific template by ID
      */
-    async getTemplateById(id: string, clinicId?: string) {
+    async getTemplateById(db: Database, id: string, clinicId?: string) {
         const [template] = await db
             .select()
             .from(marketingTemplates)
@@ -93,13 +93,13 @@ class MarketingTemplateService {
             return null;
         }
 
-        return template;
+        return template!;
     }
 
     /**
      * Get templates by category
      */
-    async getTemplatesByCategory(clinicId: string, category: MarketingTemplateCategory) {
+    async getTemplatesByCategory(db: Database, clinicId: string, category: MarketingTemplateCategory) {
         return db
             .select()
             .from(marketingTemplates)
@@ -118,7 +118,7 @@ class MarketingTemplateService {
     /**
      * Create a new template for a clinic
      */
-    async createTemplate(clinicId: string, userId: string, data: CreateTemplateData) {
+    async createTemplate(db: Database, clinicId: string, userId: string, data: CreateTemplateData) {
         const [template] = await db
             .insert(marketingTemplates)
             .values({
@@ -136,14 +136,14 @@ class MarketingTemplateService {
             })
             .returning();
 
-        logger.info(`Marketing template created: ${template.id} for clinic ${clinicId}`);
+        logger.info(`Marketing template created: ${template!.id} for clinic ${clinicId}`);
         return template;
     }
 
     /**
      * Update a template
      */
-    async updateTemplate(id: string, clinicId: string, data: UpdateTemplateData) {
+    async updateTemplate(db: Database, id: string, clinicId: string, data: UpdateTemplateData) {
         // First verify this template belongs to the clinic (can't update system templates)
         const [existing] = await db
             .select()
@@ -177,7 +177,7 @@ class MarketingTemplateService {
     /**
      * Delete a template
      */
-    async deleteTemplate(id: string, clinicId: string) {
+    async deleteTemplate(db: Database, id: string, clinicId: string) {
         // Can't delete system templates
         const [existing] = await db
             .select()
@@ -206,7 +206,7 @@ class MarketingTemplateService {
     /**
      * Clone a system template to a clinic
      */
-    async cloneSystemTemplate(templateId: string, clinicId: string, userId: string, newName?: string) {
+    async cloneSystemTemplate(db: Database, templateId: string, clinicId: string, userId: string, newName?: string) {
         const [systemTemplate] = await db
             .select()
             .from(marketingTemplates)
@@ -239,14 +239,14 @@ class MarketingTemplateService {
             })
             .returning();
 
-        logger.info(`System template ${templateId} cloned to ${cloned.id} for clinic ${clinicId}`);
-        return cloned;
+        logger.info(`System template ${templateId} cloned to ${cloned!.id} for clinic ${clinicId}`);
+        return cloned!;
     }
 
     /**
      * Seed system templates from the data file
      */
-    async seedSystemTemplates() {
+    async seedSystemTemplates(db: Database) {
         // Check if system templates already exist
         const existing = await db
             .select()

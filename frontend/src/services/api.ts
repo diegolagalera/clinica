@@ -42,6 +42,11 @@ class ApiService {
                     config.headers['X-Organization-Id'] = authStore.currentOrganizationId
                 }
 
+                // SUPERADMIN: inject tenant slug so backend resolves req.db
+                if (authStore.tenantSlug) {
+                    config.headers['X-Tenant-Slug'] = authStore.tenantSlug
+                }
+
                 return config
             },
             (error) => Promise.reject(error)

@@ -20,6 +20,24 @@ services:
       timeout: 5s
       retries: 5
 
+  # PostgreSQL Central DB (multi-tenant routing)
+  postgres-central:
+    image: postgres:16-alpine
+    container_name: cuspia_central_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cuspia_central
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_central_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # Redis for caching and sessions
   redis:
     image: redis:7-alpine
@@ -75,5 +93,6 @@ services:
 
 volumes:
   postgres_data:
+  postgres_central_data:
   redis_data:
   minio_data:

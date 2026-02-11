@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { notificationLogs, patients, appointments, users, clinics, emailSettings } from '../db/schema.js';
 import { sendEmail, getEmailSettings } from './email.service.js';
 import {
@@ -28,12 +28,12 @@ interface AppointmentNotificationData {
 /**
  * Send appointment notification email
  */
-export const sendAppointmentNotification = async (
+export const sendAppointmentNotification = async (db: Database, 
     data: AppointmentNotificationData
 ): Promise<{ success: boolean; logId?: string; error?: string }> => {
     try {
         // Check if notifications are enabled for this type
-        const settings = await getEmailSettings(data.clinicId);
+        const settings = await getEmailSettings(db, data.clinicId);
 
         if (!settings?.isEnabled || !settings?.isConfigured) {
             logger.info(`Notifications disabled for clinic ${data.clinicId}`);
@@ -104,7 +104,7 @@ export const sendAppointmentNotification = async (
         }
 
         // Get template
-        const template = await getActiveTemplate(data.clinicId, data.type);
+        const template = await getActiveTemplate(db, data.clinicId, data.type);
 
         logger.info(`Using template for ${data.type}: ${template.name} (id: ${template.id || 'default'}, type: ${template.type})`);
 
@@ -155,7 +155,7 @@ export const sendAppointmentNotification = async (
             .returning();
 
         // Send email
-        const result = await sendEmail(data.clinicId, {
+        const result = await sendEmail(db, data.clinicId, {
             to: patient.email,
             subject: finalSubject,
             html: finalHtml,
@@ -177,7 +177,7 @@ export const sendAppointmentNotification = async (
         // Also send SMS if patient has phone and SMS is enabled
         if (patient.phone) {
             try {
-                const smsSettings = await getSmsSettings(data.clinicId);
+                const smsSettings = await getSmsSettings(db, data.clinicId);
 
                 // Check if SMS is enabled for this notification type
                 const shouldSendSms = smsSettings?.isEnabled &&
@@ -192,7 +192,7 @@ export const sendAppointmentNotification = async (
                 if (shouldSendSms) {
                     // Map email template type to SMS template type
                     const smsTemplateType = data.type as SmsTemplateType;
-                    const smsTemplate = await getActiveSmsTemplate(data.clinicId, smsTemplateType);
+                    const smsTemplate = await getActiveSmsTemplate(db, data.clinicId, smsTemplateType);
 
                     if (smsTemplate) {
                         const smsContent = renderSmsContent(smsTemplate.content, variables);
@@ -216,7 +216,7 @@ export const sendAppointmentNotification = async (
                             .returning();
 
                         // Send SMS
-                        const smsResult = await sendSmsMessage(data.clinicId, patient.phone, smsContent);
+                        const smsResult = await sendSmsMessage(db, data.clinicId, patient.phone, smsContent);
 
                         // Update SMS log
                         if (smsLog) {
@@ -253,7 +253,7 @@ export const sendAppointmentNotification = async (
 /**
  * Get notification logs for a clinic
  */
-export const getNotificationLogs = async (
+export const getNotificationLogs = async (db: Database, 
     clinicId: string,
     options: { limit?: number; offset?: number } = {}
 ) => {
@@ -282,7 +282,7 @@ export const getNotificationLogs = async (
 /**
  * Get notification stats for a clinic
  */
-export const getNotificationStats = async (clinicId: string) => {
+export const getNotificationStats = async (db: Database, clinicId: string) => {
     const logs = await db.query.notificationLogs.findMany({
         where: eq(notificationLogs.clinicId, clinicId),
         columns: {

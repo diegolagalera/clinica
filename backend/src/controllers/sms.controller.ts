@@ -48,7 +48,7 @@ export const getSettings = asyncHandler(async (req: AuthenticatedRequest, res: R
         return;
     }
 
-    const settings = await smsService.getSmsSettings(clinicId);
+    const settings = await smsService.getSmsSettings(req.db!, clinicId);
 
     res.json(success({
         ...(settings || {
@@ -74,7 +74,7 @@ export const updateSettings = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     const input = settingsSchema.parse(req.body);
-    const settings = await smsService.updateSmsSettings(clinicId, input);
+    const settings = await smsService.updateSmsSettings(req.db!, clinicId, input as any);
 
     res.json(success({
         ...settings,
@@ -92,7 +92,7 @@ export const testConnection = asyncHandler(async (req: AuthenticatedRequest, res
         return;
     }
 
-    const result = await smsService.testConnection(clinicId);
+    const result = await smsService.testConnection(req.db!, clinicId);
 
     if (result.success) {
         res.json(success(null, 'Conexión exitosa con Twilio'));
@@ -112,7 +112,7 @@ export const sendTestSms = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     const { phone } = testSmsSchema.parse(req.body);
-    const result = await smsService.sendTestSms(clinicId, phone);
+    const result = await smsService.sendTestSms(req.db!, clinicId, phone);
 
     if (result.success) {
         res.json(success(null, 'SMS de prueba enviado'));
@@ -135,7 +135,7 @@ export const getTemplates = asyncHandler(async (req: AuthenticatedRequest, res: 
         return;
     }
 
-    const templates = await smsService.getSmsTemplates(clinicId);
+    const templates = await smsService.getSmsTemplates(req.db!, clinicId);
     res.json(success(templates));
 });
 
@@ -165,7 +165,7 @@ export const createTemplate = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     const input = templateSchema.parse(req.body);
-    const template = await smsService.createSmsTemplate(clinicId, input);
+    const template = await smsService.createSmsTemplate(req.db!, clinicId, input as any);
 
     res.status(201).json(success(template, 'Plantilla creada'));
 });
@@ -176,7 +176,7 @@ export const createTemplate = asyncHandler(async (req: AuthenticatedRequest, res
 export const updateTemplate = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
     const input = templateSchema.partial().parse(req.body);
-    const template = await smsService.updateSmsTemplate(id, input);
+    const template = await smsService.updateSmsTemplate(req.db!, id!, input as any);
 
     res.json(success(template, 'Plantilla actualizada'));
 });
@@ -186,7 +186,7 @@ export const updateTemplate = asyncHandler(async (req: AuthenticatedRequest, res
  */
 export const deleteTemplate = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
-    await smsService.deleteSmsTemplate(id);
+    await smsService.deleteSmsTemplate(req.db!, id!);
 
     res.json(success(null, 'Plantilla eliminada'));
 });

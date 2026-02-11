@@ -1,4 +1,4 @@
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     chatConversations,
     chatMessages,
@@ -101,7 +101,7 @@ export class ChatbotConversationService {
     // Settings
     // ========================================================================
 
-    static async getSettings(clinicId: string) {
+    static async getSettings(db: Database, clinicId: string) {
         const [settings] = await db
             .select()
             .from(whatsappSettings)
@@ -116,7 +116,7 @@ export class ChatbotConversationService {
         };
     }
 
-    static async getSettingsRaw(clinicId: string) {
+    static async getSettingsRaw(db: Database, clinicId: string) {
         const [settings] = await db
             .select()
             .from(whatsappSettings)
@@ -128,7 +128,7 @@ export class ChatbotConversationService {
     // Conversations
     // ========================================================================
 
-    static async getConversations(clinicId: string, filters?: {
+    static async getConversations(db: Database, clinicId: string, filters?: {
         status?: string;
         controlMode?: string;
         search?: string;
@@ -188,7 +188,7 @@ export class ChatbotConversationService {
         return enriched;
     }
 
-    static async getConversation(conversationId: string, clinicId: string) {
+    static async getConversation(db: Database, conversationId: string, clinicId: string) {
         const [row] = await db
             .select({
                 conversation: chatConversations,
@@ -213,9 +213,9 @@ export class ChatbotConversationService {
     /**
      * Delete a conversation and all related data (messages, notes, AI logs).
      */
-    static async deleteConversation(conversationId: string, clinicId: string) {
+    static async deleteConversation(db: Database, conversationId: string, clinicId: string) {
         // Verify ownership
-        const conversation = await this.getConversation(conversationId, clinicId);
+        const conversation = await this.getConversation(db, conversationId, clinicId);
         if (!conversation) throw new Error('Conversation not found');
 
         // Delete in dependency order
@@ -228,7 +228,7 @@ export class ChatbotConversationService {
         return true;
     }
 
-    static async getConversationMessages(conversationId: string, clinicId: string, limit = 50, offset = 0) {
+    static async getConversationMessages(db: Database, conversationId: string, clinicId: string, limit = 50, offset = 0) {
         return db
             .select()
             .from(chatMessages)
@@ -249,10 +249,10 @@ export class ChatbotConversationService {
      * Process an incoming WhatsApp message from the webhook.
      * This is the main entry point for the conversation engine.
      */
-    static async processIncomingMessage(message: ParsedWebhookMessage, clinicId: string) {
+    static async processIncomingMessage(db: Database, message: ParsedWebhookMessage, clinicId: string) {
         try {
             // 1. Find or create conversation
-            const conversation = await this.findOrCreateConversation(
+            const conversation = await this.findOrCreateConversation(db,
                 clinicId,
                 message.from,
                 message.contactName
@@ -263,7 +263,7 @@ export class ChatbotConversationService {
 
             // 2. Save inbound message
             const [savedMessage] = await db.insert(chatMessages).values({
-                conversationId: conversation.id,
+                conversationId: conversation!.id,
                 clinicId,
                 direction: 'INBOUND',
                 content: isMediaMessage
@@ -278,10 +278,11 @@ export class ChatbotConversationService {
                     caption: message.caption,
                 },
             }).returning();
+            if (!savedMessage) throw new Error('Failed to save message');
 
             // 2.5 If media, download and store locally
             if (isMediaMessage && message.mediaId) {
-                const settings = await this.getSettingsRaw(clinicId);
+                const settings = await this.getSettingsRaw(db, clinicId);
                 if (settings?.accessToken && settings.phoneNumberId) {
                     try {
                         const media = await WhatsAppService.downloadMedia(
@@ -289,13 +290,13 @@ export class ChatbotConversationService {
                             message.mediaId
                         );
                         if (media) {
-                            const mediaUrl = await this.saveMediaFile(
+                            const mediaUrl = await this.saveMediaFile(db,
                                 media.buffer, media.mimeType,
-                                clinicId, conversation!.id, savedMessage.id
+                                clinicId, conversation!.id, savedMessage!.id
                             );
                             // Update message with local media URL
                             await db.update(chatMessages).set({ mediaUrl })
-                                .where(eq(chatMessages.id, savedMessage.id));
+                                .where(eq(chatMessages.id, savedMessage!.id));
                             (savedMessage as any).mediaUrl = mediaUrl;
                         }
                     } catch (err) {
@@ -311,29 +312,29 @@ export class ChatbotConversationService {
                 updatedAt: new Date(),
                 // Update name if we have one from the push name
                 ...(message.contactName && { waContactName: message.contactName }),
-            }).where(eq(chatConversations.id, conversation.id));
+            }).where(eq(chatConversations.id, conversation!.id));
 
             // 3.5 Emit inbound message via WebSocket BEFORE AI response
             // This ensures the user's question appears before the AI reply
             emitToClinic(clinicId, 'chatbot:new-message', {
-                conversationId: conversation.id,
+                conversationId: conversation!.id,
                 message: {
-                    id: savedMessage.id,
-                    conversationId: savedMessage.conversationId,
-                    direction: savedMessage.direction,
-                    content: savedMessage.content,
-                    messageType: savedMessage.messageType,
+                    id: savedMessage!.id,
+                    conversationId: savedMessage!.conversationId,
+                    direction: savedMessage!.direction,
+                    content: savedMessage!.content,
+                    messageType: savedMessage!.messageType,
                     mediaUrl: (savedMessage as any).mediaUrl || null,
                     isFromAi: false,
-                    status: savedMessage.status,
-                    createdAt: savedMessage.createdAt,
+                    status: savedMessage!.status,
+                    createdAt: savedMessage!.createdAt,
                 },
                 from: message.from,
                 contactName: message.contactName,
             });
 
             // 4. Mark as read on WhatsApp
-            const settingsForRead = await this.getSettingsRaw(clinicId);
+            const settingsForRead = await this.getSettingsRaw(db, clinicId);
             if (settingsForRead?.accessToken && settingsForRead.phoneNumberId) {
                 WhatsAppService.markAsRead(
                     { phoneNumberId: settingsForRead.phoneNumberId, accessToken: settingsForRead.accessToken },
@@ -342,50 +343,50 @@ export class ChatbotConversationService {
             }
 
             // 5. Handle Audio Messages separately (for AI Transcription)
-            if (message.messageType === 'audio' && conversation.controlMode === 'AI') {
+            if (message.messageType === 'audio' && conversation!.controlMode === 'AI') {
                 try {
                     const mediaBuffer = await WhatsAppService.downloadMedia(
-                        { phoneNumberId: settingsForRead!.phoneNumberId, accessToken: settingsForRead!.accessToken },
+                        { phoneNumberId: settingsForRead!.phoneNumberId!, accessToken: settingsForRead!.accessToken! },
                         message.mediaId!
                     );
 
                     if (mediaBuffer) {
-                        const transcription = await ChatbotAiService.transcribeAudio(mediaBuffer.buffer, mediaBuffer.mimeType);
+                        const transcription = await ChatbotAiService.transcribeAudio(db, mediaBuffer.buffer, mediaBuffer.mimeType);
 
                         if (transcription) {
-                            logger.info({ conversationId: conversation.id, transcription }, 'Audio transcribed successfully');
+                            logger.info({ conversationId: conversation!.id, transcription }, 'Audio transcribed successfully');
 
                             // Update the message content with transcription
                             const transcribedContent = `[Transcripción de Audio]: ${transcription}`;
                             await db.update(chatMessages)
                                 .set({ content: transcribedContent })
-                                .where(eq(chatMessages.id, savedMessage.id));
+                                .where(eq(chatMessages.id, savedMessage!.id));
 
                             // Proceed to AI response with transcribed text
                             if (settingsForRead?.autoReplyEnabled) {
-                                await this.handleAiResponse(conversation.id, clinicId, transcription, settingsForRead);
+                                await this.handleAiResponse(db, conversation!.id, clinicId, transcription, settingsForRead);
                             }
                             return { conversation, message: { ...savedMessage, content: transcribedContent } };
                         }
                     }
                 } catch (err) {
-                    logger.error({ err, conversationId: conversation.id }, 'Failed to process audio message for AI');
+                    logger.error({ err, conversationId: conversation!.id }, 'Failed to process audio message for AI');
                     // Fall through to standard media handling (switch to HUMAN)
                 }
             }
 
             // 6. Handle other Media Messages (Images, Documents, etc.) OR failed Audio
             if (isMediaMessage) {
-                if (conversation.controlMode === 'AI') {
-                    await this.switchControlMode(conversation.id, clinicId, 'HUMAN');
-                    logger.info({ conversationId: conversation.id }, 'Auto-switched to HUMAN mode — media received');
+                if (conversation!.controlMode === 'AI') {
+                    await this.switchControlMode(db, conversation!.id, clinicId, 'HUMAN');
+                    logger.info({ conversationId: conversation!.id }, 'Auto-switched to HUMAN mode — media received');
                 }
                 return { conversation, message: savedMessage };
             }
 
             // 6. If in AI mode (Text), generate and send response
-            if (conversation.controlMode === 'AI' && settingsForRead?.autoReplyEnabled) {
-                await this.handleAiResponse(conversation.id, clinicId, message.text || '', settingsForRead);
+            if (conversation!.controlMode === 'AI' && settingsForRead?.autoReplyEnabled) {
+                await this.handleAiResponse(db, conversation!.id, clinicId, message.text || '', settingsForRead);
             }
 
             return { conversation, message: savedMessage };
@@ -398,7 +399,7 @@ export class ChatbotConversationService {
     /**
      * Process a status update from WhatsApp webhook.
      */
-    static async processStatusUpdate(message: ParsedWebhookMessage) {
+    static async processStatusUpdate(db: Database, message: ParsedWebhookMessage) {
         if (!message.status || !message.wamid) return;
 
         const statusMap: Record<string, string> = {
@@ -427,7 +428,7 @@ export class ChatbotConversationService {
      * Find an existing active conversation or create a new one.
      * Also handles patient/lead identification.
      */
-    static async findOrCreateConversation(
+    static async findOrCreateConversation(db: Database,
         clinicId: string,
         phone: string,
         contactName: string | null,
@@ -446,12 +447,12 @@ export class ChatbotConversationService {
         if (existing) return existing;
 
         // Look up patient by phone (use original phone for patient lookup flexibility)
-        const patient = await this.findPatientByPhone(clinicId, phone);
+        const patient = await this.findPatientByPhone(db, clinicId, phone);
 
         // Look up or create lead if no patient
         let leadId: string | null = null;
         if (!patient) {
-            const lead = await this.findOrCreateLead(clinicId, normalized, contactName);
+            const lead = await this.findOrCreateLead(db, clinicId, normalized, contactName);
             leadId = lead.id;
         }
 
@@ -468,11 +469,11 @@ export class ChatbotConversationService {
         }).returning();
 
         logger.info({
-            conversationId: conversation.id,
+            conversationId: conversation!.id,
             clinicId,
             phone,
-            isPatient: !!patient,
-            isLead: !!leadId,
+            isPatient: !patient,
+            isLead: !leadId,
         }, 'New conversation created');
 
         return conversation;
@@ -481,7 +482,7 @@ export class ChatbotConversationService {
     /**
      * Find a patient by phone number. Searches with and without country prefix.
      */
-    static async findPatientByPhone(clinicId: string, phone: string) {
+    static async findPatientByPhone(db: Database, clinicId: string, phone: string) {
         // Try exact match first
         const [patient] = await db
             .select({
@@ -525,7 +526,7 @@ export class ChatbotConversationService {
     /**
      * Find an existing lead or create a new one.
      */
-    static async findOrCreateLead(clinicId: string, phone: string, name: string | null) {
+    static async findOrCreateLead(db: Database, clinicId: string, phone: string, name: string | null) {
         const [existing] = await db
             .select()
             .from(chatLeads)
@@ -544,15 +545,15 @@ export class ChatbotConversationService {
             status: 'NEW',
         }).returning();
 
-        logger.info({ leadId: lead.id, clinicId, phone }, 'New lead created from WhatsApp');
-        return lead;
+        logger.info({ leadId: lead!.id, clinicId, phone }, 'New lead created from WhatsApp');
+        return lead!;
     }
 
     // ========================================================================
     // AI Response Handling
     // ========================================================================
 
-    private static async handleAiResponse(
+    private static async handleAiResponse(db: Database,
         conversationId: string,
         clinicId: string,
         userMessageText: string,
@@ -589,6 +590,7 @@ export class ChatbotConversationService {
 
             // Generate AI response
             const aiResult = await ChatbotAiService.generateResponse(
+                db,
                 clinicId,
                 conversationId,
                 userMessageText,
@@ -609,7 +611,7 @@ export class ChatbotConversationService {
             // Send via WhatsApp
             const sendResult = await WhatsAppService.sendTextMessage(
                 { phoneNumberId: settings.phoneNumberId, accessToken: settings.accessToken },
-                (await this.getConversation(conversationId, clinicId))?.waContactPhone || '',
+                (await this.getConversation(db, conversationId, clinicId))?.waContactPhone || '',
                 aiResult.response
             );
 
@@ -657,7 +659,7 @@ export class ChatbotConversationService {
     /**
      * Switch conversation control mode (AI → HUMAN or back).
      */
-    static async switchControlMode(
+    static async switchControlMode(db: Database,
         conversationId: string,
         clinicId: string,
         mode: 'AI' | 'HUMAN' | 'PAUSED',
@@ -683,16 +685,16 @@ export class ChatbotConversationService {
     /**
      * Send a manual (human) message.
      */
-    static async sendHumanMessage(
+    static async sendHumanMessage(db: Database,
         conversationId: string,
         clinicId: string,
         userId: string,
         text: string
     ) {
-        const conversation = await this.getConversation(conversationId, clinicId);
+        const conversation = await this.getConversation(db, conversationId, clinicId);
         if (!conversation) throw new Error('Conversation not found');
 
-        const settings = await this.getSettingsRaw(clinicId);
+        const settings = await this.getSettingsRaw(db, clinicId);
         if (!settings?.accessToken || !settings.phoneNumberId) {
             throw new Error('WhatsApp not configured for this clinic');
         }
@@ -745,7 +747,7 @@ export class ChatbotConversationService {
      * Save a downloaded media file to local storage.
      * Returns the relative URL path for serving.
      */
-    private static async saveMediaFile(
+    private static async saveMediaFile(db: Database,
         buffer: Buffer,
         mimeType: string,
         clinicId: string,
@@ -793,17 +795,17 @@ export class ChatbotConversationService {
      * Send a media message (image or document) from a human agent.
      * Uploads the file to Meta, sends it to the patient, and saves the message.
      */
-    static async sendHumanMediaMessage(
+    static async sendHumanMediaMessage(db: Database,
         conversationId: string,
         clinicId: string,
         userId: string,
         file: { buffer: Buffer; mimetype: string; originalname: string },
         caption?: string
     ) {
-        const conversation = await this.getConversation(conversationId, clinicId);
+        const conversation = await this.getConversation(db, conversationId, clinicId);
         if (!conversation) throw new Error('Conversation not found');
 
-        const settings = await this.getSettingsRaw(clinicId);
+        const settings = await this.getSettingsRaw(db, clinicId);
         if (!settings?.accessToken || !settings.phoneNumberId) {
             throw new Error('WhatsApp not configured for this clinic');
         }
@@ -843,7 +845,7 @@ export class ChatbotConversationService {
         }
 
         // 3. Save file locally
-        const mediaUrl = await this.saveMediaFile(
+        const mediaUrl = await this.saveMediaFile(db,
             file.buffer,
             file.mimetype,
             clinicId,
@@ -884,7 +886,7 @@ export class ChatbotConversationService {
     /**
      * Close a conversation.
      */
-    static async closeConversation(
+    static async closeConversation(db: Database,
         conversationId: string,
         clinicId: string,
         closedById: string
@@ -908,7 +910,7 @@ export class ChatbotConversationService {
     /**
      * Mark all messages in a conversation as read (internal).
      */
-    static async markConversationAsRead(conversationId: string, clinicId: string) {
+    static async markConversationAsRead(db: Database, conversationId: string, clinicId: string) {
         await db.update(chatConversations).set({
             unreadCount: 0,
             updatedAt: new Date(),
@@ -922,7 +924,7 @@ export class ChatbotConversationService {
     // Notes
     // ========================================================================
 
-    static async addNote(conversationId: string, userId: string, content: string) {
+    static async addNote(db: Database, conversationId: string, userId: string, content: string) {
         const [note] = await db.insert(chatConversationNotes).values({
             conversationId,
             createdById: userId,
@@ -931,7 +933,7 @@ export class ChatbotConversationService {
         return note;
     }
 
-    static async getNotes(conversationId: string) {
+    static async getNotes(db: Database, conversationId: string) {
         return db
             .select()
             .from(chatConversationNotes)
@@ -943,7 +945,7 @@ export class ChatbotConversationService {
     // Quick Replies
     // ========================================================================
 
-    static async getQuickReplies(clinicId: string) {
+    static async getQuickReplies(db: Database, clinicId: string) {
         return db
             .select()
             .from(chatQuickReplies)
@@ -951,7 +953,7 @@ export class ChatbotConversationService {
             .orderBy(chatQuickReplies.sortOrder);
     }
 
-    static async createQuickReply(clinicId: string, data: { title: string; content: string; category?: string }) {
+    static async createQuickReply(db: Database, clinicId: string, data: { title: string; content: string; category?: string }) {
         const [qr] = await db.insert(chatQuickReplies).values({
             clinicId,
             title: data.title,
@@ -961,7 +963,7 @@ export class ChatbotConversationService {
         return qr;
     }
 
-    static async deleteQuickReply(id: string, clinicId: string) {
+    static async deleteQuickReply(db: Database, id: string, clinicId: string) {
         const [deleted] = await db
             .delete(chatQuickReplies)
             .where(and(
@@ -969,14 +971,14 @@ export class ChatbotConversationService {
                 eq(chatQuickReplies.clinicId, clinicId)
             ))
             .returning();
-        return !!deleted;
+        return !deleted;
     }
 
     // ========================================================================
     // Leads
     // ========================================================================
 
-    static async getLeads(clinicId: string, filters?: { status?: string; limit?: number; offset?: number }) {
+    static async getLeads(db: Database, clinicId: string, filters?: { status?: string; limit?: number; offset?: number }) {
         const conditions = [eq(chatLeads.clinicId, clinicId)];
         if (filters?.status) {
             conditions.push(eq(chatLeads.status, filters.status as any));
@@ -991,7 +993,7 @@ export class ChatbotConversationService {
             .offset(filters?.offset || 0);
     }
 
-    static async updateLead(leadId: string, clinicId: string, data: {
+    static async updateLead(db: Database, leadId: string, clinicId: string, data: {
         firstName?: string;
         lastName?: string;
         email?: string;
@@ -1020,7 +1022,7 @@ export class ChatbotConversationService {
      * Convert a lead to a patient: creates the patient record from provided data,
      * marks the lead as CONVERTED, and links conversations to the new patient.
      */
-    static async convertLead(
+    static async convertLead(db: Database,
         leadId: string,
         clinicId: string,
         patientData: { firstName: string; lastName: string; phone?: string; email?: string },
@@ -1072,7 +1074,7 @@ export class ChatbotConversationService {
     /**
      * Send a template message to initiate a conversation.
      */
-    static async sendTemplateMessage(
+    static async sendTemplateMessage(db: Database,
         clinicId: string,
         userId: string | undefined,
         phone: string,
@@ -1081,14 +1083,14 @@ export class ChatbotConversationService {
         components: any[] = [],
         templateBody?: string,
     ) {
-        const settings = await this.getSettingsRaw(clinicId);
+        const settings = await this.getSettingsRaw(db, clinicId);
         if (!settings?.accessToken || !settings.phoneNumberId) {
             throw new Error('WhatsApp not configured for this clinic');
         }
 
         // Find or create conversation for this phone
         const normalizedPhone = normalizePhone(phone);
-        const conversation = (await this.findOrCreateConversation(clinicId, normalizedPhone, null))!;
+        const conversation = (await this.findOrCreateConversation(db, clinicId, normalizedPhone, null))!;
 
         // Send template via WhatsApp API
         const result = await WhatsAppService.sendTemplateMessage(
@@ -1110,7 +1112,7 @@ export class ChatbotConversationService {
 
         // Save the outbound message
         const [message] = await db.insert(chatMessages).values({
-            conversationId: conversation.id,
+            conversationId: conversation!.id,
             clinicId,
             direction: 'OUTBOUND',
             content,
@@ -1127,10 +1129,10 @@ export class ChatbotConversationService {
             controlMode: 'HUMAN',
             lastMessageAt: new Date(),
             updatedAt: new Date(),
-        }).where(eq(chatConversations.id, conversation.id));
+        }).where(eq(chatConversations.id, conversation!.id));
 
         logger.info({
-            conversationId: conversation.id,
+            conversationId: conversation!.id,
             templateName,
             phone,
         }, 'Template message sent');

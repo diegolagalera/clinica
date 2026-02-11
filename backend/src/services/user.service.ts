@@ -1,5 +1,5 @@
 import { eq, and, or, ilike, sql, inArray } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { users, organizations, clinics, staffProfiles, workerClinics } from '../db/schema.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult, TenantContext, Role } from '../types/index.js';
@@ -42,7 +42,7 @@ export type UserType = typeof users.$inferSelect;
 /**
  * Get all users with pagination (SUPERADMIN only)
  */
-export const getAllUsers = async (
+export const getAllUsers = async (db: Database,
     params: PaginationParams,
     filters?: { role?: Role; organizationId?: string; search?: string }
 ): Promise<{ data: any[]; total: number }> => {
@@ -102,7 +102,7 @@ export const getAllUsers = async (
 /**
  * Get users by organization
  */
-export const getUsersByOrganization = async (
+export const getUsersByOrganization = async (db: Database,
     organizationId: string,
     params: PaginationParams,
     filters?: { role?: Role; search?: string; staffOnly?: boolean }
@@ -166,7 +166,7 @@ export const getUsersByOrganization = async (
 /**
  * Get user by ID
  */
-export const getUserById = async (id: string): Promise<any | null> => {
+export const getUserById = async (db: Database, id: string): Promise<any | null> => {
     const user = await db.query.users.findFirst({
         where: eq(users.id, id),
         with: {
@@ -186,7 +186,7 @@ export const getUserById = async (id: string): Promise<any | null> => {
 /**
  * Create a new user
  */
-export const createUser = async (
+export const createUser = async (db: Database,
     input: CreateUserInput
 ): Promise<ServiceResult<UserType>> => {
     // Check if email already exists
@@ -229,8 +229,8 @@ export const createUser = async (
             lastName: input.lastName,
             phone: input.phone ?? null,
             role: input.role,
-            organizationId: input.organizationId,
-            clinicId: primaryClinicId,
+            organizationId: input.organizationId ?? null,
+            clinicId: primaryClinicId ?? null,
             emailVerified: true, // Auto-verify for admin-created users
             isActive: true,
         })
@@ -281,11 +281,11 @@ export const createUser = async (
 /**
  * Update a user
  */
-export const updateUser = async (
+export const updateUser = async (db: Database,
     id: string,
     input: UpdateUserInput
 ): Promise<ServiceResult<any>> => {
-    const existing = await getUserById(id);
+    const existing = await getUserById(db, id);
     if (!existing) {
         throw new NotFoundError('User not found');
     }
@@ -356,17 +356,17 @@ export const updateUser = async (
         }
     }
 
-    return { success: true, data: await getUserById(id) };
+    return { success: true, data: await getUserById(db, id) };
 };
 
 /**
  * Reset user password
  */
-export const resetUserPassword = async (
+export const resetUserPassword = async (db: Database,
     id: string,
     newPassword: string
 ): Promise<boolean> => {
-    const existing = await getUserById(id);
+    const existing = await getUserById(db, id);
     if (!existing) {
         throw new NotFoundError('User not found');
     }
@@ -384,8 +384,8 @@ export const resetUserPassword = async (
 /**
  * Delete a user
  */
-export const deleteUser = async (id: string): Promise<boolean> => {
-    const existing = await getUserById(id);
+export const deleteUser = async (db: Database, id: string): Promise<boolean> => {
+    const existing = await getUserById(db, id);
     if (!existing) {
         throw new NotFoundError('User not found');
     }
@@ -397,8 +397,8 @@ export const deleteUser = async (id: string): Promise<boolean> => {
 /**
  * Deactivate a user
  */
-export const deactivateUser = async (id: string): Promise<boolean> => {
-    const existing = await getUserById(id);
+export const deactivateUser = async (db: Database, id: string): Promise<boolean> => {
+    const existing = await getUserById(db, id);
     if (!existing) {
         throw new NotFoundError('User not found');
     }
@@ -414,7 +414,7 @@ export const deactivateUser = async (id: string): Promise<boolean> => {
 /**
  * Get available clinics for user assignment
  */
-export const getAvailableClinics = async (organizationId?: string) => {
+export const getAvailableClinics = async (db: Database, organizationId?: string) => {
     if (organizationId) {
         return db.query.clinics.findMany({
             where: and(

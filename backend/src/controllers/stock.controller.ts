@@ -4,14 +4,13 @@ import { asyncHandler } from '../middleware/index.js';
 import { BadRequestError, NotFoundError } from '../utils/errors.js';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { db } from '../db/index.js';
 import { inventoryItems, stockMovements, clinics } from '../db/schema.js';
 import { eq, and, ilike, or, sql, desc, asc, lt, lte } from 'drizzle-orm';
 import path from 'path';
 import * as storage from '../services/storage.service.js';
 
 // Helper to get organizationId from clinicId
-const getOrgIdForClinic = async (clinicId: string): Promise<string> => {
+const getOrgIdForClinic = async (db: any, clinicId: string): Promise<string> => {
     const clinic = await db.query.clinics.findFirst({
         where: eq(clinics.id, clinicId),
         columns: { organizationId: true },
@@ -100,7 +99,7 @@ export const listItems = asyncHandler(async (req: AuthenticatedRequest, res: Res
     }
 
     // Get total count
-    const [countResult] = await db
+    const [countResult] = await req.db!
         .select({ count: sql<number>`count(*)` })
         .from(inventoryItems)
         .where(whereClause);
@@ -108,7 +107,7 @@ export const listItems = asyncHandler(async (req: AuthenticatedRequest, res: Res
     const total = Number(countResult?.count ?? 0);
 
     // Get items with pagination
-    const items = await db
+    const items = await req.db!
         .select()
         .from(inventoryItems)
         .where(whereClause)
@@ -128,7 +127,7 @@ export const getCategories = asyncHandler(async (req: AuthenticatedRequest, res:
         throw new BadRequestError('Clinic context required');
     }
 
-    const categories = await db
+    const categories = await req.db!
         .selectDistinct({ category: inventoryItems.category })
         .from(inventoryItems)
         .where(and(
@@ -147,7 +146,7 @@ export const getCategories = asyncHandler(async (req: AuthenticatedRequest, res:
 export const getItem = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -173,7 +172,7 @@ export const createItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
 
     const input = createItemSchema.parse(req.body);
 
-    const [item] = await db
+    const [item] = await req.db!
         .insert(inventoryItems)
         .values({
             clinicId: req.tenantContext.clinicId,
@@ -212,7 +211,7 @@ export const updateItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
     const input = updateItemSchema.parse(req.body);
 
     // Check item exists and belongs to clinic
-    const [existing] = await db
+    const [existing] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -243,7 +242,7 @@ export const updateItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
     if (input.location !== undefined) updateData.location = input.location ?? null;
     if (input.isActive !== undefined) updateData.isActive = input.isActive;
 
-    const [updated] = await db
+    const [updated] = await req.db!
         .update(inventoryItems)
         .set(updateData)
         .where(eq(inventoryItems.id, id!))
@@ -264,7 +263,7 @@ export const deleteItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
     }
 
     // Check item exists
-    const [existing] = await db
+    const [existing] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -277,7 +276,7 @@ export const deleteItem = asyncHandler(async (req: AuthenticatedRequest, res: Re
     }
 
     // Soft delete
-    await db
+    await req.db!
         .update(inventoryItems)
         .set({ isActive: false, updatedAt: new Date() })
         .where(eq(inventoryItems.id, id!));
@@ -299,7 +298,7 @@ export const adjustStock = asyncHandler(async (req: AuthenticatedRequest, res: R
     const input = adjustStockSchema.parse(req.body);
 
     // Get current item
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -336,7 +335,7 @@ export const adjustStock = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     // Create movement record
-    await db.insert(stockMovements).values({
+    await req.db!.insert(stockMovements).values({
         clinicId: req.tenantContext.clinicId,
         itemId: id!,
         type: input.type,
@@ -360,7 +359,7 @@ export const adjustStock = asyncHandler(async (req: AuthenticatedRequest, res: R
         updateData.costPrice = newCostPrice.toFixed(2);
     }
 
-    const [updated] = await db
+    const [updated] = await req.db!
         .update(inventoryItems)
         .set(updateData)
         .where(eq(inventoryItems.id, id!))
@@ -383,7 +382,7 @@ export const getItemMovements = asyncHandler(async (req: AuthenticatedRequest, r
     const params = parsePaginationParams(req.query);
 
     // Count total
-    const [countResult] = await db
+    const [countResult] = await req.db!
         .select({ count: sql<number>`count(*)` })
         .from(stockMovements)
         .where(and(
@@ -394,7 +393,7 @@ export const getItemMovements = asyncHandler(async (req: AuthenticatedRequest, r
     const total = Number(countResult?.count ?? 0);
 
     // Get movements
-    const movements = await db
+    const movements = await req.db!
         .select()
         .from(stockMovements)
         .where(and(
@@ -424,7 +423,7 @@ export const uploadItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     }
 
     // Check item exists
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -437,7 +436,7 @@ export const uploadItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     }
 
     // Generate S3 key
-    const orgId = await getOrgIdForClinic(req.tenantContext.clinicId);
+    const orgId = await getOrgIdForClinic(req.db!, req.tenantContext.clinicId);
     const ext = path.extname(req.file.originalname) || '.jpg';
     const filename = `${id}${ext}`;
     const storageKey = storage.buildKey(orgId, req.tenantContext.clinicId, 'stock-images', filename);
@@ -451,7 +450,7 @@ export const uploadItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     await storage.uploadFile(storageKey, req.file.buffer, req.file.mimetype);
 
     // Update item with S3 key
-    const [updated] = await db
+    const [updated] = await req.db!
         .update(inventoryItems)
         .set({ imageUrl: storageKey, updatedAt: new Date() })
         .where(eq(inventoryItems.id, id!))
@@ -472,7 +471,7 @@ export const deleteItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     }
 
     // Check item exists and has image
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -487,7 +486,7 @@ export const deleteItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     if (item.imageUrl) {
         await storage.deleteFile(item.imageUrl);
 
-        await db
+        await req.db!
             .update(inventoryItems)
             .set({ imageUrl: null, updatedAt: new Date() })
             .where(eq(inventoryItems.id, id!));
@@ -500,14 +499,14 @@ export const deleteItemImage = asyncHandler(async (req: AuthenticatedRequest, re
  * GET /stock/items/:id/image
  * Serve stock item image (public endpoint for img tags)
  */
-export const getItemImage = asyncHandler(async (req: Request, res: Response) => {
+export const getItemImage = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
     if (!id) {
         throw new BadRequestError('Item ID required');
     }
 
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(eq(inventoryItems.id, id));
@@ -542,7 +541,7 @@ export const generateItemImage = asyncHandler(async (req: AuthenticatedRequest, 
     // Import the service dynamically to avoid circular dependencies
     const { generateStockItemImage } = await import('../services/openai.service.js');
 
-    const result = await generateStockItemImage(input.itemName, input.description, req.tenantContext.clinicId);
+    const result = await generateStockItemImage(req.db!, input.itemName, input.description, req.tenantContext.clinicId);
 
     res.json(success({
         imageUrl: result.imageUrl,
@@ -564,7 +563,7 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
     }
 
     // Check item exists
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -585,7 +584,7 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
     } else {
         // Generate a new image
         const { generateStockItemImage } = await import('../services/openai.service.js');
-        const result = await generateStockItemImage(item.name, item.description || undefined, req.tenantContext.clinicId);
+        const result = await generateStockItemImage(req.db!, item.name, item.description || undefined, req.tenantContext.clinicId);
         imageUrlToDownload = result.imageUrl;
         revisedPrompt = result.revisedPrompt;
     }
@@ -599,7 +598,7 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
     const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
 
     // Generate S3 key
-    const orgId = await getOrgIdForClinic(req.tenantContext.clinicId!);
+    const orgId = await getOrgIdForClinic(req.db!, req.tenantContext.clinicId!);
     const filename = `${id}.png`;
     const storageKey = storage.buildKey(orgId, req.tenantContext.clinicId!, 'stock-images', filename);
 
@@ -612,7 +611,7 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
     await storage.uploadFile(storageKey, imageBuffer, 'image/png');
 
     // Update item
-    const [updated] = await db
+    const [updated] = await req.db!
         .update(inventoryItems)
         .set({ imageUrl: storageKey, updatedAt: new Date() })
         .where(eq(inventoryItems.id, id!))

@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS "chat_knowledge_chunks" (
 	"clinic_id" uuid NOT NULL,
 	"content" text NOT NULL,
 	"chunk_index" integer NOT NULL,
-	"embedding" "vector(1536)",
+	"embedding" vector(1536),
 	"token_count" integer,
 	"created_at" timestamp DEFAULT now() NOT NULL
 );

@@ -2,7 +2,6 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../middleware/index.js';
 import { BadRequestError, NotFoundError } from '../utils/errors.js';
-import { db } from '../db/index.js';
 import { suppliers, inventoryItems } from '../db/schema.js';
 import { eq, and, ilike, sql, asc, desc } from 'drizzle-orm';
 import { success, paginated, parsePaginationParams } from '../utils/response.js';
@@ -49,7 +48,7 @@ export const listSuppliers = asyncHandler(async (req: AuthenticatedRequest, res:
     const whereClause = and(...conditions);
 
     // Get total count
-    const [countResult] = await db
+    const [countResult] = await req.db!
         .select({ count: sql<number>`count(*)` })
         .from(suppliers)
         .where(whereClause);
@@ -57,7 +56,7 @@ export const listSuppliers = asyncHandler(async (req: AuthenticatedRequest, res:
     const total = Number(countResult?.count ?? 0);
 
     // Get suppliers with pagination
-    const supplierList = await db
+    const supplierList = await req.db!
         .select()
         .from(suppliers)
         .where(whereClause)
@@ -77,7 +76,7 @@ export const getAllSuppliers = asyncHandler(async (req: AuthenticatedRequest, re
         throw new BadRequestError('Clinic context required');
     }
 
-    const supplierList = await db
+    const supplierList = await req.db!
         .select({
             id: suppliers.id,
             name: suppliers.name,
@@ -105,7 +104,7 @@ export const getSupplier = asyncHandler(async (req: AuthenticatedRequest, res: R
         throw new BadRequestError('Clinic context required');
     }
 
-    const [supplier] = await db
+    const [supplier] = await req.db!
         .select()
         .from(suppliers)
         .where(and(
@@ -132,7 +131,7 @@ export const getSupplierItems = asyncHandler(async (req: AuthenticatedRequest, r
     }
 
     // Verify supplier exists
-    const [supplier] = await db
+    const [supplier] = await req.db!
         .select()
         .from(suppliers)
         .where(and(
@@ -145,7 +144,7 @@ export const getSupplierItems = asyncHandler(async (req: AuthenticatedRequest, r
     }
 
     // Get items for this supplier
-    const items = await db
+    const items = await req.db!
         .select({
             id: inventoryItems.id,
             name: inventoryItems.name,
@@ -176,7 +175,7 @@ export const createSupplier = asyncHandler(async (req: AuthenticatedRequest, res
 
     const input = createSupplierSchema.parse(req.body);
 
-    const [supplier] = await db
+    const [supplier] = await req.db!
         .insert(suppliers)
         .values({
             clinicId: req.tenantContext.clinicId,
@@ -208,7 +207,7 @@ export const updateSupplier = asyncHandler(async (req: AuthenticatedRequest, res
     const input = updateSupplierSchema.parse(req.body);
 
     // Check supplier exists
-    const [existing] = await db
+    const [existing] = await req.db!
         .select()
         .from(suppliers)
         .where(and(
@@ -231,7 +230,7 @@ export const updateSupplier = asyncHandler(async (req: AuthenticatedRequest, res
     if (input.address !== undefined) updateData.address = input.address ?? null;
     if (input.notes !== undefined) updateData.notes = input.notes ?? null;
 
-    const [updated] = await db
+    const [updated] = await req.db!
         .update(suppliers)
         .set(updateData)
         .where(eq(suppliers.id, id!))
@@ -252,7 +251,7 @@ export const deleteSupplier = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     // Check supplier exists
-    const [existing] = await db
+    const [existing] = await req.db!
         .select()
         .from(suppliers)
         .where(and(
@@ -265,7 +264,7 @@ export const deleteSupplier = asyncHandler(async (req: AuthenticatedRequest, res
     }
 
     // Check if supplier has items
-    const [itemCount] = await db
+    const [itemCount] = await req.db!
         .select({ count: sql<number>`count(*)` })
         .from(inventoryItems)
         .where(and(
@@ -275,13 +274,13 @@ export const deleteSupplier = asyncHandler(async (req: AuthenticatedRequest, res
 
     if (Number(itemCount?.count ?? 0) > 0) {
         // Soft delete - keep for reference
-        await db
+        await req.db!
             .update(suppliers)
             .set({ isActive: false, updatedAt: new Date() })
             .where(eq(suppliers.id, id!));
     } else {
         // Hard delete if no items
-        await db
+        await req.db!
             .delete(suppliers)
             .where(eq(suppliers.id, id!));
     }

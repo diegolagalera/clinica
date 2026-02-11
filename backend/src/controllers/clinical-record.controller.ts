@@ -50,10 +50,10 @@ export const listRecords = asyncHandler(async (req: AuthenticatedRequest, res: R
     const patientId = req.query['patientId'] as string | undefined;
     const search = req.query['search'] as string | undefined;
 
-    const { data, total } = await clinicalRecordService.getRecordsByClinic(clinicId, params, {
-        recordType: recordType || undefined,
-        patientId: patientId || undefined,
-        search: search || undefined,
+    const { data, total } = await clinicalRecordService.getRecordsByClinic(req.db!, clinicId, params, {
+        ...(recordType && { recordType }),
+        ...(patientId && { patientId }),
+        ...(search && { search }),
     });
 
     res.json(success(paginated(data, total, params)));
@@ -76,11 +76,11 @@ export const listPatientRecords = asyncHandler(async (req: AuthenticatedRequest,
     const recordType = req.query['recordType'] as string | undefined;
     const search = req.query['search'] as string | undefined;
 
-    const { data, total } = await clinicalRecordService.getRecordsByPatient(
+    const { data, total } = await clinicalRecordService.getRecordsByPatient(req.db!,
         patientId!,
         clinicId,
         params,
-        { recordType: recordType || undefined, search: search || undefined }
+        { ...(recordType && { recordType }), ...(search && { search }) }
     );
 
     res.json(success(paginated(data, total, params)));
@@ -108,7 +108,7 @@ export const getRecord = asyncHandler(async (req: AuthenticatedRequest, res: Res
         return;
     }
 
-    const record = await clinicalRecordService.getRecordById(id!, clinicId);
+    const record = await clinicalRecordService.getRecordById(req.db!, id!, clinicId);
 
     if (!record) {
         res.status(404).json({ success: false, message: 'Record not found' });
@@ -133,7 +133,7 @@ export const createRecord = asyncHandler(async (req: AuthenticatedRequest, res: 
 
     const input = createRecordSchema.parse(req.body);
 
-    const result = await clinicalRecordService.createRecord({
+    const result = await clinicalRecordService.createRecord(req.db!, {
         patientId: input.patientId,
         recordType: input.recordType,
         clinicId,
@@ -148,7 +148,7 @@ export const createRecord = asyncHandler(async (req: AuthenticatedRequest, res: 
         prescriptions: input.prescriptions,
         toothChart: input.toothChart,
         attachments: input.attachments,
-    });
+    } as any);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'Clinical record created'));
@@ -170,7 +170,7 @@ export const updateRecord = asyncHandler(async (req: AuthenticatedRequest, res: 
 
     const input = updateRecordSchema.parse(req.body);
 
-    const result = await clinicalRecordService.updateRecord(id!, clinicId, input);
+    const result = await clinicalRecordService.updateRecord(req.db!, id!, clinicId, input as any);
 
     if (result.success) {
         res.json(success(result.data, 'Clinical record updated'));
@@ -191,7 +191,7 @@ export const signRecord = asyncHandler(async (req: AuthenticatedRequest, res: Re
         return;
     }
 
-    const result = await clinicalRecordService.signRecord(id!, clinicId, userId);
+    const result = await clinicalRecordService.signRecord(req.db!, id!, clinicId, userId);
 
     if (result.success) {
         res.json(success(result.data, 'Clinical record signed'));
@@ -211,7 +211,7 @@ export const deleteRecord = asyncHandler(async (req: AuthenticatedRequest, res: 
         return;
     }
 
-    await clinicalRecordService.deleteRecord(id!, clinicId);
+    await clinicalRecordService.deleteRecord(req.db!, id!, clinicId);
 
     res.json(success(null, 'Clinical record deleted'));
 });
@@ -237,7 +237,7 @@ export const transcribeAudio = asyncHandler(async (req: AuthenticatedRequest, re
 
     try {
         // Process the audio file
-        const result = await processVoiceRecording(file.buffer, file.originalname, clinicId);
+        const result = await processVoiceRecording(req.db!, file.buffer, file.originalname, clinicId);
 
         res.json(success({
             title: result.title,

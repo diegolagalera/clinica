@@ -1,4 +1,4 @@
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     chatKnowledgeBases,
     chatKnowledgeArticles,
@@ -21,7 +21,7 @@ export class ChatbotKnowledgeService {
     // Knowledge Bases (Collections)
     // ========================================================================
 
-    static async getKnowledgeBases(clinicId: string) {
+    static async getKnowledgeBases(db: Database, clinicId: string) {
         const bases = await db
             .select()
             .from(chatKnowledgeBases)
@@ -46,7 +46,7 @@ export class ChatbotKnowledgeService {
         return result;
     }
 
-    static async createKnowledgeBase(clinicId: string, data: {
+    static async createKnowledgeBase(db: Database, clinicId: string, data: {
         name: string;
         description?: string;
         icon?: string;
@@ -62,11 +62,11 @@ export class ChatbotKnowledgeService {
             })
             .returning();
 
-        logger.info({ clinicId, knowledgeBaseId: kb.id, name: kb.name }, 'Knowledge base created');
-        return kb;
+        logger.info({ clinicId, knowledgeBaseId: kb!.id, name: kb!.name }, 'Knowledge base created');
+        return kb!;
     }
 
-    static async updateKnowledgeBase(id: string, clinicId: string, data: {
+    static async updateKnowledgeBase(db: Database, id: string, clinicId: string, data: {
         name?: string;
         description?: string;
         icon?: string;
@@ -87,7 +87,7 @@ export class ChatbotKnowledgeService {
         return kb || null;
     }
 
-    static async deleteKnowledgeBase(id: string, clinicId: string) {
+    static async deleteKnowledgeBase(db: Database, id: string, clinicId: string) {
         // Cascades to articles → chunks
         const [deleted] = await db
             .delete(chatKnowledgeBases)
@@ -103,7 +103,7 @@ export class ChatbotKnowledgeService {
     // Articles
     // ========================================================================
 
-    static async getArticles(knowledgeBaseId: string, clinicId: string) {
+    static async getArticles(db: Database, knowledgeBaseId: string, clinicId: string) {
         return db
             .select()
             .from(chatKnowledgeArticles)
@@ -114,7 +114,7 @@ export class ChatbotKnowledgeService {
             .orderBy(chatKnowledgeArticles.createdAt);
     }
 
-    static async createArticle(data: {
+    static async createArticle(db: Database, data: {
         knowledgeBaseId: string;
         clinicId: string;
         title: string;
@@ -137,15 +137,15 @@ export class ChatbotKnowledgeService {
             .returning();
 
         // Process chunks and embeddings asynchronously
-        this.processArticleEmbeddings(article.id, data.clinicId, data.content).catch(err => {
-            logger.error({ articleId: article.id, error: err }, 'Background embedding processing failed');
+        this.processArticleEmbeddings(db, article!.id, data.clinicId, data.content).catch(err => {
+            logger.error({ articleId: article!.id, error: err }, 'Background embedding processing failed');
         });
 
-        logger.info({ articleId: article.id, title: data.title }, 'Knowledge article created');
+        logger.info({ articleId: article!.id, title: data.title }, 'Knowledge article created');
         return article;
     }
 
-    static async deleteArticle(articleId: string, clinicId: string) {
+    static async deleteArticle(db: Database, articleId: string, clinicId: string) {
         // Cascades to chunks
         const [deleted] = await db
             .delete(chatKnowledgeArticles)
@@ -157,7 +157,7 @@ export class ChatbotKnowledgeService {
         return !!deleted;
     }
 
-    static async updateArticle(articleId: string, clinicId: string, data: {
+    static async updateArticle(db: Database, articleId: string, clinicId: string, data: {
         title?: string;
         content?: string;
     }) {
@@ -178,7 +178,7 @@ export class ChatbotKnowledgeService {
 
         // Re-process embeddings if content changed
         if (data.content) {
-            this.processArticleEmbeddings(article.id, clinicId, data.content).catch(err => {
+            this.processArticleEmbeddings(db, article.id, clinicId, data.content).catch(err => {
                 logger.error({ articleId: article.id, error: err }, 'Background embedding re-processing failed');
             });
         }
@@ -213,9 +213,9 @@ export class ChatbotKnowledgeService {
                 let overlapText = '';
                 let overlapTokens = 0;
                 for (let i = overlapSentences.length - 1; i >= 0; i--) {
-                    const st = this.estimateTokens(overlapSentences[i]);
+                    const st = this.estimateTokens(overlapSentences[i]!);
                     if (overlapTokens + st > CHUNK_OVERLAP) break;
-                    overlapText = overlapSentences[i] + ' ' + overlapText;
+                    overlapText = overlapSentences[i]! + ' ' + overlapText;
                     overlapTokens += st;
                 }
                 currentChunk = overlapText + sentence;
@@ -247,7 +247,7 @@ export class ChatbotKnowledgeService {
     /**
      * Process an article: chunk text and generate embeddings.
      */
-    static async processArticleEmbeddings(articleId: string, clinicId: string, content: string) {
+    static async processArticleEmbeddings(db: Database, articleId: string, clinicId: string, content: string) {
         try {
             // Delete existing chunks
             await db
@@ -259,15 +259,15 @@ export class ChatbotKnowledgeService {
 
             // Generate embeddings for each chunk
             for (let i = 0; i < chunks.length; i++) {
-                const embedding = await this.generateEmbedding(chunks[i]);
+                const embedding = await this.generateEmbedding(db, chunks[i]!);
 
                 await db.insert(chatKnowledgeChunks).values({
                     articleId,
                     clinicId,
-                    content: chunks[i],
+                    content: chunks[i]!,
                     chunkIndex: i,
-                    embedding,
-                    tokenCount: this.estimateTokens(chunks[i]),
+                    embedding: embedding as any,
+                    tokenCount: this.estimateTokens(chunks[i]!),
                 });
             }
 
@@ -291,7 +291,7 @@ export class ChatbotKnowledgeService {
     /**
      * Generate embedding vector using OpenAI text-embedding-3-small.
      */
-    static async generateEmbedding(text: string): Promise<number[]> {
+    static async generateEmbedding(db: Database, text: string): Promise<number[]> {
         const apiKey = config.openai.apiKey;
         if (!apiKey) {
             throw new Error('OPENAI_API_KEY is not configured');
@@ -326,13 +326,13 @@ export class ChatbotKnowledgeService {
      * Search for the most relevant knowledge chunks using cosine similarity.
      * Returns the top-K most similar chunks for a given query.
      */
-    static async searchRelevantChunks(
+    static async searchRelevantChunks(db: Database,
         clinicId: string,
         query: string,
         topK: number = 5
     ): Promise<{ content: string; similarity: number; articleTitle: string }[]> {
         try {
-            const queryEmbedding = await this.generateEmbedding(query);
+            const queryEmbedding = await this.generateEmbedding(db, query);
             const embeddingStr = `[${queryEmbedding.join(',')}]`;
 
             // Use pgvector cosine similarity operator (<=>)
@@ -375,7 +375,7 @@ export class ChatbotKnowledgeService {
      * including embedded fonts, images, tables, and complex layouts.
      * Renders at 300 DPI for clear text recognition.
      */
-    static async pdfToImages(buffer: Buffer): Promise<Buffer[]> {
+    static async pdfToImages(db: Database, buffer: Buffer): Promise<Buffer[]> {
         const { execFile } = await import('child_process');
         const { promisify } = await import('util');
         const fs = await import('fs');
@@ -431,7 +431,7 @@ export class ChatbotKnowledgeService {
      * Send page images to GPT-4o Vision for structured text extraction.
      * Groups up to 4 pages per API call to reduce costs.
      */
-    static async extractTextWithVision(images: Buffer[]): Promise<string> {
+    static async extractTextWithVision(db: Database, images: Buffer[]): Promise<string> {
         const apiKey = config.openai.apiKey;
         if (!apiKey) {
             throw new Error('OPENAI_API_KEY is not configured');
@@ -520,18 +520,18 @@ Reglas:
      * Converts pages to images → sends to GPT-4o Vision → returns structured text.
      * Falls back to basic pdf-parse for simple text extraction if Vision fails.
      */
-    static async parsePdf(buffer: Buffer): Promise<string> {
+    static async parsePdf(db: Database, buffer: Buffer): Promise<string> {
         try {
             // Step 1: Convert PDF pages to images
             logger.info('Starting PDF Vision extraction pipeline...');
-            const images = await this.pdfToImages(buffer);
+            const images = await this.pdfToImages(db, buffer);
 
             if (images.length === 0) {
                 throw new Error('No pages found in PDF');
             }
 
             // Step 2: Extract text with GPT-4o Vision
-            const text = await this.extractTextWithVision(images);
+            const text = await this.extractTextWithVision(db, images);
 
             if (!text.trim()) {
                 throw new Error('Vision extraction returned empty text');
@@ -551,7 +551,7 @@ Reglas:
 
             // Fallback: basic text extraction with pdf-parse v1
             try {
-                const pdfParse = (await import('pdf-parse')).default;
+                const pdfParse = (await import('pdf-parse' as any)).default;
                 const result = await pdfParse(buffer);
                 return result.text;
             } catch (fallbackError) {

@@ -50,7 +50,7 @@ export const listPatients = asyncHandler(async (req: AuthenticatedRequest, res: 
     // Parse isActive: 'true' -> true, 'false' -> false, undefined -> undefined (all)
     const isActive = isActiveParam === 'true' ? true : isActiveParam === 'false' ? false : undefined;
 
-    const { data, total } = await patientService.getPatients(
+    const { data, total } = await patientService.getPatients(req.db!,
         req.tenantContext.clinicId,
         params,
         search,
@@ -67,7 +67,7 @@ export const listPatients = asyncHandler(async (req: AuthenticatedRequest, res: 
 export const getPatient = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const patient = await patientService.getPatientWithDetails(id!, req.tenantContext);
+    const patient = await patientService.getPatientWithDetails(req.db!, id!, req.tenantContext);
 
     res.json(success(patient));
 });
@@ -79,7 +79,7 @@ export const getPatient = asyncHandler(async (req: AuthenticatedRequest, res: Re
 export const getPatientStats = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const stats = await patientService.getPatientStats(id!, req.tenantContext);
+    const stats = await patientService.getPatientStats(req.db!, id!, req.tenantContext);
 
     res.json(success(stats));
 });
@@ -95,10 +95,10 @@ export const createPatient = asyncHandler(async (req: AuthenticatedRequest, res:
 
     const input = createPatientSchema.parse(req.body);
 
-    const result = await patientService.createPatient({
+    const result = await patientService.createPatient(req.db!, {
         ...input,
         clinicId: req.tenantContext.clinicId,
-    });
+    } as any);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'Patient created successfully'));
@@ -113,7 +113,7 @@ export const updatePatient = asyncHandler(async (req: AuthenticatedRequest, res:
     const { id } = req.params;
     const input = updatePatientSchema.parse(req.body);
 
-    const result = await patientService.updatePatient(id!, input, req.tenantContext);
+    const result = await patientService.updatePatient(req.db!, id!, input as any, req.tenantContext);
 
     if (result.success) {
         res.json(success(result.data, 'Patient updated successfully'));
@@ -127,7 +127,7 @@ export const updatePatient = asyncHandler(async (req: AuthenticatedRequest, res:
 export const deletePatient = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await patientService.deletePatient(id!, req.tenantContext);
+    await patientService.deletePatient(req.db!, id!, req.tenantContext);
 
     res.json(success(null, 'Patient deleted successfully'));
 });

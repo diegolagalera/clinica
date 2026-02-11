@@ -3,10 +3,10 @@ import multer from 'multer';
 import { ChatbotConversationService } from '../services/chatbot-conversation.service.js';
 import { ChatbotKnowledgeService } from '../services/chatbot-knowledge.service.js';
 import { whatsappSettings } from '../db/schema.js';
-import { db } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 import { encrypt } from '../utils/encryption.js';
 import { logger } from '../utils/logger.js';
+import type { Database } from '../db/index.js';
 import { AiUsageService } from '../services/ai-usage.service.js';
 import { authenticate, requirePermission } from '../middleware/index.js';
 
@@ -75,7 +75,7 @@ router.use(requirePermission('whatsapp'));
 router.get('/ai-status', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const quota = await AiUsageService.checkQuota(clinicId);
+        const quota = await AiUsageService.checkQuota(((req as any).db as Database), clinicId);
         res.json({
             data: {
                 active: quota.allowed,
@@ -108,7 +108,7 @@ router.get('/ai-usage', async (req: Request, res: Response): Promise<void> => {
             }
         }
 
-        const usageSummary = await AiUsageService.getUsageSummary(clinicId, monthDate);
+        const usageSummary = await AiUsageService.getUsageSummary(((req as any).db as Database), clinicId, monthDate);
         res.json({ success: true, data: usageSummary });
     } catch (error) {
         logger.error({ error }, 'Failed to get AI usage');
@@ -124,7 +124,7 @@ router.get('/ai-usage', async (req: Request, res: Response): Promise<void> => {
 router.get('/settings', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const settings = await ChatbotConversationService.getSettings(clinicId);
+        const settings = await ChatbotConversationService.getSettings(((req as any).db as Database), clinicId);
         res.json({ data: settings });
     } catch (error) {
         logger.error({ error }, 'Failed to get WhatsApp settings');
@@ -148,7 +148,7 @@ router.put('/settings', async (req: Request, res: Response): Promise<void> => {
         } = req.body;
 
         // Check if settings exist
-        const [existing] = await db
+        const [existing] = await ((req as any).db as Database)
             .select()
             .from(whatsappSettings)
             .where(eq(whatsappSettings.clinicId, clinicId));
@@ -177,13 +177,13 @@ router.put('/settings', async (req: Request, res: Response): Promise<void> => {
 
         let result;
         if (existing) {
-            [result] = await db
+            [result] = await ((req as any).db as Database)
                 .update(whatsappSettings)
                 .set(data)
                 .where(eq(whatsappSettings.clinicId, clinicId))
                 .returning();
         } else {
-            [result] = await db
+            [result] = await ((req as any).db as Database)
                 .insert(whatsappSettings)
                 .values({
                     clinicId,
@@ -218,7 +218,7 @@ router.post('/settings/test', async (req: Request, res: Response): Promise<void>
             return;
         }
 
-        const settings = await ChatbotConversationService.getSettingsRaw(clinicId);
+        const settings = await ChatbotConversationService.getSettingsRaw(((req as any).db as Database), clinicId);
         if (!settings?.accessToken || !settings?.phoneNumberId) {
             res.status(400).json({ error: 'WhatsApp is not configured for this clinic' });
             return;
@@ -245,7 +245,7 @@ router.post('/settings/test', async (req: Request, res: Response): Promise<void>
 router.get('/templates', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const settings = await ChatbotConversationService.getSettingsRaw(clinicId);
+        const settings = await ChatbotConversationService.getSettingsRaw(((req as any).db as Database), clinicId);
 
         if (!settings?.accessToken || !settings.businessAccountId) {
             res.status(400).json({ error: 'WhatsApp not configured or missing Business Account ID' });
@@ -282,7 +282,7 @@ router.post('/conversations/send-template', async (req: Request, res: Response):
             return;
         }
 
-        const result = await ChatbotConversationService.sendTemplateMessage(
+        const result = await ChatbotConversationService.sendTemplateMessage(((req as any).db as Database),
             clinicId,
             userId,
             phone,
@@ -311,12 +311,12 @@ router.get('/conversations', async (req: Request, res: Response): Promise<void> 
         const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
         const offset = req.query.offset ? parseInt(req.query.offset as string) : undefined;
 
-        const conversations = await ChatbotConversationService.getConversations(clinicId, {
-            status: status as string | undefined,
-            controlMode: controlMode as string | undefined,
-            search: search as string | undefined,
-            limit,
-            offset,
+        const conversations = await ChatbotConversationService.getConversations(((req as any).db as Database), clinicId, {
+            ...(status !== undefined && { status: status as string }),
+            ...(controlMode !== undefined && { controlMode: controlMode as string }),
+            ...(search !== undefined && { search: search as string }),
+            ...(limit !== undefined && { limit }),
+            ...(offset !== undefined && { offset }),
         });
 
         res.json({ data: conversations });
@@ -330,7 +330,7 @@ router.get('/conversations', async (req: Request, res: Response): Promise<void> 
 router.get('/conversations/:id', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const conversation = await ChatbotConversationService.getConversation(req.params.id, clinicId);
+        const conversation = await ChatbotConversationService.getConversation(((req as any).db as Database), req.params.id!, clinicId);
 
         if (!conversation) {
             res.status(404).json({ error: 'Conversation not found' });
@@ -351,8 +351,8 @@ router.get('/conversations/:id/messages', async (req: Request, res: Response): P
         const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
         const offset = req.query.offset ? parseInt(req.query.offset as string) : undefined;
 
-        const messages = await ChatbotConversationService.getConversationMessages(
-            req.params.id,
+        const messages = await ChatbotConversationService.getConversationMessages(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             limit,
             offset
@@ -377,8 +377,8 @@ router.post('/conversations/:id/messages', async (req: Request, res: Response): 
             return;
         }
 
-        const message = await ChatbotConversationService.sendHumanMessage(
-            req.params.id,
+        const message = await ChatbotConversationService.sendHumanMessage(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             userId,
             text
@@ -404,8 +404,8 @@ router.post('/conversations/:id/messages/media', mediaUpload.single('file'), asy
             return;
         }
 
-        const message = await ChatbotConversationService.sendHumanMediaMessage(
-            req.params.id,
+        const message = await ChatbotConversationService.sendHumanMediaMessage(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             userId,
             {
@@ -435,8 +435,8 @@ router.put('/conversations/:id/control', async (req: Request, res: Response): Pr
             return;
         }
 
-        const conversation = await ChatbotConversationService.switchControlMode(
-            req.params.id,
+        const conversation = await ChatbotConversationService.switchControlMode(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             mode,
             userId
@@ -446,7 +446,7 @@ router.put('/conversations/:id/control', async (req: Request, res: Response): Pr
         try {
             const { getIO } = await import('../websocket.js');
             getIO().to(`clinic:${clinicId}`).emit('chatbot:conversation-updated', {
-                conversationId: req.params.id,
+                conversationId: req.params.id!,
                 controlMode: mode,
                 status: conversation?.status,
             });
@@ -465,8 +465,8 @@ router.put('/conversations/:id/close', async (req: Request, res: Response): Prom
         const clinicId = (req as any).clinicId as string;
         const userId = (req as any).user?.id as string;
 
-        const conversation = await ChatbotConversationService.closeConversation(
-            req.params.id,
+        const conversation = await ChatbotConversationService.closeConversation(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             userId
         );
@@ -475,7 +475,7 @@ router.put('/conversations/:id/close', async (req: Request, res: Response): Prom
         try {
             const { getIO } = await import('../websocket.js');
             getIO().to(`clinic:${clinicId}`).emit('chatbot:conversation-updated', {
-                conversationId: req.params.id,
+                conversationId: req.params.id!,
                 status: 'CLOSED',
             });
         } catch { /* WebSocket may not be initialized */ }
@@ -491,7 +491,7 @@ router.put('/conversations/:id/close', async (req: Request, res: Response): Prom
 router.put('/conversations/:id/read', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        await ChatbotConversationService.markConversationAsRead(req.params.id, clinicId);
+        await ChatbotConversationService.markConversationAsRead(((req as any).db as Database), req.params.id!, clinicId);
         res.json({ success: true });
     } catch (error) {
         logger.error({ error }, 'Failed to mark as read');
@@ -507,7 +507,7 @@ router.put('/conversations/:id/read', async (req: Request, res: Response): Promi
 router.delete('/conversations/:id', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        await ChatbotConversationService.deleteConversation(req.params.id, clinicId);
+        await ChatbotConversationService.deleteConversation(((req as any).db as Database), req.params.id!, clinicId);
         res.json({ success: true });
     } catch (error: any) {
         if (error.message === 'Conversation not found') {
@@ -526,7 +526,7 @@ router.delete('/conversations/:id', async (req: Request, res: Response): Promise
 // GET /api/v1/chatbot/conversations/:id/notes
 router.get('/conversations/:id/notes', async (req: Request, res: Response): Promise<void> => {
     try {
-        const notes = await ChatbotConversationService.getNotes(req.params.id);
+        const notes = await ChatbotConversationService.getNotes(((req as any).db as Database), req.params.id!);
         res.json({ data: notes });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get notes' });
@@ -544,7 +544,7 @@ router.post('/conversations/:id/notes', async (req: Request, res: Response): Pro
             return;
         }
 
-        const note = await ChatbotConversationService.addNote(req.params.id, userId, content);
+        const note = await ChatbotConversationService.addNote(((req as any).db as Database), req.params.id!, userId, content);
         res.json({ data: note });
     } catch (error) {
         res.status(500).json({ error: 'Failed to add note' });
@@ -559,7 +559,7 @@ router.post('/conversations/:id/notes', async (req: Request, res: Response): Pro
 router.get('/knowledge', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const bases = await ChatbotKnowledgeService.getKnowledgeBases(clinicId);
+        const bases = await ChatbotKnowledgeService.getKnowledgeBases(((req as any).db as Database), clinicId);
         res.json({ data: bases });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get knowledge bases' });
@@ -578,7 +578,7 @@ router.post('/knowledge', async (req: Request, res: Response): Promise<void> => 
             return;
         }
 
-        const kb = await ChatbotKnowledgeService.createKnowledgeBase(
+        const kb = await ChatbotKnowledgeService.createKnowledgeBase(((req as any).db as Database),
             clinicId,
             { name, description, icon },
             userId
@@ -595,8 +595,8 @@ router.put('/knowledge/:id', async (req: Request, res: Response): Promise<void> 
         const clinicId = (req as any).clinicId as string;
         const { name, description, icon } = req.body;
 
-        const kb = await ChatbotKnowledgeService.updateKnowledgeBase(
-            req.params.id,
+        const kb = await ChatbotKnowledgeService.updateKnowledgeBase(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             { name, description, icon }
         );
@@ -616,7 +616,7 @@ router.put('/knowledge/:id', async (req: Request, res: Response): Promise<void> 
 router.delete('/knowledge/:id', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const deleted = await ChatbotKnowledgeService.deleteKnowledgeBase(req.params.id, clinicId);
+        const deleted = await ChatbotKnowledgeService.deleteKnowledgeBase(((req as any).db as Database), req.params.id!, clinicId);
 
         if (!deleted) {
             res.status(404).json({ error: 'Knowledge base not found' });
@@ -633,7 +633,7 @@ router.delete('/knowledge/:id', async (req: Request, res: Response): Promise<voi
 router.get('/knowledge/:id/articles', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const articles = await ChatbotKnowledgeService.getArticles(req.params.id, clinicId);
+        const articles = await ChatbotKnowledgeService.getArticles(((req as any).db as Database), req.params.id!, clinicId);
         res.json({ data: articles });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get articles' });
@@ -652,8 +652,8 @@ router.post('/knowledge/:id/articles', async (req: Request, res: Response): Prom
             return;
         }
 
-        const article = await ChatbotKnowledgeService.createArticle({
-            knowledgeBaseId: req.params.id,
+        const article = await ChatbotKnowledgeService.createArticle(((req as any).db as Database), {
+            knowledgeBaseId: req.params.id!,
             clinicId,
             title,
             content,
@@ -682,15 +682,15 @@ router.post('/knowledge/:id/articles/pdf', upload.single('file'), async (req: Re
         }
 
         // Parse PDF
-        const text = await ChatbotKnowledgeService.parsePdf(file.buffer);
+        const text = await ChatbotKnowledgeService.parsePdf(((req as any).db as Database), file.buffer);
 
         if (!text.trim()) {
             res.status(400).json({ error: 'Could not extract text from PDF' });
             return;
         }
 
-        const article = await ChatbotKnowledgeService.createArticle({
-            knowledgeBaseId: req.params.id,
+        const article = await ChatbotKnowledgeService.createArticle(((req as any).db as Database), {
+            knowledgeBaseId: req.params.id!,
             clinicId,
             title: title || file.originalname,
             content: text,
@@ -712,8 +712,8 @@ router.put('/knowledge/:kbId/articles/:articleId', async (req: Request, res: Res
         const clinicId = (req as any).clinicId as string;
         const { title, content } = req.body;
 
-        const article = await ChatbotKnowledgeService.updateArticle(
-            req.params.articleId,
+        const article = await ChatbotKnowledgeService.updateArticle(((req as any).db as Database),
+            req.params.articleId!,
             clinicId,
             { title, content }
         );
@@ -733,7 +733,7 @@ router.put('/knowledge/:kbId/articles/:articleId', async (req: Request, res: Res
 router.delete('/knowledge/:kbId/articles/:articleId', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const deleted = await ChatbotKnowledgeService.deleteArticle(req.params.articleId, clinicId);
+        const deleted = await ChatbotKnowledgeService.deleteArticle(((req as any).db as Database), req.params.articleId!, clinicId);
 
         if (!deleted) {
             res.status(404).json({ error: 'Article not found' });
@@ -754,7 +754,7 @@ router.delete('/knowledge/:kbId/articles/:articleId', async (req: Request, res: 
 router.get('/quick-replies', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const replies = await ChatbotConversationService.getQuickReplies(clinicId);
+        const replies = await ChatbotConversationService.getQuickReplies(((req as any).db as Database), clinicId);
         res.json({ data: replies });
     } catch (error) {
         res.status(500).json({ error: 'Failed to get quick replies' });
@@ -772,7 +772,7 @@ router.post('/quick-replies', async (req: Request, res: Response): Promise<void>
             return;
         }
 
-        const qr = await ChatbotConversationService.createQuickReply(clinicId, { title, content, category });
+        const qr = await ChatbotConversationService.createQuickReply(((req as any).db as Database), clinicId, { title, content, category });
         res.status(201).json({ data: qr });
     } catch (error) {
         res.status(500).json({ error: 'Failed to create quick reply' });
@@ -783,7 +783,7 @@ router.post('/quick-replies', async (req: Request, res: Response): Promise<void>
 router.delete('/quick-replies/:id', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const deleted = await ChatbotConversationService.deleteQuickReply(req.params.id, clinicId);
+        const deleted = await ChatbotConversationService.deleteQuickReply(((req as any).db as Database), req.params.id!, clinicId);
 
         if (!deleted) {
             res.status(404).json({ error: 'Quick reply not found' });
@@ -808,10 +808,10 @@ router.get('/leads', async (req: Request, res: Response): Promise<void> => {
         const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
         const offset = req.query.offset ? parseInt(req.query.offset as string) : undefined;
 
-        const leads = await ChatbotConversationService.getLeads(clinicId, {
-            status: status as string | undefined,
-            limit,
-            offset,
+        const leads = await ChatbotConversationService.getLeads(((req as any).db as Database), clinicId, {
+            ...(status !== undefined && { status: status as string }),
+            ...(limit !== undefined && { limit }),
+            ...(offset !== undefined && { offset }),
         });
 
         res.json({ data: leads });
@@ -826,7 +826,7 @@ router.put('/leads/:id', async (req: Request, res: Response): Promise<void> => {
         const clinicId = (req as any).clinicId as string;
         const { firstName, lastName, email, notes, status } = req.body;
 
-        const lead = await ChatbotConversationService.updateLead(req.params.id, clinicId, {
+        const lead = await ChatbotConversationService.updateLead(((req as any).db as Database), req.params.id!, clinicId, {
             firstName,
             lastName,
             email,
@@ -857,8 +857,8 @@ router.post('/leads/:id/convert', async (req: Request, res: Response): Promise<v
             return;
         }
 
-        const result = await ChatbotConversationService.convertLead(
-            req.params.id,
+        const result = await ChatbotConversationService.convertLead(((req as any).db as Database),
+            req.params.id!,
             clinicId,
             { firstName, lastName, phone, email },
             userId
@@ -883,7 +883,7 @@ router.post('/leads/:id/convert', async (req: Request, res: Response): Promise<v
 router.get('/settings/wa-notifications', async (req: Request, res: Response): Promise<void> => {
     try {
         const clinicId = (req as any).clinicId as string;
-        const settings = await db.query.whatsappSettings.findFirst({
+        const settings = await ((req as any).db as Database).query.whatsappSettings.findFirst({
             where: eq(whatsappSettings.clinicId, clinicId),
         });
 
@@ -935,7 +935,7 @@ router.put('/settings/wa-notifications', async (req: Request, res: Response): Pr
             waReminder1hEnabled,
         } = req.body;
 
-        await db.update(whatsappSettings)
+        await ((req as any).db as Database).update(whatsappSettings)
             .set({
                 waNotifyEnabled: waNotifyEnabled ?? false,
                 waTemplateCreated: waTemplateCreated || null,

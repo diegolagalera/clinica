@@ -1,5 +1,5 @@
 import { eq, and, sql, isNotNull } from 'drizzle-orm';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     birthdaySettings,
     birthdayEmailLog,
@@ -22,7 +22,7 @@ class BirthdayService {
     /**
      * Get birthday settings for a clinic
      */
-    async getSettings(clinicId: string) {
+    async getSettings(db: Database, clinicId: string) {
         const [settings] = await db
             .select()
             .from(birthdaySettings)
@@ -49,8 +49,8 @@ class BirthdayService {
     /**
      * Update birthday settings for a clinic
      */
-    async updateSettings(clinicId: string, data: BirthdaySettingsData) {
-        const existing = await this.getSettings(clinicId);
+    async updateSettings(db: Database, clinicId: string, data: BirthdaySettingsData) {
+        const existing = await this.getSettings(db, clinicId);
 
         if (existing.id) {
             // Update existing
@@ -89,7 +89,7 @@ class BirthdayService {
     /**
      * Get patients with birthday today (or on a specific date)
      */
-    async getPatientsWithBirthdayOn(clinicId: string, date: Date = new Date()) {
+    async getPatientsWithBirthdayOn(db: Database, clinicId: string, date: Date = new Date()) {
         const month = date.getMonth() + 1; // getMonth() returns 0-11
         const day = date.getDate();
 
@@ -114,7 +114,7 @@ class BirthdayService {
     /**
      * Check if birthday email was already sent this year
      */
-    async wasEmailSentThisYear(clinicId: string, patientId: string): Promise<boolean> {
+    async wasEmailSentThisYear(db: Database, clinicId: string, patientId: string): Promise<boolean> {
         const year = new Date().getFullYear();
 
         const [log] = await db
@@ -135,7 +135,7 @@ class BirthdayService {
     /**
      * Log that a birthday email was sent
      */
-    async logBirthdayEmail(clinicId: string, patientId: string) {
+    async logBirthdayEmail(db: Database, clinicId: string, patientId: string) {
         const year = new Date().getFullYear();
 
         await db
@@ -154,9 +154,9 @@ class BirthdayService {
     /**
      * Send birthday email to a single patient
      */
-    async sendBirthdayEmail(clinicId: string, patientId: string) {
+    async sendBirthdayEmail(db: Database, clinicId: string, patientId: string) {
         // Get settings
-        const settings = await this.getSettings(clinicId);
+        const settings = await this.getSettings(db, clinicId);
         if (!settings.isEnabled) {
             throw new Error('Birthday emails are not enabled for this clinic');
         }
@@ -166,7 +166,7 @@ class BirthdayService {
         }
 
         // Check if already sent this year
-        const alreadySent = await this.wasEmailSentThisYear(clinicId, patientId);
+        const alreadySent = await this.wasEmailSentThisYear(db, clinicId, patientId);
         if (alreadySent) {
             logger.info(`Birthday email already sent to patient ${patientId} this year`);
             return { skipped: true, reason: 'Already sent this year' };
@@ -204,7 +204,7 @@ class BirthdayService {
             .limit(1);
 
         // Get template
-        const template = await marketingTemplateService.getTemplateById(settings.templateId, clinicId);
+        const template = await marketingTemplateService.getTemplateById(db, settings.templateId, clinicId);
         if (!template || !template.htmlContent) {
             throw new Error('Birthday template not found or has no content');
         }
@@ -225,14 +225,14 @@ class BirthdayService {
         const subject = marketingTemplateService.replaceVariables(template.subject, variables);
 
         // Send email
-        await sendEmail(clinicId, {
+        await sendEmail(db, clinicId, {
             to: patient.email,
             subject,
             html,
         });
 
         // Log the email
-        await this.logBirthdayEmail(clinicId, patientId);
+        await this.logBirthdayEmail(db, clinicId, patientId);
 
         logger.info(`Birthday email sent to patient ${patientId}`);
         return { sent: true };
@@ -240,9 +240,9 @@ class BirthdayService {
 
     /**
      * Process birthday emails for all clinics (run by cron job)
-     * Should be run daily at the configured hour (default 9:00 AM)
+     * Note: In multi-tenant mode, this should be called per-tenant with the tenant's db.
      */
-    async processBirthdayEmails() {
+    async processBirthdayEmails(db: Database) {
         logger.info('Starting birthday email processing...');
 
         // Get all clinics with birthday emails enabled
@@ -270,6 +270,7 @@ class BirthdayService {
 
                 // Get patients with birthday on target date
                 const birthdayPatients = await this.getPatientsWithBirthdayOn(
+                    db,
                     settings.clinicId,
                     targetDate
                 );
@@ -278,7 +279,7 @@ class BirthdayService {
 
                 for (const patient of birthdayPatients) {
                     try {
-                        const result = await this.sendBirthdayEmail(settings.clinicId, patient.id);
+                        const result = await this.sendBirthdayEmail(db, settings.clinicId, patient.id);
                         if (result.sent) {
                             totalSent++;
                         }
@@ -299,8 +300,8 @@ class BirthdayService {
     /**
      * Send a test birthday email (for testing the template)
      */
-    async sendTestEmail(clinicId: string, testEmail: string) {
-        const settings = await this.getSettings(clinicId);
+    async sendTestEmail(db: Database, clinicId: string, testEmail: string) {
+        const settings = await this.getSettings(db, clinicId);
 
         if (!settings.templateId) {
             throw new Error('No birthday template configured');
@@ -314,7 +315,7 @@ class BirthdayService {
             .limit(1);
 
         // Get template
-        const template = await marketingTemplateService.getTemplateById(settings.templateId, clinicId);
+        const template = await marketingTemplateService.getTemplateById(db, settings.templateId, clinicId);
         if (!template || !template.htmlContent) {
             throw new Error('Birthday template not found or has no content');
         }
@@ -333,7 +334,7 @@ class BirthdayService {
         const html = marketingTemplateService.replaceVariables(template.htmlContent, variables);
         const subject = marketingTemplateService.replaceVariables(template.subject, variables);
 
-        await sendEmail(clinicId, {
+        await sendEmail(db, clinicId, {
             to: testEmail,
             subject: `[TEST] ${subject}`,
             html,

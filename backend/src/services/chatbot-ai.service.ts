@@ -1,4 +1,4 @@
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     chatConversations,
     chatMessages,
@@ -35,7 +35,7 @@ export class ChatbotAiService {
     /**
      * Generate an AI response for an incoming message.
      */
-    static async generateResponse(
+    static async generateResponse(db: Database,
         clinicId: string,
         conversationId: string,
         userMessage: string,
@@ -47,7 +47,7 @@ export class ChatbotAiService {
         try {
             // Enforce AI quota — if blocked, signal caller to skip sending
             try {
-                await AiUsageService.enforceQuota(clinicId);
+                await AiUsageService.enforceQuota(db, clinicId);
             } catch (quotaError: any) {
                 logger.warn({ clinicId, error: quotaError.message }, 'AI quota blocked for chatbot');
                 return {
@@ -62,6 +62,7 @@ export class ChatbotAiService {
 
             // 1. Retrieve relevant knowledge via RAG
             const relevantChunks = await ChatbotKnowledgeService.searchRelevantChunks(
+                db,
                 clinicId,
                 userMessage,
                 5
@@ -154,7 +155,7 @@ export class ChatbotAiService {
             });
 
             // 7. Log AI usage for billing
-            await AiUsageService.logUsage(clinicId, 'chatbot', 'gpt-4o-mini', tokens, { conversationId });
+            await AiUsageService.logUsage(db, clinicId, 'chatbot', 'gpt-4o-mini', tokens, { conversationId });
 
             logger.info({
                 conversationId,
@@ -193,7 +194,7 @@ export class ChatbotAiService {
     /**
      * Transcribe audio using OpenAI Whisper.
      */
-    static async transcribeAudio(
+    static async transcribeAudio(db: Database,
         audioBuffer: Buffer,
         mimeType: string = 'audio/ogg',
         clinicId?: string
@@ -204,7 +205,7 @@ export class ChatbotAiService {
 
             // Enforce AI quota for WhatsApp audio transcription
             if (clinicId) {
-                await AiUsageService.enforceQuota(clinicId);
+                await AiUsageService.enforceQuota(db, clinicId);
             }
 
             const formData = new FormData();
@@ -232,7 +233,7 @@ export class ChatbotAiService {
 
             // Log whisper usage (estimate ~750 tokens per minute of audio)
             if (clinicId && transcription) {
-                await AiUsageService.logUsage(clinicId, 'chatbot', 'whisper-1', { prompt: 750, completion: 0, total: 750 });
+                await AiUsageService.logUsage(db, clinicId, 'chatbot', 'whisper-1', { prompt: 750, completion: 0, total: 750 });
             }
 
             return transcription;

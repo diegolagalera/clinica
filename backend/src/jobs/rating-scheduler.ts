@@ -1,5 +1,5 @@
 import cron from 'node-cron';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { ratingRequests, emailSettings, patients, clinics, appointments } from '../db/schema.js';
 import { and, eq, lte, ne } from 'drizzle-orm';
 import {
@@ -11,6 +11,9 @@ import { logger } from '../utils/logger.js';
 import { getEmailSettings, sendEmail } from '../services/email.service.js';
 import { getActiveTemplate, renderBlocksToHtml, replaceVariables } from '../services/email-template.service.js';
 import type { EmailTemplateType } from '../services/email-template.service.js';
+import { centralDb } from '../db/central-db.js';
+import { tenants } from '../db/central-schema.js';
+import { tenantManager } from '../db/tenant-manager.js';
 
 /**
  * Get the frontend URL from environment
@@ -22,7 +25,7 @@ const getFrontendUrl = (): string => {
 /**
  * Send rating request email to patient
  */
-const sendRatingEmail = async (request: any): Promise<boolean | 'skip'> => {
+const sendRatingEmail = async (db: Database, request: any): Promise<boolean | 'skip'> => {
     try {
         const patient = request.patient;
         const clinic = request.clinic;
@@ -34,7 +37,7 @@ const sendRatingEmail = async (request: any): Promise<boolean | 'skip'> => {
         }
 
         // Check if clinic has email settings configured
-        const emailSettingsData = await getEmailSettings(request.clinicId);
+        const emailSettingsData = await getEmailSettings(db, request.clinicId);
         if (!emailSettingsData?.isEnabled || !emailSettingsData?.isConfigured) {
             logger.warn(`Cannot send rating email for request ${request.id}: Clinic email not configured — marking as SKIPPED`);
             return 'skip';
@@ -52,7 +55,7 @@ const sendRatingEmail = async (request: any): Promise<boolean | 'skip'> => {
         });
 
         // Try to get custom template, otherwise use default
-        const template = await getActiveTemplate(request.clinicId, 'VISIT_RATING_REQUEST');
+        const template = await getActiveTemplate(db, request.clinicId, 'VISIT_RATING_REQUEST');
 
         let subject: string;
         let htmlContent: string;
@@ -80,7 +83,7 @@ const sendRatingEmail = async (request: any): Promise<boolean | 'skip'> => {
         }
 
         // Send the email
-        const result = await sendEmail(request.clinicId, {
+        const result = await sendEmail(db, request.clinicId, {
             to: patient.email,
             subject,
             html: htmlContent,
@@ -212,23 +215,23 @@ const generateDefaultRatingEmail = (data: {
 };
 
 /**
- * Process pending rating requests
+ * Process pending rating requests for a single tenant
  */
-export const processRatingRequests = async () => {
-    logger.info('Processing rating requests...');
-
+const processRatingRequestsForTenant = async (db: Database, tenantSlug: string): Promise<void> => {
     try {
         // First, mark expired requests
-        await markExpiredRequests();
+        await markExpiredRequests(db);
 
         // Get pending requests that are ready to be sent
-        const pendingRequests = await getPendingRequests();
+        const pendingRequests = await getPendingRequests(db);
 
-        logger.info(`Found ${pendingRequests.length} pending rating requests to process`);
+        if (pendingRequests.length === 0) return;
+
+        logger.info(`[${tenantSlug}] Found ${pendingRequests.length} pending rating requests to process`);
 
         for (const request of pendingRequests) {
             try {
-                const result = await sendRatingEmail(request);
+                const result = await sendRatingEmail(db, request);
                 if (result === 'skip') {
                     // Email not configured or patient has no email — skip permanently
                     await db.update(ratingRequests)
@@ -236,11 +239,36 @@ export const processRatingRequests = async () => {
                         .where(eq(ratingRequests.id, request.id));
                     logger.info(`Rating request ${request.id} marked as SKIPPED (email not available)`);
                 } else if (result === true) {
-                    await markRequestAsSent(request.id);
+                    await markRequestAsSent(db, request.id);
                     logger.info(`Rating request ${request.id} marked as SENT`);
                 }
             } catch (error: any) {
                 logger.error(`Failed to process rating request ${request.id}: ${error.message}`);
+            }
+        }
+    } catch (error: any) {
+        logger.error(`[${tenantSlug}] Error processing rating requests: ${error.message}`);
+    }
+};
+
+/**
+ * Process pending rating requests across all tenants
+ */
+export const processRatingRequests = async (): Promise<void> => {
+    logger.info('Processing rating requests across all tenants...');
+
+    try {
+        // Get all active tenants from central DB
+        const activeTenants = await centralDb.query.tenants.findMany({
+            where: eq(tenants.isActive, true),
+        });
+
+        for (const tenant of activeTenants) {
+            try {
+                const db = await tenantManager.getConnection(tenant.slug);
+                await processRatingRequestsForTenant(db, tenant.slug);
+            } catch (error: any) {
+                logger.error({ tenantSlug: tenant.slug, error: error.message }, 'Failed to process rating requests for tenant');
             }
         }
 

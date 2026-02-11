@@ -1,16 +1,16 @@
 import type { ApiResponse, PaginatedResponse, PaginationParams } from '../types/index.js';
 
-export const success = <T>(data: T, message?: string): ApiResponse<T> => ({
-    success: true,
-    data,
-    message,
-});
+export const success = <T>(data: T, message?: string): ApiResponse<T> => {
+    const result: ApiResponse<T> = { success: true, data };
+    if (message !== undefined) result.message = message;
+    return result;
+};
 
-export const error = (message: string, errors?: Record<string, string[]>): ApiResponse => ({
-    success: false,
-    message,
-    errors,
-});
+export const error = (message: string, errors?: Record<string, string[]>): ApiResponse => {
+    const result: ApiResponse = { success: false, message };
+    if (errors !== undefined) result.errors = errors;
+    return result;
+};
 
 export const paginated = <T>(
     data: T[],
@@ -37,5 +37,7 @@ export const parsePaginationParams = (query: Record<string, unknown>): Paginatio
     const sortBy = typeof query['sortBy'] === 'string' ? query['sortBy'] : undefined;
     const sortOrder = query['sortOrder'] === 'desc' ? 'desc' : 'asc';
 
-    return { page, limit, sortBy, sortOrder };
+    const result: PaginationParams = { page, limit, sortOrder };
+    if (sortBy !== undefined) result.sortBy = sortBy;
+    return result;
 };

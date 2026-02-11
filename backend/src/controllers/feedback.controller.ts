@@ -1,5 +1,4 @@
 import { Response } from 'express';
-import { db } from '../db/index.js';
 import { bugReports, users, clinics, organizations } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
@@ -34,7 +33,7 @@ export const submitBugReport = asyncHandler(async (req: AuthenticatedRequest, re
 
     try {
         // Create bug report in database
-        const [report] = await db
+        const [report] = await req.db!
             .insert(bugReports)
             .values({
                 userId,
@@ -53,7 +52,7 @@ export const submitBugReport = asyncHandler(async (req: AuthenticatedRequest, re
         }
 
         // Get user info for email
-        const [userInfo] = await db
+        const [userInfo] = await req.db!
             .select({
                 firstName: users.firstName,
                 lastName: users.lastName,
@@ -67,7 +66,7 @@ export const submitBugReport = asyncHandler(async (req: AuthenticatedRequest, re
         let organizationName = 'No especificada';
 
         if (clinicId) {
-            const [clinic] = await db
+            const [clinic] = await req.db!
                 .select({ name: clinics.name })
                 .from(clinics)
                 .where(eq(clinics.id, clinicId));
@@ -75,7 +74,7 @@ export const submitBugReport = asyncHandler(async (req: AuthenticatedRequest, re
         }
 
         if (organizationId) {
-            const [org] = await db
+            const [org] = await req.db!
                 .select({ name: organizations.name })
                 .from(organizations)
                 .where(eq(organizations.id, organizationId));

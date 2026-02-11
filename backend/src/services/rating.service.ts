@@ -1,6 +1,6 @@
 import { eq, and, lte, desc, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import {
     ratingRequests,
     visitRatings,
@@ -19,7 +19,7 @@ const DAYS_VALID = 7; // Days the token is valid
 /**
  * Create a rating request when an appointment is marked as COMPLETED
  */
-export const createRatingRequest = async (
+export const createRatingRequest = async (db: Database, 
     appointmentId: string,
     clinicId: string,
     patientId: string
@@ -45,7 +45,7 @@ export const createRatingRequest = async (
                     expiresAt: new Date(),
                 })
                 .returning();
-            return { success: true, requestId: request.id, skipped: true };
+            return { success: true, requestId: request!.id, skipped: true };
         }
 
         // Check if a request already exists for this appointment
@@ -84,9 +84,9 @@ export const createRatingRequest = async (
             })
             .returning();
 
-        logger.info(`Created rating request ${request.id} for appointment ${appointmentId}, scheduled for ${scheduledFor.toISOString()}`);
+        logger.info(`Created rating request ${request!.id} for appointment ${appointmentId}, scheduled for ${scheduledFor.toISOString()}`);
 
-        return { success: true, requestId: request.id };
+        return { success: true, requestId: request!.id };
     } catch (error: any) {
         logger.error(`Failed to create rating request: ${error.message}`);
         return { success: false, error: error.message };
@@ -96,7 +96,7 @@ export const createRatingRequest = async (
 /**
  * Validate a rating token and return the request data
  */
-export const validateToken = async (
+export const validateToken = async (db: Database, 
     token: string
 ): Promise<{
     valid: boolean;
@@ -154,14 +154,14 @@ export const validateToken = async (
 /**
  * Submit a rating for a visit
  */
-export const submitRating = async (
+export const submitRating = async (db: Database, 
     token: string,
     rating: number,
     comment?: string
 ): Promise<{ success: boolean; error?: string }> => {
     try {
         // Validate the token first
-        const validation = await validateToken(token);
+        const validation = await validateToken(db, token);
         if (!validation.valid || !validation.request) {
             return { success: false, error: validation.status || 'Invalid token' };
         }
@@ -208,7 +208,7 @@ export const submitRating = async (
             // Create worker ratings for each assigned worker
             if (workerIds.size > 0) {
                 const workerRatingValues = Array.from(workerIds).map((workerId) => ({
-                    visitRatingId: visitRating.id,
+                    visitRatingId: visitRating!.id,
                     workerId,
                     appointmentId: request.appointmentId,
                     rating,
@@ -216,7 +216,7 @@ export const submitRating = async (
 
                 await tx.insert(workerRatings).values(workerRatingValues);
 
-                logger.info(`Created ${workerIds.size} worker ratings for visit rating ${visitRating.id}`);
+                logger.info(`Created ${workerIds.size} worker ratings for visit rating ${visitRating!.id}`);
             }
 
             // Mark the request as completed
@@ -241,7 +241,7 @@ export const submitRating = async (
 /**
  * Get pending rating requests that are ready to be sent
  */
-export const getPendingRequests = async (): Promise<(typeof ratingRequests.$inferSelect)[]> => {
+export const getPendingRequests = async (db: Database): Promise<(typeof ratingRequests.$inferSelect)[]> => {
     const now = new Date();
     return await db.query.ratingRequests.findMany({
         where: and(
@@ -259,7 +259,7 @@ export const getPendingRequests = async (): Promise<(typeof ratingRequests.$infe
 /**
  * Mark a request as sent
  */
-export const markRequestAsSent = async (requestId: string): Promise<void> => {
+export const markRequestAsSent = async (db: Database, requestId: string): Promise<void> => {
     await db
         .update(ratingRequests)
         .set({
@@ -272,7 +272,7 @@ export const markRequestAsSent = async (requestId: string): Promise<void> => {
 /**
  * Mark expired requests
  */
-export const markExpiredRequests = async (): Promise<number> => {
+export const markExpiredRequests = async (db: Database): Promise<number> => {
     const now = new Date();
     const result = await db
         .update(ratingRequests)
@@ -289,7 +289,7 @@ export const markExpiredRequests = async (): Promise<number> => {
 /**
  * Get rating statistics for a clinic
  */
-export const getClinicRatingStats = async (clinicId: string) => {
+export const getClinicRatingStats = async (db: Database, clinicId: string) => {
     const ratings = await db.query.visitRatings.findMany({
         where: eq(visitRatings.clinicId, clinicId),
     });
@@ -320,7 +320,7 @@ export const getClinicRatingStats = async (clinicId: string) => {
 /**
  * Get rating statistics for a specific worker
  */
-export const getWorkerRatingStats = async (workerId: string, clinicId?: string) => {
+export const getWorkerRatingStats = async (db: Database, workerId: string, clinicId?: string) => {
     const whereClause = clinicId
         ? and(
             eq(workerRatings.workerId, workerId),
@@ -367,7 +367,7 @@ export const getWorkerRatingStats = async (workerId: string, clinicId?: string) 
 /**
  * Get recent ratings for a clinic with comments
  */
-export const getRecentRatings = async (
+export const getRecentRatings = async (db: Database, 
     clinicId: string,
     limit: number = 10
 ) => {
@@ -392,7 +392,7 @@ export const getRecentRatings = async (
 /**
  * Get all rating requests for a clinic
  */
-export const getClinicRatingRequests = async (clinicId: string) => {
+export const getClinicRatingRequests = async (db: Database, clinicId: string) => {
     return await db.query.ratingRequests.findMany({
         where: eq(ratingRequests.clinicId, clinicId),
         with: {
@@ -408,7 +408,7 @@ export const getClinicRatingRequests = async (clinicId: string) => {
  * Send a rating request email immediately (for testing)
  * Creates the request if it doesn't exist, or uses existing one
  */
-export const sendRatingEmailNow = async (
+export const sendRatingEmailNow = async (db: Database, 
     appointmentId: string,
     clinicId: string
 ): Promise<{ success: boolean; error?: string; ratingUrl?: string; token?: string }> => {
@@ -472,20 +472,20 @@ export const sendRatingEmailNow = async (
         const { getActiveTemplate, renderBlocksToHtml, replaceVariables } = await import('./email-template.service.js');
 
         // Check if clinic has email configured
-        const emailSettings = await getEmailSettings(clinicId);
+        const emailSettings = await getEmailSettings(db, clinicId);
         if (!emailSettings?.isEnabled || !emailSettings?.isConfigured) {
             // Return the URL even if email not configured - for testing
-            const ratingUrl = `${frontendUrl}/rate/${request.token}`;
+            const ratingUrl = `${frontendUrl}/rate/${request!.token}`;
             return {
                 success: true,
                 ratingUrl,
-                token: request.token,
+                token: request!.token,
                 error: 'Email no configurado, pero puedes usar este enlace directamente'
             };
         }
 
         // Generate rating URL
-        const ratingUrl = `${frontendUrl}/rate/${request.token}`;
+        const ratingUrl = `${frontendUrl}/rate/${request!.token}`;
 
         // Format appointment date
         const appointmentDate = new Date(appointment.startTime).toLocaleDateString('es-ES', {
@@ -496,7 +496,7 @@ export const sendRatingEmailNow = async (
         });
 
         // Try to get custom template, otherwise use default
-        const template = await getActiveTemplate(clinicId, 'VISIT_RATING_REQUEST');
+        const template = await getActiveTemplate(db, clinicId, 'VISIT_RATING_REQUEST');
 
         let subject: string;
         let htmlContent: string;
@@ -523,7 +523,7 @@ export const sendRatingEmailNow = async (
         }
 
         // Send the email
-        const result = await sendEmail(clinicId, {
+        const result = await sendEmail(db, clinicId, {
             to: appointment.patient.email,
             subject,
             html: htmlContent,
@@ -531,14 +531,14 @@ export const sendRatingEmailNow = async (
 
         if (result.success) {
             // Update status to SENT if not already
-            if (request.status === 'PENDING') {
+            if (request!.status === 'PENDING') {
                 await db
                     .update(ratingRequests)
                     .set({ status: 'SENT', sentAt: new Date() })
-                    .where(eq(ratingRequests.id, request.id));
+                    .where(eq(ratingRequests.id, request!.id));
             }
             logger.info(`Test rating email sent to ${appointment.patient.email}`);
-            return { success: true, ratingUrl, token: request.token };
+            return { success: true, ratingUrl, token: request!.token };
         } else {
             return { success: false, error: result.error || 'Error al enviar el email' };
         }

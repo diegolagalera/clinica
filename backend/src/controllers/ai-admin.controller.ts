@@ -4,7 +4,6 @@ import { AiUsageService } from '../services/ai-usage.service.js';
 import { success } from '../utils/response.js';
 import { asyncHandler } from '../middleware/index.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { db } from '../db/index.js';
 import { clinics } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 
@@ -31,7 +30,7 @@ export const getClinicAiUsage = asyncHandler(async (req: AuthenticatedRequest, r
         }
     }
 
-    const usageSummary = await AiUsageService.getUsageSummary(clinicId!, monthDate);
+    const usageSummary = await AiUsageService.getUsageSummary(req.db!, clinicId!, monthDate);
 
     res.json(success(usageSummary));
 });
@@ -43,7 +42,7 @@ export const getClinicAiUsage = asyncHandler(async (req: AuthenticatedRequest, r
 export const getClinicAiConfig = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { clinicId } = req.params;
 
-    const [clinic] = await db
+    const [clinic] = await req.db!
         .select({
             id: clinics.id,
             name: clinics.name,
@@ -59,7 +58,7 @@ export const getClinicAiConfig = asyncHandler(async (req: AuthenticatedRequest, 
     }
 
     // Get current usage
-    const quota = await AiUsageService.checkQuota(clinicId!);
+    const quota = await AiUsageService.checkQuota(req.db!, clinicId!);
 
     res.json(success({
         ...clinic,
@@ -79,7 +78,7 @@ export const updateClinicAiConfig = asyncHandler(async (req: AuthenticatedReques
     if (input.aiEnabled !== undefined) config.aiEnabled = input.aiEnabled;
     if (input.aiMonthlyTokenLimit !== undefined) config.aiMonthlyTokenLimit = input.aiMonthlyTokenLimit;
 
-    const updated = await AiUsageService.updateClinicAiConfig(clinicId!, config);
+    const updated = await AiUsageService.updateClinicAiConfig(req.db!, clinicId!, config);
 
     if (!updated) {
         res.status(404).json({ success: false, message: 'Clinic not found' });
@@ -98,9 +97,9 @@ export const updateClinicAiConfig = asyncHandler(async (req: AuthenticatedReques
  * GET /ai-admin/ai-overview
  * Get AI usage overview for all clinics (dashboard summary)
  */
-export const getAiOverview = asyncHandler(async (_req: AuthenticatedRequest, res: Response) => {
+export const getAiOverview = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     // Get all clinics with their AI config
-    const allClinics = await db
+    const allClinics = await req.db!
         .select({
             id: clinics.id,
             name: clinics.name,
@@ -116,8 +115,8 @@ export const getAiOverview = asyncHandler(async (_req: AuthenticatedRequest, res
     startOfMonth.setHours(0, 0, 0, 0);
 
     const clinicOverviews = await Promise.all(
-        allClinics.map(async (clinic) => {
-            const quota = await AiUsageService.checkQuota(clinic.id);
+        allClinics.map(async (clinic: any) => {
+            const quota = await AiUsageService.checkQuota(req.db!, clinic.id);
             return {
                 clinicId: clinic.id,
                 clinicName: clinic.name,
@@ -134,7 +133,7 @@ export const getAiOverview = asyncHandler(async (_req: AuthenticatedRequest, res
 
     res.json(success({
         totalClinics: allClinics.length,
-        aiEnabledClinics: allClinics.filter(c => c.aiEnabled).length,
+        aiEnabledClinics: allClinics.filter((c: any) => c.aiEnabled).length,
         clinics: clinicOverviews,
     }));
 });

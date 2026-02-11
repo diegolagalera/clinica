@@ -4,7 +4,6 @@ import { asyncHandler } from '../middleware/index.js';
 import { BadRequestError, NotFoundError } from '../utils/errors.js';
 import { success } from '../utils/response.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { db } from '../db/index.js';
 import {
     appointmentStockUsage,
     appointments,
@@ -19,7 +18,7 @@ import { stockEvents } from '../websocket.js';
 /**
  * Helper to emit stock:updated event with current stock list
  */
-async function emitStockUpdate(appointmentId: string) {
+async function emitStockUpdate(db: any, appointmentId: string) {
     try {
         const usage = await db
             .select({
@@ -77,7 +76,7 @@ export const getAppointmentStock = asyncHandler(async (req: AuthenticatedRequest
     }
 
     // Check appointment exists and belongs to clinic
-    const [appointment] = await db
+    const [appointment] = await req.db!
         .select()
         .from(appointments)
         .where(and(
@@ -90,7 +89,7 @@ export const getAppointmentStock = asyncHandler(async (req: AuthenticatedRequest
     }
 
     // Get stock usage with item details
-    const usage = await db
+    const usage = await req.db!
         .select({
             id: appointmentStockUsage.id,
             itemId: appointmentStockUsage.itemId,
@@ -140,7 +139,7 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
     const input = addStockUsageSchema.parse(req.body);
 
     // Check appointment exists
-    const [appointment] = await db
+    const [appointment] = await req.db!
         .select()
         .from(appointments)
         .where(and(
@@ -153,7 +152,7 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
     }
 
     // Check item exists and get current stock
-    const [item] = await db
+    const [item] = await req.db!
         .select()
         .from(inventoryItems)
         .where(and(
@@ -172,7 +171,7 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
 
     // Create stock usage record as UNCONFIRMED (isConfirmed = false by default)
     // Stock will be deducted only when appointment is completed
-    const [usage] = await db.insert(appointmentStockUsage).values({
+    const [usage] = await req.db!.insert(appointmentStockUsage).values({
         clinicId: req.tenantContext.clinicId,
         appointmentId: appointmentId!,
         itemId: input.itemId,
@@ -184,7 +183,7 @@ export const addStockUsage = asyncHandler(async (req: AuthenticatedRequest, res:
     }).returning();
 
     // Emit WebSocket event to users watching this appointment
-    await emitStockUpdate(appointmentId!);
+    await emitStockUpdate(req.db!, appointmentId!);
 
     res.status(201).json(success({
         ...usage,
@@ -210,7 +209,7 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
     const input = addMultipleStockUsageSchema.parse(req.body);
 
     // Check appointment exists
-    const [appointment] = await db
+    const [appointment] = await req.db!
         .select()
         .from(appointments)
         .where(and(
@@ -226,7 +225,7 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
 
     for (const usage of input.items) {
         // Get item
-        const [item] = await db
+        const [item] = await req.db!
             .select()
             .from(inventoryItems)
             .where(and(
@@ -244,7 +243,7 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
         }
 
         // Create stock usage record as UNCONFIRMED
-        const [usageRecord] = await db.insert(appointmentStockUsage).values({
+        const [usageRecord] = await req.db!.insert(appointmentStockUsage).values({
             clinicId: req.tenantContext.clinicId,
             appointmentId: appointmentId!,
             itemId: usage.itemId,
@@ -262,7 +261,7 @@ export const addBulkStockUsage = asyncHandler(async (req: AuthenticatedRequest, 
     }
 
     // Emit WebSocket event to users watching this appointment
-    await emitStockUpdate(appointmentId!);
+    await emitStockUpdate(req.db!, appointmentId!);
 
     res.status(201).json(success(results, `${results.length} items added (pending confirmation)`));
 });
@@ -279,7 +278,7 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
     }
 
     // Check appointment exists
-    const [appointment] = await db
+    const [appointment] = await req.db!
         .select()
         .from(appointments)
         .where(and(
@@ -292,7 +291,7 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
     }
 
     // Check pack exists and get items
-    const [pack] = await db
+    const [pack] = await req.db!
         .select()
         .from(stockPacks)
         .where(and(
@@ -306,7 +305,7 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
     }
 
     // Get pack items
-    const packItems = await db
+    const packItems = await req.db!
         .select({
             itemId: stockPackItems.itemId,
             quantity: stockPackItems.quantity,
@@ -322,7 +321,7 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
 
     for (const packItem of packItems) {
         // Get inventory item
-        const [item] = await db
+        const [item] = await req.db!
             .select()
             .from(inventoryItems)
             .where(eq(inventoryItems.id, packItem.itemId));
@@ -338,7 +337,7 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
 
         // Create stock usage record as UNCONFIRMED
         // Stock will be deducted only when appointment is completed
-        const [usageRecord] = await db.insert(appointmentStockUsage).values({
+        const [usageRecord] = await req.db!.insert(appointmentStockUsage).values({
             clinicId: req.tenantContext.clinicId,
             appointmentId: appointmentId!,
             itemId: packItem.itemId,
@@ -356,7 +355,7 @@ export const applyPackToAppointment = asyncHandler(async (req: AuthenticatedRequ
     }
 
     // Emit WebSocket event to users watching this appointment
-    await emitStockUpdate(appointmentId!);
+    await emitStockUpdate(req.db!, appointmentId!);
 
     res.status(201).json(success({
         packName: pack.name,
@@ -376,7 +375,7 @@ export const removeStockUsage = asyncHandler(async (req: AuthenticatedRequest, r
     }
 
     // Get the usage record
-    const [usage] = await db
+    const [usage] = await req.db!
         .select()
         .from(appointmentStockUsage)
         .where(and(
@@ -391,7 +390,7 @@ export const removeStockUsage = asyncHandler(async (req: AuthenticatedRequest, r
 
     // Only restore stock if the usage was confirmed (already deducted)
     if (usage.isConfirmed) {
-        const [item] = await db
+        const [item] = await req.db!
             .select()
             .from(inventoryItems)
             .where(eq(inventoryItems.id, usage.itemId));
@@ -399,13 +398,13 @@ export const removeStockUsage = asyncHandler(async (req: AuthenticatedRequest, r
         if (item) {
             // Restore stock
             const newStock = item.currentStock + usage.quantity;
-            await db
+            await req.db!
                 .update(inventoryItems)
                 .set({ currentStock: newStock, updatedAt: new Date() })
                 .where(eq(inventoryItems.id, usage.itemId));
 
             // Record stock movement (reversal)
-            await db.insert(stockMovements).values({
+            await req.db!.insert(stockMovements).values({
                 clinicId: req.tenantContext.clinicId,
                 itemId: usage.itemId,
                 type: 'IN',
@@ -421,12 +420,12 @@ export const removeStockUsage = asyncHandler(async (req: AuthenticatedRequest, r
     // If not confirmed, just delete the record without affecting inventory
 
     // Delete usage record
-    await db
+    await req.db!
         .delete(appointmentStockUsage)
         .where(eq(appointmentStockUsage.id, usageId!));
 
     // Emit WebSocket event to users watching this appointment
-    await emitStockUpdate(appointmentId!);
+    await emitStockUpdate(req.db!, appointmentId!);
 
     res.json(success(null, usage.isConfirmed
         ? 'Stock usage removed and inventory restored'
@@ -446,7 +445,7 @@ export const confirmAppointmentStock = asyncHandler(async (req: AuthenticatedReq
     }
 
     // Check appointment exists
-    const [appointment] = await db
+    const [appointment] = await req.db!
         .select()
         .from(appointments)
         .where(and(
@@ -459,7 +458,7 @@ export const confirmAppointmentStock = asyncHandler(async (req: AuthenticatedReq
     }
 
     // Get all unconfirmed stock usage for this appointment
-    const pendingUsage = await db
+    const pendingUsage = await req.db!
         .select()
         .from(appointmentStockUsage)
         .where(and(
@@ -479,7 +478,7 @@ export const confirmAppointmentStock = asyncHandler(async (req: AuthenticatedReq
     // Process each pending usage
     for (const usage of pendingUsage) {
         // Get current item stock
-        const [item] = await db
+        const [item] = await req.db!
             .select()
             .from(inventoryItems)
             .where(eq(inventoryItems.id, usage.itemId));
@@ -497,13 +496,13 @@ export const confirmAppointmentStock = asyncHandler(async (req: AuthenticatedReq
 
         // Deduct stock
         const newStock = item.currentStock - usage.quantity;
-        await db
+        await req.db!
             .update(inventoryItems)
             .set({ currentStock: newStock, updatedAt: now })
             .where(eq(inventoryItems.id, usage.itemId));
 
         // Create stock movement
-        await db.insert(stockMovements).values({
+        await req.db!.insert(stockMovements).values({
             clinicId: req.tenantContext.clinicId,
             itemId: usage.itemId,
             type: 'OUT',
@@ -516,7 +515,7 @@ export const confirmAppointmentStock = asyncHandler(async (req: AuthenticatedReq
         });
 
         // Mark usage as confirmed
-        await db
+        await req.db!
             .update(appointmentStockUsage)
             .set({
                 isConfirmed: true,

@@ -20,6 +20,7 @@ export interface User {
     twoFactorEnabled: boolean
     emailVerified: boolean
     lastLoginAt?: string
+    tenantSlug?: string
     createdAt: string
 }
 
@@ -30,11 +31,20 @@ export interface AuthTokens {
     expiresIn: number
 }
 
+// Tenant option (for multi-tenant login)
+export interface TenantOption {
+    slug: string
+    name: string
+    role: string
+}
+
 // Login response
 export interface LoginResponse {
     tokens: AuthTokens
     user: User
     requires2FA?: boolean
+    requiresTenantSelection?: boolean
+    availableTenants?: TenantOption[]
 }
 
 // Organization

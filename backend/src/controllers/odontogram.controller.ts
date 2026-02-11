@@ -15,12 +15,12 @@ export const getOdontogram = asyncHandler(async (req: AuthenticatedRequest, res:
     const isChild = req.query.isChild === 'true';
 
     // Get patient to determine clinicId
-    const patient = await patientService.getPatientById(patientId!, req.tenantContext);
+    const patient = await patientService.getPatientById(req.db!, patientId!, req.tenantContext);
     if (!patient) {
         throw new NotFoundError('Paciente no encontrado');
     }
 
-    const odontogram = await odontogramService.getOrCreateOdontogram(
+    const odontogram = await odontogramService.getOrCreateOdontogram(req.db!, 
         patientId!,
         patient.clinicId,
         isChild,
@@ -42,7 +42,7 @@ export const updateTooth = asyncHandler(async (req: AuthenticatedRequest, res: R
         throw new BadRequestError('La condición es requerida');
     }
 
-    const updatedTooth = await odontogramService.updateToothCondition(
+    const updatedTooth = await odontogramService.updateToothCondition(req.db!, 
         odontogramId!,
         parseInt(toothNumber!, 10),
         condition,
@@ -63,7 +63,7 @@ export const getHistory = asyncHandler(async (req: AuthenticatedRequest, res: Re
     const { odontogramId } = req.params;
     const limit = parseInt(req.query.limit as string, 10) || 50;
 
-    const history = await odontogramService.getOdontogramHistory(odontogramId!, limit);
+    const history = await odontogramService.getOdontogramHistory(req.db!, odontogramId!, limit);
 
     res.json(success(history));
 });
@@ -75,7 +75,7 @@ export const getHistory = asyncHandler(async (req: AuthenticatedRequest, res: Re
 export const getToothHistory = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { odontogramId, toothNumber } = req.params;
 
-    const history = await odontogramService.getToothHistory(
+    const history = await odontogramService.getToothHistory(req.db!, 
         odontogramId!,
         parseInt(toothNumber!, 10)
     );
@@ -91,7 +91,7 @@ export const updateNotes = asyncHandler(async (req: AuthenticatedRequest, res: R
     const { odontogramId } = req.params;
     const { notes } = req.body;
 
-    await odontogramService.updateOdontogramNotes(
+    await odontogramService.updateOdontogramNotes(req.db!, 
         odontogramId!,
         notes || '',
         req.user!.userId
@@ -108,7 +108,7 @@ export const updateToothNotes = asyncHandler(async (req: AuthenticatedRequest, r
     const { odontogramId, toothNumber } = req.params;
     const { notes } = req.body;
 
-    await odontogramService.updateToothNotes(
+    await odontogramService.updateToothNotes(req.db!, 
         odontogramId!,
         parseInt(toothNumber!, 10),
         notes || ''
@@ -133,7 +133,7 @@ export const createSnapshot = asyncHandler(async (req: AuthenticatedRequest, res
         throw new BadRequestError('El nombre del snapshot es requerido');
     }
 
-    const snapshot = await odontogramService.createSnapshot(
+    const snapshot = await odontogramService.createSnapshot(req.db!, 
         odontogramId!,
         name,
         description || null,
@@ -150,7 +150,7 @@ export const createSnapshot = asyncHandler(async (req: AuthenticatedRequest, res
 export const getSnapshots = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { odontogramId } = req.params;
 
-    const snapshots = await odontogramService.getSnapshots(odontogramId!);
+    const snapshots = await odontogramService.getSnapshots(req.db!, odontogramId!);
 
     res.json(success(snapshots));
 });
@@ -162,7 +162,7 @@ export const getSnapshots = asyncHandler(async (req: AuthenticatedRequest, res: 
 export const getSnapshot = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { snapshotId } = req.params;
 
-    const snapshot = await odontogramService.getSnapshot(snapshotId!);
+    const snapshot = await odontogramService.getSnapshot(req.db!, snapshotId!);
 
     if (!snapshot) {
         throw new NotFoundError('Snapshot no encontrado');
@@ -178,7 +178,7 @@ export const getSnapshot = asyncHandler(async (req: AuthenticatedRequest, res: R
 export const deleteSnapshot = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { snapshotId } = req.params;
 
-    await odontogramService.deleteSnapshot(snapshotId!);
+    await odontogramService.deleteSnapshot(req.db!, snapshotId!);
 
     res.json(success({ message: 'Snapshot eliminado' }));
 });

@@ -10,6 +10,7 @@ const envSchema = z.object({
 
     // Database
     DATABASE_URL: z.string().url(),
+    CENTRAL_DATABASE_URL: z.string().url().optional(), // Central DB for multi-tenant routing
     DATABASE_SSL: z.coerce.boolean().default(false),
 
     // Redis
@@ -78,6 +79,7 @@ export const config = {
 
     database: {
         url: env.DATABASE_URL,
+        centralUrl: env.CENTRAL_DATABASE_URL || env.DATABASE_URL, // Falls back to main DB if not set
         ssl: env.DATABASE_SSL,
     },
 

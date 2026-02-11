@@ -1,4 +1,4 @@
-import { db } from '../db/index.js';
+import type { Database } from '../db/index.js';
 import { aiUsageLogs, clinics } from '../db/schema.js';
 import { eq, and, gte, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
@@ -27,7 +27,7 @@ export class AiUsageService {
     /**
      * Check if a clinic has AI enabled and remaining quota this month.
      */
-    static async checkQuota(clinicId: string): Promise<QuotaCheck> {
+    static async checkQuota(db: Database, clinicId: string): Promise<QuotaCheck> {
         // Get clinic AI config
         const [clinic] = await db
             .select({
@@ -77,8 +77,8 @@ export class AiUsageService {
      * Enforce AI quota — throws if AI is disabled or quota exceeded.
      * Use this as a single pre-flight check before any AI operation.
      */
-    static async enforceQuota(clinicId: string): Promise<void> {
-        const quota = await this.checkQuota(clinicId);
+    static async enforceQuota(db: Database, clinicId: string): Promise<void> {
+        const quota = await this.checkQuota(db, clinicId);
         if (!quota.allowed) {
             const message = !quota.aiEnabled
                 ? 'La IA no está habilitada para esta clínica. Contacte con el administrador para activarla.'
@@ -90,7 +90,7 @@ export class AiUsageService {
     /**
      * Log an AI usage event with token counts and estimated cost.
      */
-    static async logUsage(
+    static async logUsage(db: Database,
         clinicId: string,
         feature: AIFeature,
         model: AIModel,
@@ -128,7 +128,7 @@ export class AiUsageService {
     /**
      * Get aggregated usage summary for a clinic (for the super admin dashboard).
      */
-    static async getUsageSummary(clinicId: string, month?: Date) {
+    static async getUsageSummary(db: Database, clinicId: string, month?: Date) {
         const startOfMonth = month || new Date();
         startOfMonth.setDate(1);
         startOfMonth.setHours(0, 0, 0, 0);
@@ -204,7 +204,7 @@ export class AiUsageService {
     /**
      * Update AI configuration for a clinic.
      */
-    static async updateClinicAiConfig(clinicId: string, config: { aiEnabled?: boolean; aiMonthlyTokenLimit?: number }) {
+    static async updateClinicAiConfig(db: Database, clinicId: string, config: { aiEnabled?: boolean; aiMonthlyTokenLimit?: number }) {
         const updateData: Record<string, unknown> = { updatedAt: new Date() };
         if (config.aiEnabled !== undefined) updateData.aiEnabled = config.aiEnabled;
         if (config.aiMonthlyTokenLimit !== undefined) updateData.aiMonthlyTokenLimit = config.aiMonthlyTokenLimit;

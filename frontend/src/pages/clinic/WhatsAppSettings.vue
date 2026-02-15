@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/services/api'
+import { getTenantSlug } from '@/utils/tenant'
 import { useToast } from '@/composables/useToast'
 import {
   Cog6ToothIcon,
@@ -33,6 +34,12 @@ const form = ref({
 
 const testPhone = ref('')
 const isConfigured = ref(false)
+
+// Dynamic webhook callback URL with tenant slug
+const tenantSlug = getTenantSlug()
+const webhookCallbackUrl = computed(() =>
+  `https://cuspia.com/api/v1/whatsapp/webhook/${tenantSlug || 'tu-empresa'}`
+)
 
 // WA Notification settings
 const waNotifyForm = ref<Record<string, any>>({
@@ -144,8 +151,14 @@ const saveSettings = async () => {
   saving.value = true
   try {
     const res = await api.put<any>('/chatbot/settings', form.value)
+    const wasConfigured = isConfigured.value
     isConfigured.value = res.data?.isConfigured ?? false
     toast.success('Configuración guardada correctamente')
+    // If just became configured, load templates & notification settings
+    if (!wasConfigured && isConfigured.value) {
+      fetchWaNotifySettings()
+      fetchWaTemplates()
+    }
   } catch (err: any) {
     toast.error('Error al guardar configuración')
   } finally {
@@ -212,10 +225,13 @@ const saveWaNotifySettings = async () => {
   }
 }
 
-onMounted(() => {
-  fetchSettings()
-  fetchWaNotifySettings()
-  fetchWaTemplates()
+onMounted(async () => {
+  await fetchSettings()
+  // Only fetch templates & notification settings if WhatsApp is already configured
+  if (isConfigured.value) {
+    fetchWaNotifySettings()
+    fetchWaTemplates()
+  }
 })
 </script>
 
@@ -293,7 +309,7 @@ onMounted(() => {
             <p class="text-xs text-surface-400 mt-1">Debe coincidir con el que configures en Meta → Webhook Settings.</p>
             <div class="mt-2 text-xs bg-surface-50 border border-surface-200 rounded p-2 text-surface-600">
               <span class="block mb-1 font-semibold">Callback URL (Producción):</span>
-              <code class="font-mono bg-white px-2 py-1 rounded border border-surface-100 block w-full select-all">https://cuspia.com/api/v1/whatsapp/webhook</code>
+              <code class="font-mono bg-white px-2 py-1 rounded border border-surface-100 block w-full select-all">{{ webhookCallbackUrl }}</code>
             </div>
           </div>
         </div>

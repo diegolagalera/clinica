@@ -8,6 +8,7 @@ import { tenants, globalUsers, superadmins } from '../db/central-schema.js';
 import { tenantManager } from '../db/tenant-manager.js';
 import * as schema from '../db/schema.js';
 import { logger } from '../utils/logger.js';
+import * as storage from './storage.service.js';
 import type { Database } from '../db/index.js';
 
 const SALT_ROUNDS = 12;
@@ -108,6 +109,14 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
             .returning();
 
         logger.info({ tenantId: tenant!.id, slug: input.slug }, 'Tenant registered in central DB');
+
+        // Step 2.5: Create tenant MinIO bucket
+        try {
+            await storage.ensureBucketExists(input.slug);
+            logger.info({ slug: input.slug }, 'Tenant storage bucket created');
+        } catch (err) {
+            logger.error({ slug: input.slug, err }, 'Failed to create tenant bucket — continuing provisioning');
+        }
 
         // Step 3: Create the database if it doesn't exist
         await createDatabaseIfNotExists(input.databaseName, input.databaseUrl);

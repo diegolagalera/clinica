@@ -2,6 +2,7 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '@/services/api'
 import { toast } from '@/composables/useToast'
+import { getTenantSlug } from '@/utils/tenant'
 import type { ApiResponse, PaginatedResponse } from '@/types'
 import BarcodeScanner from '@/components/BarcodeScanner.vue'
 import {
@@ -27,6 +28,11 @@ import {
   BuildingStorefrontIcon,
   ChartBarIcon,
 } from '@heroicons/vue/24/outline'
+
+// Build image URL with tenant context for <img> tags (can't send auth headers)
+const tenantSlug = getTenantSlug()
+const stockImageUrl = (itemId: string) =>
+  `/api/v1/stock/items/${itemId}/image${tenantSlug ? `?tenant=${tenantSlug}` : ''}`
 
 interface InventoryItem {
   id: string
@@ -368,7 +374,7 @@ function openEditModal(item: InventoryItem) {
     location: item.location || '',
   }
   // Set image preview using the API endpoint (imageUrl contains filesystem path, not URL)
-  imagePreview.value = item.imageUrl ? `/api/v1/stock/items/${item.id}/image` : null
+  imagePreview.value = item.imageUrl ? stockImageUrl(item.id) : null
   showModal.value = true
 }
 
@@ -648,9 +654,9 @@ onMounted(() => {
                   <div 
                     v-if="item.imageUrl" 
                     class="w-10 h-10 rounded-lg bg-surface-100 overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary-500 transition-all"
-                    @click="lightboxImage = `/api/v1/stock/items/${item.id}/image`"
+                    @click="lightboxImage = stockImageUrl(item.id)"
                   >
-                    <img :src="`/api/v1/stock/items/${item.id}/image`" class="w-full h-full object-cover" />
+                    <img :src="stockImageUrl(item.id)" class="w-full h-full object-cover" />
                   </div>
                   <div v-else class="w-10 h-10 rounded-lg bg-surface-100 flex items-center justify-center">
                     <PhotoIcon class="w-5 h-5 text-surface-400" />

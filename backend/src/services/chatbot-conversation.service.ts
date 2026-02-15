@@ -249,7 +249,7 @@ export class ChatbotConversationService {
      * Process an incoming WhatsApp message from the webhook.
      * This is the main entry point for the conversation engine.
      */
-    static async processIncomingMessage(db: Database, message: ParsedWebhookMessage, clinicId: string) {
+    static async processIncomingMessage(db: Database, message: ParsedWebhookMessage, clinicId: string, tenantSlug?: string) {
         try {
             // 1. Find or create conversation
             const conversation = await this.findOrCreateConversation(db,
@@ -292,7 +292,8 @@ export class ChatbotConversationService {
                         if (media) {
                             const mediaUrl = await this.saveMediaFile(db,
                                 media.buffer, media.mimeType,
-                                clinicId, conversation!.id, savedMessage!.id
+                                clinicId, conversation!.id, savedMessage!.id,
+                                tenantSlug
                             );
                             // Update message with local media URL
                             await db.update(chatMessages).set({ mediaUrl })
@@ -752,7 +753,8 @@ export class ChatbotConversationService {
         mimeType: string,
         clinicId: string,
         conversationId: string,
-        messageId: string
+        messageId: string,
+        tenantSlug?: string
     ): Promise<string> {
         // Look up organization for tenant-isolated path
         const clinic = await db.query.clinics.findFirst({
@@ -765,7 +767,7 @@ export class ChatbotConversationService {
         const filename = `${messageId}${ext}`;
         const storageKey = storage.buildKey(orgId, clinicId, 'whatsapp-media', conversationId, filename);
 
-        await storage.uploadFile(storageKey, buffer, mimeType);
+        await storage.uploadFile(storageKey, buffer, mimeType, tenantSlug);
 
         logger.info({ storageKey, size: buffer.length, mimeType }, 'Media file saved to MinIO');
         return storageKey;
@@ -800,7 +802,8 @@ export class ChatbotConversationService {
         clinicId: string,
         userId: string,
         file: { buffer: Buffer; mimetype: string; originalname: string },
-        caption?: string
+        caption?: string,
+        tenantSlug?: string
     ) {
         const conversation = await this.getConversation(db, conversationId, clinicId);
         if (!conversation) throw new Error('Conversation not found');
@@ -850,7 +853,8 @@ export class ChatbotConversationService {
             file.mimetype,
             clinicId,
             conversationId,
-            `out-${Date.now()}`
+            `out-${Date.now()}`,
+            tenantSlug
         );
 
         // 4. Save message to DB

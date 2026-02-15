@@ -12,6 +12,7 @@ import { startReminderScheduler } from './jobs/reminder-scheduler.js';
 import { startRatingScheduler } from './jobs/rating-scheduler.js';
 import { startCleanupScheduler } from './jobs/cleanup-scheduler.js';
 import { initializeWebSocket } from './websocket.js';
+import { tenantManager } from './db/tenant-manager.js';
 
 const app = express();
 
@@ -22,12 +23,40 @@ const app = express();
 // Helmet for security headers
 app.use(helmet());
 
-// CORS configuration - allow multiple dev ports
+// CORS configuration - allow subdomain-based multi-tenant origins
 const allowedOrigins = [
     config.frontend.url,
     'http://localhost:5173',
     'http://localhost:5174',
 ];
+
+/**
+ * Check if the origin is a valid subdomain for multi-tenant access.
+ * Matches:
+ *   - http://*.localhost:5173  (dev)
+ *   - http://*.localhost:5174  (dev)
+ *   - https://*.cuspia.com     (prod)
+ */
+const isAllowedSubdomain = (origin: string): boolean => {
+    try {
+        const url = new URL(origin);
+        const hostname = url.hostname;
+
+        // Dev: any subdomain of localhost (e.g. mi-clinica.localhost)
+        if (hostname.endsWith('.localhost')) {
+            return ['5173', '5174', ''].includes(url.port);
+        }
+
+        // Prod: any subdomain of cuspia.com (e.g. mi-clinica.cuspia.com)
+        if (hostname.endsWith('.cuspia.com') || hostname === 'cuspia.com') {
+            return true;
+        }
+
+        return false;
+    } catch {
+        return false;
+    }
+};
 
 // Allow webhook requests from Meta (no CORS restriction)
 app.use('/api/v1/whatsapp', cors());
@@ -39,6 +68,10 @@ app.use(cors({
         if (allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
+        // Allow any tenant subdomain (*.localhost in dev, *.cuspia.com in prod)
+        if (isAllowedSubdomain(origin)) {
+            return callback(null, true);
+        }
         // Allow ngrok tunnel domains for demo/testing
         if (origin.endsWith('.ngrok-free.app')) {
             return callback(null, true);
@@ -47,7 +80,7 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Clinic-Id', 'X-Organization-Id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Clinic-Id', 'X-Organization-Id', 'X-Tenant-Slug'],
 }));
 
 // Rate limiting
@@ -100,7 +133,28 @@ app.get('/api/v1/media/*', async (req, res): Promise<void> => {
             return;
         }
 
-        const { stream, contentType, contentLength } = await storage.getFileStream(key);
+        // Resolve tenant slug for per-tenant bucket lookup:
+        // 1. From ?t= query param (used by img/audio/video tags that can't send headers)
+        // 2. From authorization header (if available)
+        let tenantSlug: string | undefined = req.query.t as string | undefined;
+
+        if (!tenantSlug) {
+            try {
+                const authHeader = req.headers.authorization;
+                if (authHeader?.startsWith('Bearer ')) {
+                    const jwt = await import('jsonwebtoken');
+                    const decoded = jwt.default.verify(
+                        authHeader.substring(7),
+                        config.jwt.accessSecret
+                    ) as any;
+                    tenantSlug = decoded.tenantSlug;
+                }
+            } catch {
+                // Token expired/invalid — ignore, will use default bucket
+            }
+        }
+
+        const { stream, contentType, contentLength } = await storage.getFileStream(key, tenantSlug);
 
         res.setHeader('Content-Type', contentType);
         if (contentLength) {
@@ -162,6 +216,7 @@ const start = async () => {
         // Graceful shutdown
         const shutdown = async () => {
             logger.info('Shutting down gracefully...');
+            await tenantManager.closeAll();
             httpServer.close(() => {
                 logger.info('Server closed');
                 process.exit(0);

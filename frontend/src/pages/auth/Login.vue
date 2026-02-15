@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { EyeIcon, EyeSlashIcon, BuildingOffice2Icon, ArrowLeftIcon } from '@heroicons/vue/24/outline'
+import { getTenantSlug, isSuperAdminDomain } from '@/utils/tenant'
+import { api } from '@/services/api'
+import { EyeIcon, EyeSlashIcon, ExclamationTriangleIcon } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
 const route = useRoute()
@@ -15,8 +17,25 @@ const showPassword = ref(false)
 const error = ref('')
 const isLoading = ref(false)
 
+// Tenant info from subdomain
+const tenantSlug = getTenantSlug()
+const isAdminDomain = isSuperAdminDomain()
+const tenantName = ref<string | null>(null)
+const tenantNotFound = ref(false)
+
 const show2FA = computed(() => authStore.requires2FA)
-const showTenantSelector = computed(() => authStore.requiresTenantSelection)
+
+// On mount, validate the tenant subdomain exists
+onMounted(async () => {
+  if (tenantSlug) {
+    try {
+      const res = await api.get<any>(`/tenants/${tenantSlug}/info`)
+      tenantName.value = (res as any).data?.name || tenantSlug
+    } catch {
+      tenantNotFound.value = true
+    }
+  }
+})
 
 const handleLogin = async () => {
   error.value = ''
@@ -24,28 +43,10 @@ const handleLogin = async () => {
 
   try {
     const result = await authStore.login(email.value, password.value)
-    
-    if (result?.requiresTenantSelection) {
-      // Tenant selector will be shown automatically via computed
+
+    if (result?.requires2FA) {
       return
     }
-
-    if (result?.success) {
-      navigateAfterLogin()
-    }
-  } catch (err: any) {
-    error.value = err.response?.data?.message || err.message || 'Error al iniciar sesión'
-  } finally {
-    isLoading.value = false
-  }
-}
-
-const handleTenantSelect = async (slug: string) => {
-  error.value = ''
-  isLoading.value = true
-
-  try {
-    const result = await authStore.loginWithTenant(slug)
 
     if (result?.success) {
       navigateAfterLogin()
@@ -98,28 +99,49 @@ const navigateAfterLogin = () => {
 }
 
 const backToLogin = () => {
-  authStore.requiresTenantSelection = false
-  authStore.availableTenants = []
   authStore.requires2FA = false
   error.value = ''
-}
-
-const getRoleBadge = (role: string) => {
-  const map: Record<string, string> = {
-    ADMIN: 'Administrador',
-    WORKER: 'Profesional',
-    USER: 'Paciente',
-  }
-  return map[role] || role
 }
 </script>
 
 <template>
   <div>
+    <!-- Tenant not found error -->
+    <template v-if="tenantNotFound">
+      <div class="text-center">
+        <div class="w-14 h-14 bg-danger-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <ExclamationTriangleIcon class="w-7 h-7 text-danger-500" />
+        </div>
+        <h2 class="text-xl font-display font-bold text-surface-900 mb-2">Empresa no encontrada</h2>
+        <p class="text-surface-500 text-sm mb-6">
+          No existe una empresa asociada a esta dirección.<br>
+          Verifica la URL e inténtalo de nuevo.
+        </p>
+        <a 
+          href="https://cuspia.com" 
+          class="btn-primary inline-flex items-center gap-2"
+        >
+          Ir a cuspia.com
+        </a>
+      </div>
+    </template>
+
     <!-- Normal login form -->
-    <template v-if="!show2FA && !showTenantSelector">
-      <h2 class="text-xl font-display font-bold text-surface-900 mb-1">Bienvenido de vuelta</h2>
-      <p class="text-surface-500 text-sm mb-6">Ingresa tus credenciales para acceder</p>
+    <template v-else-if="!show2FA">
+      <h2 class="text-xl font-display font-bold text-surface-900 mb-1">
+        {{ isAdminDomain ? 'Panel de Administración' : 'Bienvenido de vuelta' }}
+      </h2>
+      <p class="text-surface-500 text-sm mb-6">
+        <template v-if="tenantName">
+          Accede a <span class="font-medium text-primary-600">{{ tenantName }}</span>
+        </template>
+        <template v-else-if="isAdminDomain">
+          Acceso exclusivo para Super Administradores
+        </template>
+        <template v-else>
+          Ingresa tus credenciales para acceder
+        </template>
+      </p>
 
       <form @submit.prevent="handleLogin" class="space-y-4">
         <!-- Error message -->
@@ -189,67 +211,6 @@ const getRoleBadge = (role: string) => {
       </form>
     </template>
 
-    <!-- Tenant selector -->
-    <template v-else-if="showTenantSelector">
-      <div class="text-center mb-6">
-        <div class="w-12 h-12 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-3">
-          <BuildingOffice2Icon class="w-6 h-6 text-primary-600" />
-        </div>
-        <h2 class="text-xl font-display font-bold text-surface-900 mb-1">Selecciona tu empresa</h2>
-        <p class="text-surface-500 text-sm">
-          Tu cuenta está vinculada a varias empresas.
-          <br>Selecciona con cuál deseas acceder.
-        </p>
-      </div>
-
-      <!-- Error message -->
-      <div v-if="error" class="p-3 rounded-lg bg-danger-50 text-danger-600 text-sm mb-4">
-        {{ error }}
-      </div>
-
-      <!-- Tenant list -->
-      <div class="space-y-2 mb-4">
-        <button
-          v-for="tenant in authStore.availableTenants"
-          :key="tenant.slug"
-          @click="handleTenantSelect(tenant.slug)"
-          :disabled="isLoading"
-          class="w-full flex items-center justify-between p-4 rounded-xl border border-surface-200 
-                 hover:border-primary-300 hover:bg-primary-50/50 transition-all duration-200 
-                 text-left group disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-600 
-                        rounded-lg flex items-center justify-center text-white font-bold text-sm
-                        group-hover:shadow-md transition-shadow">
-              {{ tenant.name.charAt(0).toUpperCase() }}
-            </div>
-            <div>
-              <div class="font-medium text-surface-900 group-hover:text-primary-700 transition-colors">
-                {{ tenant.name }}
-              </div>
-              <div class="text-xs text-surface-500">
-                {{ getRoleBadge(tenant.role) }}
-              </div>
-            </div>
-          </div>
-          <svg class="w-5 h-5 text-surface-400 group-hover:text-primary-500 transition-colors" 
-               fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      </div>
-
-      <button
-        type="button"
-        @click="backToLogin"
-        class="btn-ghost w-full flex items-center justify-center gap-2"
-      >
-        <ArrowLeftIcon class="w-4 h-4" />
-        Volver al login
-      </button>
-    </template>
-
     <!-- 2FA verification form -->
     <template v-else>
       <h2 class="text-xl font-display font-bold text-surface-900 mb-1">Verificación en dos pasos</h2>
@@ -294,3 +255,4 @@ const getRoleBadge = (role: string) => {
     </template>
   </div>
 </template>
+

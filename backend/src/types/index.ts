@@ -19,6 +19,7 @@ export interface RefreshTokenPayload {
     userId: string;
     tokenVersion: number;
     jti?: string; // Unique JWT ID to prevent duplicate tokens
+    tenantSlug?: string | undefined; // For resolving tenant DB on refresh
 }
 
 // Multi-tenant context attached to requests

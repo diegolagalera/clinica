@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
+import { getTenantSlug } from '@/utils/tenant'
 import { onSocketEvent } from '@/services/websocket'
 import {
   ChatBubbleLeftRightIcon,
@@ -218,7 +219,7 @@ const handleFileSelect = async (event: Event) => {
 }
 
 const isImageMessage = (msg: any) => {
-  return msg.messageType === 'image' || (msg.mediaUrl && /\.(jpg|jpeg|png|webp|gif)$/i.test(msg.mediaUrl))
+  return msg.messageType === 'image' || msg.messageType === 'sticker' || (msg.mediaUrl && /\.(jpg|jpeg|png|webp|gif)$/i.test(msg.mediaUrl))
 }
 
 const getBackendUrl = (mediaPath: string) => {
@@ -230,10 +231,12 @@ const getBackendUrl = (mediaPath: string) => {
     const base = apiUrl.replace('/api/v1', '')
     return `${base}${mediaPath}`
   }
-  // MinIO key → serve via /api/v1/media/{key}
+  // MinIO key → serve via /api/v1/media/{key}?t={tenantSlug}
   const apiUrl = import.meta.env.VITE_API_URL || '/api/v1'
   const base = apiUrl.replace('/api/v1', '')
-  return `${base}/api/v1/media/${mediaPath}`
+  const slug = getTenantSlug()
+  const tenantParam = slug ? `?t=${slug}` : ''
+  return `${base}/api/v1/media/${mediaPath}${tenantParam}`
 }
 
 const openMediaPreview = (url: string) => {

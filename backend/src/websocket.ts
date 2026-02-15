@@ -36,9 +36,25 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
                 ];
                 // Allow no-origin requests (mobile apps, curl, etc.)
                 if (!origin) return callback(null, true);
+                // Exact match
                 if (allowedOrigins.includes(origin)) return callback(null, true);
                 // Allow ngrok tunnels
                 if (origin.endsWith('.ngrok-free.app')) return callback(null, true);
+
+                // Allow subdomain-based multi-tenant origins
+                try {
+                    const url = new URL(origin);
+                    const hostname = url.hostname;
+                    // Dev: *.localhost:5173/5174
+                    if (hostname.endsWith('.localhost') && ['5173', '5174', ''].includes(url.port)) {
+                        return callback(null, true);
+                    }
+                    // Prod: *.cuspia.com
+                    if (hostname.endsWith('.cuspia.com') || hostname === 'cuspia.com') {
+                        return callback(null, true);
+                    }
+                } catch { /* ignore parse errors */ }
+
                 callback(new Error('Not allowed by CORS'));
             },
             credentials: true,

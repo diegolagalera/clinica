@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL with pgvector extension
   postgres:
@@ -80,16 +78,6 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c " mc alias set myminio http://minio:9000 minioadmin minioadmin; mc mb --ignore-existing myminio/cuspia; exit 0; "
-
-  # MailHog for email testing
-  mailhog:
-    image: mailhog/mailhog:latest
-    container_name: dental_erp_mailhog
-    ports:
-      - "1025:1025" # SMTP
-      - "8025:8025" # Web UI
-    logging:
-      driver: none
 
 volumes:
   postgres_data:

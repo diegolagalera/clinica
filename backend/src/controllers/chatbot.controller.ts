@@ -404,6 +404,8 @@ router.post('/conversations/:id/messages/media', mediaUpload.single('file'), asy
             return;
         }
 
+        const tenantSlug = (req as any).user?.tenantSlug as string | undefined;
+
         const message = await ChatbotConversationService.sendHumanMediaMessage(((req as any).db as Database),
             req.params.id!,
             clinicId,
@@ -413,7 +415,8 @@ router.post('/conversations/:id/messages/media', mediaUpload.single('file'), asy
                 mimetype: file.mimetype,
                 originalname: file.originalname,
             },
-            caption
+            caption,
+            tenantSlug
         );
 
         res.json({ data: message });

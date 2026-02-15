@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosError } from 'axios'
 import { useAuthStore } from '@/stores/auth'
+import { getTenantSlug } from '@/utils/tenant'
 import { toast } from '@/composables/useToast'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api/v1'
@@ -42,8 +43,12 @@ class ApiService {
                     config.headers['X-Organization-Id'] = authStore.currentOrganizationId
                 }
 
-                // SUPERADMIN: inject tenant slug so backend resolves req.db
-                if (authStore.tenantSlug) {
+                // Subdomain-based tenant resolution (primary source)
+                const slugFromSubdomain = getTenantSlug()
+                if (slugFromSubdomain) {
+                    config.headers['X-Tenant-Slug'] = slugFromSubdomain
+                } else if (authStore.tenantSlug) {
+                    // SuperAdmin override: when managing a specific tenant from admin panel
                     config.headers['X-Tenant-Slug'] = authStore.tenantSlug
                 }
 

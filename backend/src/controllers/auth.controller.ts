@@ -1,8 +1,16 @@
 import type { Response } from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import { eq, and } from 'drizzle-orm';
 import * as authService from '../services/auth.service.js';
 import { success } from '../utils/response.js';
 import { asyncHandler } from '../middleware/index.js';
+import { BadRequestError } from '../utils/errors.js';
+import { config } from '../config/env.js';
+import { tenantManager } from '../db/tenant-manager.js';
+import { centralDb } from '../db/central-db.js';
+import { superadmins } from '../db/central-schema.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 // Validation schemas
@@ -10,7 +18,6 @@ export const loginSchema = z.object({
     email: z.string().email(),
     password: z.string().min(1),
     twoFactorCode: z.string().length(6).optional(),
-    tenantSlug: z.string().optional(), // For multi-tenant login when user has multiple tenants
 });
 
 export const registerSchema = z.object({
@@ -44,11 +51,12 @@ export const verify2FASchema = z.object({
 
 /**
  * POST /auth/login
- * Multi-tenant login: checks central DB first, then tenant DB.
- * If email exists in multiple tenants, returns availableTenants for selection.
+ * Subdomain-based login: tenant is resolved from X-Tenant-Slug header.
+ * SuperAdmin (admin subdomain) has no tenant slug → checks central DB.
  */
 export const login = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { email, password, twoFactorCode, tenantSlug } = loginSchema.parse(req.body);
+    const { email, password, twoFactorCode } = loginSchema.parse(req.body);
+    const tenantSlug = req.headers['x-tenant-slug'] as string | undefined;
 
     const result = await authService.login({ email, password, twoFactorCode, tenantSlug });
 
@@ -85,21 +93,67 @@ export const register = asyncHandler(async (req: AuthenticatedRequest, res: Resp
 export const refreshToken = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { refreshToken } = refreshSchema.parse(req.body);
 
-    // For refresh, we need to determine which tenant DB to use
-    // We decode the refresh token to get the user, then look up their tenant
-    // For now, use req.db! if available (from a previous auth middleware call)
+    let tenantSlug: string | undefined;
+    let decoded: any;
+
+    try {
+        decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
+        tenantSlug = decoded.tenantSlug;
+    } catch {
+        throw new BadRequestError('Invalid refresh token');
+    }
+
+    // ── SUPERADMIN: stateless refresh (no tenantSlug in JWT) ──
+    if (!tenantSlug) {
+        const sa = await centralDb.query.superadmins.findFirst({
+            where: and(
+                eq(superadmins.id, decoded.userId),
+                eq(superadmins.isActive, true),
+            ),
+        });
+
+        if (!sa) {
+            throw new BadRequestError('Superadmin account not found or deactivated');
+        }
+
+        // Re-issue tokens statelessly
+        const newAccessToken = authService.generateAccessToken({
+            userId: sa.id,
+            email: sa.email,
+            role: 'SUPERADMIN' as any,
+            organizationId: null,
+            clinicId: null,
+        });
+
+        const newRefreshToken = authService.generateRefreshToken({
+            userId: sa.id,
+            tokenVersion: 0,
+            jti: crypto.randomUUID(),
+        });
+
+        return res.json(success({
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken,
+            expiresIn: 3600, // 1h default, matches config.jwt.accessExpiry
+        }));
+    }
+
+    // ── Tenant user: use tenant DB ──
+    const db = await tenantManager.getConnection(tenantSlug);
+
     const result = await authService.refreshAccessToken(
-        req.db!,
+        db,
         refreshToken,
-        req.user?.tenantSlug,
+        tenantSlug,
     );
 
     if (result.success) {
-        res.json(success(result.data));
+        return res.json(success(result.data));
     } else {
-        res.status(401).json({ success: false, message: result.error });
+        return res.status(401).json(result);
     }
 });
+
 
 /**
  * POST /auth/logout
@@ -112,21 +166,24 @@ export const logout = asyncHandler(async (req: AuthenticatedRequest, res: Respon
 
 /**
  * POST /auth/forgot-password
- * Searches across all tenants — no auth required
+ * Tenant-scoped: uses X-Tenant-Slug header to determine which tenant to search.
+ * If no slug (admin domain), searches across all tenants.
  */
 export const forgotPassword = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { email } = passwordResetRequestSchema.parse(req.body);
-    await authService.requestPasswordReset(email);
+    const tenantSlug = req.headers['x-tenant-slug'] as string | undefined;
+    await authService.requestPasswordReset(email, tenantSlug);
     res.json(success(null, 'If your email is registered, you will receive a password reset link.'));
 });
 
 /**
  * POST /auth/reset-password
- * Searches across all tenants — no auth required
+ * Tenant-scoped via X-Tenant-Slug header
  */
 export const resetPassword = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { token, password } = passwordResetSchema.parse(req.body);
-    await authService.resetPassword(token, password);
+    const tenantSlug = req.headers['x-tenant-slug'] as string | undefined;
+    await authService.resetPassword(token, password, tenantSlug);
     res.json(success(null, 'Password reset successful'));
 });
 

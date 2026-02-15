@@ -48,7 +48,8 @@ const getOrgIdForClinic = async (db: Database, clinicId: string): Promise<string
  */
 export const createRadiograph = async (db: Database,
     input: CreateRadiographInput,
-    tenantContext: TenantContext
+    tenantContext: TenantContext,
+    tenantSlug?: string
 ): Promise<{ radiograph: RadiographType; aiResult: RadiographAiResultType | null }> => {
     // Validate file type
     const allowedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg'];
@@ -70,7 +71,7 @@ export const createRadiograph = async (db: Database,
     const storageKey = storage.buildKey(orgId, input.clinicId, 'radiographs', filename);
 
     // Upload to MinIO
-    await storage.uploadFile(storageKey, input.file.buffer, input.file.mimetype);
+    await storage.uploadFile(storageKey, input.file.buffer, input.file.mimetype, tenantSlug);
 
     // Create radiograph record
     const [radiograph] = await db
@@ -248,7 +249,8 @@ export const getRadiographById = async (db: Database,
  */
 export const retryAiAnalysis = async (db: Database,
     radiographId: string,
-    tenantContext: TenantContext
+    tenantContext: TenantContext,
+    tenantSlug?: string
 ): Promise<RadiographAiResultType> => {
     const radiograph = await getRadiographById(db, radiographId, tenantContext);
     if (!radiograph) {
@@ -290,7 +292,7 @@ export const retryAiAnalysis = async (db: Database,
     }
 
     // Read file from MinIO and start analysis
-    const fileBuffer = await storage.getFileBuffer(radiograph.storageKey);
+    const fileBuffer = await storage.getFileBuffer(radiograph.storageKey, tenantSlug);
     processAiAnalysis(db, radiographId, fileBuffer, radiograph.mimeType, radiograph.clinicId).catch((err) => {
         logger.error('AI analysis failed:', err);
     });
@@ -329,7 +331,8 @@ export const updateRadiographNotes = async (db: Database,
  */
 export const deleteRadiograph = async (db: Database,
     id: string,
-    tenantContext: TenantContext
+    tenantContext: TenantContext,
+    tenantSlug?: string
 ): Promise<boolean> => {
     const existing = await getRadiographById(db, id, tenantContext);
     if (!existing) {
@@ -337,7 +340,7 @@ export const deleteRadiograph = async (db: Database,
     }
 
     // Delete file from MinIO
-    await storage.deleteFile(existing.storageKey);
+    await storage.deleteFile(existing.storageKey, tenantSlug);
 
     // Delete from database (cascade will delete AI result)
     await db.delete(radiographs).where(eq(radiographs.id, id));

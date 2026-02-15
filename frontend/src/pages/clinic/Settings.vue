@@ -7,6 +7,7 @@ import {
   Cog6ToothIcon,
   EnvelopeIcon,
   DevicePhoneMobileIcon,
+  ChatBubbleOvalLeftEllipsisIcon,
   ChevronRightIcon,
   CubeIcon,
   SwatchIcon,
@@ -107,6 +108,14 @@ const configSections = [
     icon: DevicePhoneMobileIcon,
     color: 'bg-emerald-100 text-emerald-600',
     route: '/clinic/sms',
+  },
+  {
+    id: 'whatsapp',
+    name: 'WhatsApp Chatbot',
+    description: 'Configura el chatbot de WhatsApp (credenciales API, webhook, personalidad IA)',
+    icon: ChatBubbleOvalLeftEllipsisIcon,
+    color: 'bg-green-100 text-green-600',
+    route: '/clinic/whatsapp/settings',
   },
 ]
 

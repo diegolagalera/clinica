@@ -327,7 +327,8 @@ export const sendSystemEmail = async (
  */
 export const sendPasswordResetEmail = async (
     email: string,
-    resetToken: string
+    resetToken: string,
+    tenantSlug?: string
 ): Promise<{ success: boolean; error?: string }> => {
     const transporter = createSystemTransporter();
 
@@ -338,8 +339,28 @@ export const sendPasswordResetEmail = async (
         };
     }
 
-    const frontendUrl = config.frontend.url || 'http://localhost:5173';
-    const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
+    // Build subdomain-aware reset link
+    const baseUrl = config.frontend.url || 'http://localhost:5173';
+    let resetLink: string;
+
+    if (tenantSlug) {
+        // Build URL with tenant subdomain: http://mi-clinica.localhost:5173/reset-password?token=xxx
+        try {
+            const url = new URL(baseUrl);
+            const hostname = url.hostname;
+            const port = url.port ? `:${url.port}` : '';
+
+            // Dev: localhost → mi-clinica.localhost
+            // Prod: cuspia.com → mi-clinica.cuspia.com
+            const subdomainHost = `${tenantSlug}.${hostname}`;
+            resetLink = `${url.protocol}//${subdomainHost}${port}/reset-password?token=${resetToken}`;
+        } catch {
+            // Fallback to base URL if URL parsing fails
+            resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+        }
+    } else {
+        resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
+    }
 
     // Read logo file for CID attachment
     let logoAttachment;

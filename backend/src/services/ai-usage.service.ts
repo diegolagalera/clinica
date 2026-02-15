@@ -1,6 +1,6 @@
 import type { Database } from '../db/index.js';
 import { aiUsageLogs, clinics } from '../db/schema.js';
-import { eq, and, gte, sql } from 'drizzle-orm';
+import { eq, and, gte, lt, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 
 // Cost per token (USD) — approximate pricing as of 2024
@@ -147,7 +147,7 @@ export class AiUsageService {
             .where(and(
                 eq(aiUsageLogs.clinicId, clinicId),
                 gte(aiUsageLogs.createdAt, startOfMonth),
-                sql`${aiUsageLogs.createdAt} < ${endOfMonth}`
+                lt(aiUsageLogs.createdAt, endOfMonth)
             ));
 
         // Per-feature breakdown
@@ -162,7 +162,7 @@ export class AiUsageService {
             .where(and(
                 eq(aiUsageLogs.clinicId, clinicId),
                 gte(aiUsageLogs.createdAt, startOfMonth),
-                sql`${aiUsageLogs.createdAt} < ${endOfMonth}`
+                lt(aiUsageLogs.createdAt, endOfMonth)
             ))
             .groupBy(aiUsageLogs.feature);
 
@@ -178,7 +178,7 @@ export class AiUsageService {
             .where(and(
                 eq(aiUsageLogs.clinicId, clinicId),
                 gte(aiUsageLogs.createdAt, startOfMonth),
-                sql`${aiUsageLogs.createdAt} < ${endOfMonth}`
+                lt(aiUsageLogs.createdAt, endOfMonth)
             ))
             .groupBy(aiUsageLogs.model);
 

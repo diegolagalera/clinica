@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useActiveAppointmentsStore } from '@/stores/activeAppointments'
 import { toast } from '@/composables/useToast'
 import { api } from '@/services/api'
+import { getTenantSlug } from '@/utils/tenant'
 import { onSocketEvent, joinAppointmentRoom, leaveAppointmentRoom } from '@/services/websocket'
 import type { Patient, Appointment, ApiResponse, User, Radiograph } from '@/types'
 import OdontogramComponent from '@/components/odontogram/Odontogram.vue'
@@ -65,6 +66,11 @@ const router = useRouter()
 const authStore = useAuthStore()
 const activeAppointmentsStore = useActiveAppointmentsStore()
 const patientId = computed(() => route.params.id as string)
+
+// Build image URL with tenant context for <img> tags (can't send auth headers)
+const _tenantSlug = getTenantSlug()
+const stockImageUrl = (itemId: string) =>
+  `/api/v1/stock/items/${itemId}/image${_tenantSlug ? `?tenant=${_tenantSlug}` : ''}`
 
 // Check if current user is admin
 const isAdmin = computed(() => {
@@ -2067,7 +2073,7 @@ onUnmounted(() => {
                 <div class="w-8 h-8 rounded bg-surface-100 overflow-hidden flex-shrink-0">
                   <img 
                     v-if="item.imageUrl" 
-                    :src="`/api/v1/stock/items/${item.id}/image`" 
+                    :src="stockImageUrl(item.id)"
                     class="w-full h-full object-cover"
                   />
                   <div v-else class="w-full h-full flex items-center justify-center text-surface-400">
@@ -3229,7 +3235,7 @@ onUnmounted(() => {
                     <div class="w-8 h-8 rounded bg-surface-100 overflow-hidden flex-shrink-0">
                       <img 
                         v-if="item.imageUrl" 
-                        :src="`/api/v1/stock/items/${item.id}/image`" 
+                        :src="stockImageUrl(item.id)"
                         class="w-full h-full object-cover"
                       />
                       <div v-else class="w-full h-full flex items-center justify-center text-surface-400">
@@ -3256,11 +3262,11 @@ onUnmounted(() => {
                   <div 
                     class="w-8 h-8 rounded bg-surface-200 overflow-hidden flex-shrink-0"
                     :class="{ 'cursor-pointer hover:ring-2 hover:ring-primary-300': usage.item.imageUrl }"
-                    @click="usage.item.imageUrl ? stockImageLightbox = `/api/v1/stock/items/${usage.item.id}/image` : null"
+                    @click="usage.item.imageUrl ? stockImageLightbox = stockImageUrl(usage.item.id) : null"
                   >
                     <img 
                       v-if="usage.item.imageUrl" 
-                      :src="`/api/v1/stock/items/${usage.item.id}/image`" 
+                      :src="stockImageUrl(usage.item.id)"
                       class="w-full h-full object-cover"
                     />
                     <div v-else class="w-full h-full flex items-center justify-center text-surface-400">

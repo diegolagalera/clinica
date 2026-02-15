@@ -443,11 +443,11 @@ export const uploadItemImage = asyncHandler(async (req: AuthenticatedRequest, re
 
     // Delete old image if exists
     if (item.imageUrl) {
-        await storage.deleteFile(item.imageUrl);
+        await storage.deleteFile(item.imageUrl, req.user?.tenantSlug);
     }
 
     // Upload to MinIO
-    await storage.uploadFile(storageKey, req.file.buffer, req.file.mimetype);
+    await storage.uploadFile(storageKey, req.file.buffer, req.file.mimetype, req.user?.tenantSlug);
 
     // Update item with S3 key
     const [updated] = await req.db!
@@ -484,7 +484,7 @@ export const deleteItemImage = asyncHandler(async (req: AuthenticatedRequest, re
     }
 
     if (item.imageUrl) {
-        await storage.deleteFile(item.imageUrl);
+        await storage.deleteFile(item.imageUrl, req.user?.tenantSlug);
 
         await req.db!
             .update(inventoryItems)
@@ -496,17 +496,27 @@ export const deleteItemImage = asyncHandler(async (req: AuthenticatedRequest, re
 });
 
 /**
- * GET /stock/items/:id/image
- * Serve stock item image (public endpoint for img tags)
+ * GET /stock/items/:id/image?tenant=slug
+ * Serve stock item image (public endpoint for img tags).
+ * Since <img> tags cannot send Authorization or custom headers,
+ * the tenant is resolved from a `?tenant=` query parameter.
  */
 export const getItemImage = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
+    const tenantSlug = (req.query.tenant as string) || req.user?.tenantSlug;
 
     if (!id) {
         throw new BadRequestError('Item ID required');
     }
 
-    const [item] = await req.db!
+    if (!tenantSlug) {
+        throw new BadRequestError('Tenant context required (use ?tenant=slug)');
+    }
+
+    // Resolve tenant DB (since this is a public route, req.db may be undefined)
+    const db = req.db || (await (await import('../db/tenant-manager.js')).tenantManager.getConnection(tenantSlug));
+
+    const [item] = await db
         .select()
         .from(inventoryItems)
         .where(eq(inventoryItems.id, id));
@@ -515,9 +525,10 @@ export const getItemImage = asyncHandler(async (req: AuthenticatedRequest, res: 
         throw new NotFoundError('Image not found');
     }
 
-    // Stream from MinIO
-    const { stream, contentType } = await storage.getFileStream(item.imageUrl);
+    // Stream from the tenant's MinIO bucket
+    const { stream, contentType } = await storage.getFileStream(item.imageUrl, tenantSlug);
     res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     stream.pipe(res);
 });
 
@@ -604,11 +615,11 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
 
     // Delete old image if exists
     if (item.imageUrl) {
-        await storage.deleteFile(item.imageUrl);
+        await storage.deleteFile(item.imageUrl, req.user?.tenantSlug);
     }
 
     // Upload to MinIO
-    await storage.uploadFile(storageKey, imageBuffer, 'image/png');
+    await storage.uploadFile(storageKey, imageBuffer, 'image/png', req.user?.tenantSlug);
 
     // Update item
     const [updated] = await req.db!

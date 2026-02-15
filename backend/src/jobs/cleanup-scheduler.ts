@@ -81,7 +81,7 @@ const processCleanupForTenant = async (db: Database, tenantSlug: string) => {
                 for (const msg of mediaMessages) {
                     if (msg.mediaUrl) {
                         try {
-                            await storage.deleteFile(msg.mediaUrl);
+                            await storage.deleteFile(msg.mediaUrl, tenantSlug);
                             totalFilesDeleted++;
                         } catch (err: any) {
                             logger.warn({ err, mediaUrl: msg.mediaUrl }, 'Failed to delete media file from MinIO');

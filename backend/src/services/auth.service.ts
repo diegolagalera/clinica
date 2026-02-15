@@ -54,18 +54,10 @@ export interface UserInfo {
     tenantSlug?: string | undefined;
 }
 
-export interface TenantOption {
-    slug: string;
-    name: string;
-    role: string;
-}
-
 export interface LoginResult {
     tokens: AuthTokens;
     user: UserInfo;
     requires2FA?: boolean;
-    requiresTenantSelection?: boolean;
-    availableTenants?: TenantOption[];
 }
 
 /**
@@ -143,18 +135,22 @@ const buildUserInfo = (user: any, tenantSlug?: string): UserInfo => ({
 // ============================================================================
 
 /**
- * Login user (multi-tenant)
+ * Login user (subdomain-based multi-tenant)
  *
  * Flow:
- * 1. Check if email belongs to a SUPERADMIN (central DB only)
- * 2. Look up email in global_users → find which tenant(s) it belongs to
- * 3. If multiple tenants and no tenantSlug provided → return tenant selector
- * 4. Connect to tenant DB → verify password → generate tokens
+ * 1. If tenantSlug provided (from subdomain header) → go directly to tenant DB
+ * 2. If no tenantSlug (admin subdomain) → check SUPERADMIN first, then global_users
  */
 export const login = async (input: LoginInput): Promise<ServiceResult<LoginResult>> => {
     const emailLower = input.email.toLowerCase();
 
-    // ── Step 1: Check if SUPERADMIN ──────────────────────────
+    // ── Direct tenant login (subdomain provides the slug) ────
+    if (input.tenantSlug) {
+        const tenantDb = await tenantManager.getConnection(input.tenantSlug);
+        return loginAgainstTenantDb(tenantDb, emailLower, input.password, input.twoFactorCode, input.tenantSlug);
+    }
+
+    // ── No tenant slug = admin subdomain → check SUPERADMIN ──
     const superadmin = await centralDb.query.superadmins.findFirst({
         where: and(
             eq(superadmins.email, emailLower),
@@ -166,63 +162,7 @@ export const login = async (input: LoginInput): Promise<ServiceResult<LoginResul
         return loginAsSuperadmin(superadmin, input.password, input.twoFactorCode);
     }
 
-    // ── Step 2: Find user in global_users ────────────────────
-    const globalUserRecords = await centralDb.query.globalUsers.findMany({
-        where: and(
-            eq(globalUsers.email, emailLower),
-            eq(globalUsers.isActive, true),
-        ),
-        with: {
-            tenant: true,
-        },
-    });
-
-    if (globalUserRecords.length === 0) {
-        throw new UnauthorizedError('Invalid email or password');
-    }
-
-    // ── Step 3: Multiple tenants → require selection ─────────
-    if (globalUserRecords.length > 1 && !input.tenantSlug) {
-        return {
-            success: true,
-            data: {
-                tokens: { accessToken: '', refreshToken: '', expiresIn: 0 },
-                user: {
-                    id: '',
-                    email: emailLower,
-                    firstName: '',
-                    lastName: '',
-                    phone: null,
-                    role: 'USER' as Role,
-                    organizationId: null,
-                    clinicId: null,
-                    twoFactorEnabled: false,
-                    emailVerified: false,
-                },
-                requiresTenantSelection: true,
-                availableTenants: globalUserRecords
-                    .filter((gu) => gu.tenant.isActive)
-                    .map((gu) => ({
-                        slug: gu.tenant.slug,
-                        name: gu.tenant.name,
-                        role: gu.role,
-                    })),
-            },
-        };
-    }
-
-    // ── Step 4: Resolve single tenant ────────────────────────
-    const targetGlobalUser = input.tenantSlug
-        ? globalUserRecords.find((gu) => gu.tenant.slug === input.tenantSlug)
-        : globalUserRecords[0];
-
-    if (!targetGlobalUser || !targetGlobalUser.tenant.isActive) {
-        throw new UnauthorizedError('Invalid email or password');
-    }
-
-    // ── Step 5: Connect to tenant DB and verify credentials ──
-    const tenantDb = await tenantManager.getConnection(targetGlobalUser.tenant.slug);
-    return loginAgainstTenantDb(tenantDb, emailLower, input.password, input.twoFactorCode, targetGlobalUser.tenant.slug);
+    throw new UnauthorizedError('Invalid email or password');
 };
 
 /**
@@ -326,7 +266,7 @@ const loginAgainstTenantDb = async (
 
     const isValidPassword = await verifyPassword(password, user.passwordHash);
     if (!isValidPassword) {
-        throw new UnauthorizedError('Invalid email or password');
+        throw new UnauthorizedError('La contraseña no es correcta para esta empresa');
     }
 
     // 2FA check
@@ -366,6 +306,7 @@ const loginAgainstTenantDb = async (
         userId: user.id,
         tokenVersion: user.tokenVersion,
         jti: crypto.randomUUID(),
+        tenantSlug,
     };
 
     const accessToken = generateAccessToken(accessPayload);
@@ -577,6 +518,7 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
             userId: user.id,
             tokenVersion: user.tokenVersion,
             jti: crypto.randomUUID(),
+            tenantSlug,
         };
 
         const newAccessToken = generateAccessToken(accessPayload);
@@ -735,31 +677,20 @@ export const disable2FA = async (db: Database, userId: string, code: string): Pr
 
 /**
  * Request password reset
- * Note: This needs to find the user across tenants via global_users
+ * When tenantSlug is provided (from subdomain), only search that tenant.
+ * When no tenantSlug, searches across all tenants via global_users.
  */
-export const requestPasswordReset = async (email: string): Promise<ServiceResult<boolean>> => {
+export const requestPasswordReset = async (email: string, tenantSlug?: string): Promise<ServiceResult<boolean>> => {
     const emailLower = email.toLowerCase();
 
-    // Find all tenants this email belongs to
-    const globalUserRecords = await centralDb.query.globalUsers.findMany({
-        where: eq(globalUsers.email, emailLower),
-        with: { tenant: true },
-    });
-
-    // Always return success to prevent email enumeration
-    if (globalUserRecords.length === 0) {
-        return { success: true, data: true };
-    }
-
-    // Generate reset token and apply to ALL tenant DBs where this email exists
     const resetToken = crypto.randomUUID();
     const resetExpires = new Date();
     resetExpires.setHours(resetExpires.getHours() + 1);
 
-    for (const gu of globalUserRecords) {
-        if (!gu.tenant.isActive) continue;
+    if (tenantSlug) {
+        // Subdomain-scoped: only reset in this tenant
         try {
-            const tenantDb = await tenantManager.getConnection(gu.tenant.slug);
+            const tenantDb = await tenantManager.getConnection(tenantSlug);
             await tenantDb.update(users)
                 .set({
                     passwordResetToken: resetToken,
@@ -767,12 +698,37 @@ export const requestPasswordReset = async (email: string): Promise<ServiceResult
                 })
                 .where(eq(users.email, emailLower));
         } catch (err) {
-            logger.warn({ tenant: gu.tenant.slug, err }, 'Failed to set reset token in tenant DB');
+            logger.warn({ tenant: tenantSlug, err }, 'Failed to set reset token in tenant DB');
+        }
+    } else {
+        // No subdomain (admin or fallback): search all tenants
+        const globalUserRecords = await centralDb.query.globalUsers.findMany({
+            where: eq(globalUsers.email, emailLower),
+            with: { tenant: true },
+        });
+
+        if (globalUserRecords.length === 0) {
+            return { success: true, data: true };
+        }
+
+        for (const gu of globalUserRecords) {
+            if (!gu.tenant.isActive) continue;
+            try {
+                const tenantDb = await tenantManager.getConnection(gu.tenant.slug);
+                await tenantDb.update(users)
+                    .set({
+                        passwordResetToken: resetToken,
+                        passwordResetExpires: resetExpires,
+                    })
+                    .where(eq(users.email, emailLower));
+            } catch (err) {
+                logger.warn({ tenant: gu.tenant.slug, err }, 'Failed to set reset token in tenant DB');
+            }
         }
     }
 
-    // Send password reset email
-    const emailResult = await sendPasswordResetEmail(email, resetToken);
+    // Send password reset email (include tenantSlug for subdomain-aware link)
+    const emailResult = await sendPasswordResetEmail(email, resetToken, tenantSlug);
     if (!emailResult.success) {
         logger.warn(`Failed to send password reset email to ${email}: ${emailResult.error}`);
     }
@@ -780,17 +736,26 @@ export const requestPasswordReset = async (email: string): Promise<ServiceResult
     return { success: true, data: true };
 };
 
+
+
+
 /**
  * Reset password
- * Note: Token could belong to any tenant, so we search all
+ * If tenantSlug is provided, reset only in that tenant.
+ * If not provided and token exists in exactly one tenant, reset there.
+ * If not provided and token exists in multiple tenants, return error asking to specify tenant.
  */
-export const resetPassword = async (token: string, newPassword: string): Promise<ServiceResult<boolean>> => {
-    // We need to find which tenant DB has this reset token
+export const resetPassword = async (token: string, newPassword: string, tenantSlug?: string): Promise<ServiceResult<boolean>> => {
     const allTenants = await centralDb.query.tenants.findMany({
         where: eq((await import('../db/central-schema.js')).tenants.isActive, true),
     });
 
-    for (const tenant of allTenants) {
+    // If tenantSlug provided, only check that specific tenant
+    const tenantsToCheck = tenantSlug
+        ? allTenants.filter((t) => t.slug === tenantSlug)
+        : allTenants;
+
+    for (const tenant of tenantsToCheck) {
         try {
             const tenantDb = await tenantManager.getConnection(tenant.slug);
             const user = await tenantDb.query.users.findFirst({
@@ -807,6 +772,19 @@ export const resetPassword = async (token: string, newPassword: string): Promise
                         tokenVersion: user.tokenVersion + 1,
                     })
                     .where(eq(users.id, user.id));
+
+                // Clear the reset token from other tenant DBs too
+                for (const otherTenant of allTenants) {
+                    if (otherTenant.slug === tenant.slug) continue;
+                    try {
+                        const otherDb = await tenantManager.getConnection(otherTenant.slug);
+                        await otherDb.update(users)
+                            .set({ passwordResetToken: null, passwordResetExpires: null })
+                            .where(eq(users.passwordResetToken, token));
+                    } catch {
+                        // Ignore errors clearing tokens in other tenants
+                    }
+                }
 
                 return { success: true, data: true };
             }

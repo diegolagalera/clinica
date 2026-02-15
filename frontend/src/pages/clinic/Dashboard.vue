@@ -13,6 +13,7 @@ import {
   ArrowRightIcon,
   CpuChipIcon,
   ExclamationCircleIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/vue/24/outline'
 import { StarIcon as StarIconSolid } from '@heroicons/vue/24/solid'
 
@@ -35,6 +36,10 @@ const aiStatus = ref<{ active: boolean; aiEnabled: boolean; reason: string | nul
 
 // Rating stats state (admin only)
 const ratingStats = ref<{ totalRatings: number; averageRating: number; distribution: Record<number, number> } | null>(null)
+
+// Low stock state (admin + workers with stock permission)
+const lowStockItems = ref<any[]>([])
+const canViewStock = authStore.isAdmin || authStore.hasPermission('stock')
 
 const featureLabels: Record<string, string> = {
   chatbot: 'Chatbot WhatsApp',
@@ -104,11 +109,25 @@ const getStatusLabel = (status: string) => {
   return labels[status] || status
 }
 
+// Low stock loader
+const loadLowStock = async () => {
+  try {
+    const res = await api.get<any>('/stock/items', { params: { lowStock: 'true', limit: '10' } })
+    if (res.success && res.data) {
+      // Paginated response: { data: [...items], pagination: {...} }
+      lowStockItems.value = res.data.data || []
+    }
+  } catch { /* ignore — user may not have access */ }
+}
+
 onMounted(() => {
   loadDashboard()
   if (authStore.isAdmin) {
     loadAiUsage()
     loadRatingStats()
+  }
+  if (canViewStock) {
+    loadLowStock()
   }
 })
 
@@ -225,6 +244,44 @@ const loadRatingStats = async () => {
       </div>
     </div>
 
+    <!-- Low Stock Warning Card -->
+    <div v-if="canViewStock && lowStockItems.length > 0" 
+         class="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-5 shadow-sm">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex items-start gap-3">
+          <div class="relative flex-shrink-0">
+            <div class="p-2 rounded-xl bg-amber-100">
+              <ExclamationTriangleIcon class="w-5 h-5 text-amber-600" />
+            </div>
+            <span class="absolute -top-1 -right-1 w-3 h-3 bg-amber-500 rounded-full animate-pulse"></span>
+          </div>
+          <div>
+            <h3 class="font-semibold text-amber-900">
+              {{ lowStockItems.length }} {{ lowStockItems.length === 1 ? 'artículo con' : 'artículos con' }} stock bajo
+            </h3>
+            <p class="text-sm text-amber-700 mt-0.5">Los siguientes artículos están por debajo de su stock mínimo</p>
+            <div class="flex flex-wrap gap-2 mt-3">
+              <span v-for="item in lowStockItems.slice(0, 5)" :key="item.id"
+                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                <span class="w-1.5 h-1.5 rounded-full" :class="item.currentStock === 0 ? 'bg-red-500' : 'bg-amber-500'"></span>
+                {{ item.name }}
+                <span class="text-amber-600">({{ item.currentStock }}/{{ item.minStock }})</span>
+              </span>
+              <span v-if="lowStockItems.length > 5" 
+                    class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                +{{ lowStockItems.length - 5 }} más
+              </span>
+            </div>
+          </div>
+        </div>
+        <RouterLink to="/clinic/inventory" 
+                    class="flex-shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 transition-colors shadow-sm">
+          Ver stock
+          <ArrowRightIcon class="w-4 h-4" />
+        </RouterLink>
+      </div>
+    </div>
+
     <!-- Admin cards row: AI + Rating -->
     <div v-if="authStore.isAdmin" class="grid md:grid-cols-2 gap-4">
       <!-- AI Usage Card -->
@@ -290,13 +347,48 @@ const loadRatingStats = async () => {
           <p class="text-[10px] text-surface-400 text-center">Consumo del mes actual · Se reinicia mensualmente</p>
         </div>
 
+        <!-- AI enabled but no usage yet -->
+        <div v-else-if="aiUsage && aiStatus.aiEnabled && aiUsage.totals.totalTokens === 0" class="p-5 space-y-4">
+          <!-- Quota bar at 0% -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs text-surface-500">
+              <span>0 / {{ formatTokenCount(aiUsage.tokenLimit) }} tokens</span>
+              <span>0%</span>
+            </div>
+            <div class="w-full bg-surface-100 rounded-full h-2 overflow-hidden">
+              <div class="h-full rounded-full bg-accent-500 transition-all duration-500" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <!-- Empty usage message -->
+          <div class="text-center py-2">
+            <p class="text-2xl mb-2">🤖</p>
+            <p class="text-sm font-medium text-surface-700">IA activa — sin consumo este mes</p>
+            <p class="text-xs text-surface-400 mt-1">El consumo aparecerá cuando se usen funciones de IA</p>
+          </div>
+
+          <!-- Available features hint -->
+          <div class="flex flex-wrap justify-center gap-1.5">
+            <span
+              v-for="(label, key) in featureLabels"
+              :key="key"
+              class="inline-flex items-center gap-1 text-[11px] bg-surface-50 text-surface-500 px-2 py-1 rounded-md"
+            >
+              <span>{{ featureIcons[key] || '⚡' }}</span>
+              {{ label }}
+            </span>
+          </div>
+
+          <p class="text-[10px] text-surface-400 text-center">Cuota mensual · Se reinicia cada mes</p>
+        </div>
+
         <!-- No usage and AI disabled -->
         <div v-else-if="!aiStatus.aiEnabled && (!aiUsage || aiUsage.totals.totalTokens === 0)" class="p-5 text-center">
           <p class="text-sm text-surface-400">Sin consumo de IA este mes</p>
         </div>
 
         <!-- Loading -->
-        <div v-else-if="aiStatus.aiEnabled && !aiUsage" class="p-6 flex justify-center">
+        <div v-else-if="!aiUsage" class="p-6 flex justify-center">
           <div class="animate-spin w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full"></div>
         </div>
       </div>

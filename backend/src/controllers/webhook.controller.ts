@@ -1,22 +1,21 @@
 import { Router, Request, Response } from 'express';
-import { config } from '../config/env.js';
 import { WhatsAppService } from '../services/whatsapp.service.js';
 import { ChatbotConversationService } from '../services/chatbot-conversation.service.js';
 import { whatsappSettings } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
-import type { Database } from '../db/index.js';
+import { tenantManager } from '../db/tenant-manager.js';
 
 const router = Router();
 
 /**
- * GET /api/v1/whatsapp/webhook
+ * GET /api/v1/whatsapp/webhook/:tenantSlug
  * Webhook verification endpoint for Meta.
  * No auth required — Meta calls this to verify the webhook URL.
- * Checks the verify token against all clinic settings in the DB,
- * with a fallback to the WHATSAPP_VERIFY_TOKEN env var.
+ * The tenant is resolved directly from the URL slug.
  */
-router.get('/webhook', async (req: Request, res: Response) => {
+router.get('/webhook/:tenantSlug', async (req: Request, res: Response) => {
+    const tenantSlug = req.params.tenantSlug as string;
     const mode = req.query['hub.mode'] as string;
     const token = req.query['hub.verify_token'] as string;
     const challenge = req.query['hub.challenge'] as string;
@@ -25,63 +24,71 @@ router.get('/webhook', async (req: Request, res: Response) => {
         return res.sendStatus(403);
     }
 
-    const db = (req as any).db as Database;
+    try {
+        const db = await tenantManager.getConnection(tenantSlug);
 
-    // 1. Check against tokens stored in the DB (from the Settings page)
-    const clinicSettings = await db
-        .select({ webhookVerifyToken: whatsappSettings.webhookVerifyToken })
-        .from(whatsappSettings);
+        // Find any clinic in this tenant whose webhookVerifyToken matches
+        const clinicSettings = await db
+            .select({ webhookVerifyToken: whatsappSettings.webhookVerifyToken })
+            .from(whatsappSettings);
 
-    const dbMatch = clinicSettings.some((s: any) => s.webhookVerifyToken === token);
+        const match = clinicSettings.some((s) => s.webhookVerifyToken === token);
 
-    // 2. Fallback: check against env var
-    const envToken = config.whatsapp.verifyToken;
-    const envMatch = envToken && envToken === token;
+        if (match) {
+            logger.info({ tenant: tenantSlug }, 'Webhook verified successfully');
+            return res.status(200).send(challenge);
+        }
 
-    if (dbMatch || envMatch) {
-        logger.info('Webhook verified successfully');
-        return res.status(200).send(challenge);
+        logger.warn({ tenant: tenantSlug, token }, 'Webhook verification failed — token mismatch');
+        return res.sendStatus(403);
+    } catch (err) {
+        logger.error({ tenantSlug, err }, 'Failed to resolve tenant for webhook verification');
+        return res.sendStatus(403);
     }
-
-    logger.warn({ token }, 'Webhook verification failed — token mismatch');
-    return res.sendStatus(403);
 });
 
 /**
- * POST /api/v1/whatsapp/webhook
+ * POST /api/v1/whatsapp/webhook/:tenantSlug
  * Receives incoming messages and status updates from Meta.
  * No auth required — webhook payload validated by structure.
+ * The tenant is resolved directly from the URL slug.
  */
-router.post('/webhook', async (req: Request, res: Response) => {
+router.post('/webhook/:tenantSlug', async (req: Request, res: Response) => {
     // Always respond 200 immediately to Meta (they require it within 15s)
     res.sendStatus(200);
 
-    const db = (req as any).db as Database;
+    const tenantSlug = req.params.tenantSlug as string;
 
     try {
+        const db = await tenantManager.getConnection(tenantSlug);
         const parsed = WhatsAppService.parseWebhookPayload(req.body);
 
         for (const message of parsed) {
-            // Find clinic by phone_number_id
+            // Find clinic by phone_number_id within this tenant
             const [settings] = await db
                 .select()
                 .from(whatsappSettings)
                 .where(eq(whatsappSettings.phoneNumberId, message.phoneNumberId));
 
             if (!settings) {
-                logger.warn({ phoneNumberId: message.phoneNumberId }, 'No clinic found for this phone_number_id');
+                logger.warn({ tenant: tenantSlug, phoneNumberId: message.phoneNumberId }, 'No clinic found for this phone_number_id');
+                continue;
+            }
+
+            // Kill switch: if the module is disabled, skip message processing (status updates still flow)
+            if (!settings.isEnabled && message.type === 'message') {
+                logger.info({ tenant: tenantSlug, clinicId: settings.clinicId, isEnabled: settings.isEnabled }, 'WhatsApp module disabled, skipping message');
                 continue;
             }
 
             if (message.type === 'message') {
-                await ChatbotConversationService.processIncomingMessage(db, message, settings.clinicId);
-                // WebSocket events (inbound + AI reply) are emitted inside processIncomingMessage
+                await ChatbotConversationService.processIncomingMessage(db, message, settings.clinicId, tenantSlug);
             } else if (message.type === 'status') {
                 await ChatbotConversationService.processStatusUpdate(db, message);
             }
         }
     } catch (error) {
-        logger.error({ error }, 'Error processing webhook payload');
+        logger.error({ tenantSlug, error }, 'Error processing webhook payload');
     }
 });
 

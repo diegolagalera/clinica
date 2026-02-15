@@ -181,6 +181,17 @@ class TenantManager {
             idleMs: now - conn.lastAccessedAt,
         }));
     }
+
+    /**
+     * Reverse lookup: find the tenant slug for a given DB instance.
+     * Used in unauthenticated routes (webhooks, media) where only the DB is available.
+     */
+    getSlugForDb(db: Database): string | undefined {
+        for (const [slug, conn] of this.connections) {
+            if (conn.db === db) return slug;
+        }
+        return undefined;
+    }
 }
 
 // Singleton instance

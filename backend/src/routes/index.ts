@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Response, Request } from 'express';
 import authRoutes from './auth.routes.js';
 import organizationRoutes from './organization.routes.js';
 import clinicRoutes from './clinic.routes.js';
@@ -35,6 +36,24 @@ router.get('/', (_req, res) => {
         version: '1.0.0',
         docs: '/api/v1/docs',
     });
+});
+
+// Public: tenant info for login branding (no auth required)
+router.get('/tenants/:slug/info', async (req: Request, res: Response) => {
+    try {
+        const { centralDb } = await import('../db/central-db.js');
+        const result = await centralDb.execute(
+            /* sql */ `SELECT slug, name, is_active FROM tenants WHERE slug = '${req.params.slug!.replace(/'/g, "''")}' LIMIT 1`
+        );
+        const tenant = (result as any).rows?.[0] || (result as any)[0];
+        if (!tenant || !tenant.is_active) {
+            res.status(404).json({ success: false, message: 'Tenant not found' });
+            return;
+        }
+        res.json({ success: true, data: { slug: tenant.slug, name: tenant.name } });
+    } catch {
+        res.status(500).json({ success: false, message: 'Internal server error' });
+    }
 });
 
 // Mount routes

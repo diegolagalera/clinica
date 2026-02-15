@@ -1,4 +1,4 @@
-import { eq, and, gte, lte, sql, or, inArray } from 'drizzle-orm';
+import { eq, and, gte, lte, sql, or, inArray, notInArray } from 'drizzle-orm';
 import type { Database } from '../db/index.js';
 import { appointments, patients, users, appointmentWorkers, auditLogs, ratingRequests, workerClinics } from '../db/schema.js';
 import { NotFoundError, BadRequestError, ForbiddenError } from '../utils/errors.js';
@@ -231,14 +231,14 @@ export const checkConflicts = async (db: Database,
         eq(appointments.workerId, workerId),
         or(
             // New appointment starts during existing
-            and(gte(sql`${startTime}`, appointments.startTime), lte(sql`${startTime}`, appointments.endTime)),
+            and(lte(appointments.startTime, startTime), gte(appointments.endTime, startTime)),
             // New appointment ends during existing
-            and(gte(sql`${endTime}`, appointments.startTime), lte(sql`${endTime}`, appointments.endTime)),
+            and(lte(appointments.startTime, endTime), gte(appointments.endTime, endTime)),
             // New appointment contains existing
-            and(lte(sql`${startTime}`, appointments.startTime), gte(sql`${endTime}`, appointments.endTime))
+            and(gte(appointments.startTime, startTime), lte(appointments.endTime, endTime))
         ),
         // Exclude completed/cancelled/no-show - only SCHEDULED and IN_PROGRESS block the slot
-        sql`${appointments.status} NOT IN ('CANCELLED', 'NO_SHOW', 'COMPLETED')`
+        notInArray(appointments.status, ['CANCELLED', 'NO_SHOW', 'COMPLETED'])
     );
 
     if (excludeAppointmentId) {
@@ -469,7 +469,7 @@ export const getWorkerSchedule = async (db: Database,
             eq(appointments.clinicId, clinicId),
             gte(appointments.startTime, dayStart),
             lte(appointments.startTime, dayEnd),
-            sql`${appointments.status} NOT IN ('CANCELLED', 'NO_SHOW')`
+            notInArray(appointments.status, ['CANCELLED', 'NO_SHOW'])
         ),
         orderBy: (a, { asc }) => [asc(a.startTime)],
         with: {

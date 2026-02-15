@@ -42,7 +42,8 @@ export const uploadRadiograph = asyncHandler(async (req: AuthenticatedRequest, r
             notes,
             skipAnalysis: true, // Don't auto-analyze - user triggers manually
         },
-        req.tenantContext
+        req.tenantContext,
+        req.user?.tenantSlug
     );
 
     res.status(201).json(success(result));
@@ -88,7 +89,7 @@ export const getRadiographImage = asyncHandler(async (req: AuthenticatedRequest,
 
     const fileInfo = await radiographService.getRadiographFilePath(req.db!, id!, req.tenantContext);
 
-    const { stream, contentType } = await storage.getFileStream(fileInfo.path);
+    const { stream, contentType } = await storage.getFileStream(fileInfo.path, req.user?.tenantSlug);
 
     res.setHeader('Content-Type', contentType || fileInfo.mimeType);
     res.setHeader('Content-Disposition', `inline; filename="${fileInfo.filename}"`);
@@ -102,7 +103,7 @@ export const getRadiographImage = asyncHandler(async (req: AuthenticatedRequest,
 export const retryAnalysis = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const result = await radiographService.retryAiAnalysis(req.db!, id!, req.tenantContext);
+    const result = await radiographService.retryAiAnalysis(req.db!, id!, req.tenantContext, req.user?.tenantSlug);
 
     res.json(success(result));
 });
@@ -131,7 +132,7 @@ export const updateNotes = asyncHandler(async (req: AuthenticatedRequest, res: R
 export const deleteRadiograph = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await radiographService.deleteRadiograph(req.db!, id!, req.tenantContext);
+    await radiographService.deleteRadiograph(req.db!, id!, req.tenantContext, req.user?.tenantSlug);
 
     res.json(success({ deleted: true }));
 });

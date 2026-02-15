@@ -1,0 +1,54 @@
+# =============================================
+#  CUSPIA-ERP — Deploy to Production
+#  Triggers on push to main branch
+# =============================================
+
+name: 🚀 Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+
+            echo "📁 Navigating to project..."
+            cd /opt/cuspia
+
+            echo "⬇️  Pulling latest code..."
+            git pull origin main
+
+            echo "🔨 Building containers..."
+            docker compose -f docker-compose.prod.yml build --no-cache backend frontend
+
+            echo "🔄 Restarting services..."
+            docker compose -f docker-compose.prod.yml up -d
+
+            echo "🗄️  Running migrations..."
+            docker compose -f docker-compose.prod.yml exec -T backend \
+              node dist/scripts/migrate-all-tenants.js || true
+
+            echo "🧹 Cleaning up old images..."
+            docker image prune -f
+
+            echo "✅ Deploy complete! $(date)"

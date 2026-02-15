@@ -1,11 +1,26 @@
 import { eq, and, or, ilike, sql, inArray } from 'drizzle-orm';
 import type { Database } from '../db/index.js';
 import { users, organizations, clinics, staffProfiles, workerClinics } from '../db/schema.js';
+import { centralDb } from '../db/central-db.js';
+import { globalUsers, tenants } from '../db/central-schema.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../utils/errors.js';
 import type { PaginationParams, ServiceResult, TenantContext, Role } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 import bcrypt from 'bcrypt';
 
 const SALT_ROUNDS = 12;
+
+/**
+ * Resolve tenantId from slug via central DB.
+ * Returns null if slug is undefined (e.g. superadmin context).
+ */
+const resolveTenantId = async (tenantSlug?: string): Promise<string | null> => {
+    if (!tenantSlug) return null;
+    const tenant = await centralDb.query.tenants.findFirst({
+        where: eq(tenants.slug, tenantSlug),
+    });
+    return tenant?.id ?? null;
+};
 
 export interface CreateUserInput {
     email: string;
@@ -187,7 +202,8 @@ export const getUserById = async (db: Database, id: string): Promise<any | null>
  * Create a new user
  */
 export const createUser = async (db: Database,
-    input: CreateUserInput
+    input: CreateUserInput,
+    tenantSlug?: string
 ): Promise<ServiceResult<UserType>> => {
     // Check if email already exists
     const existing = await db.query.users.findFirst({
@@ -273,6 +289,24 @@ export const createUser = async (db: Database,
                 isActive: true,
             });
         }
+    }
+
+    // ── Sync to central DB global_users ──
+    try {
+        const tenantId = await resolveTenantId(tenantSlug);
+        if (tenantId) {
+            await centralDb.insert(globalUsers).values({
+                email: user!.email,
+                tenantId,
+                userId: user!.id,
+                role: user!.role,
+                isActive: true,
+            });
+            logger.info({ email: user!.email, tenantSlug }, 'User registered in global_users');
+        }
+    } catch (err) {
+        // Log but don't fail — the user was created in the tenant DB
+        logger.warn({ err, email: user!.email, tenantSlug }, 'Failed to register user in global_users');
     }
 
     return { success: true, data: user! };
@@ -384,20 +418,37 @@ export const resetUserPassword = async (db: Database,
 /**
  * Delete a user
  */
-export const deleteUser = async (db: Database, id: string): Promise<boolean> => {
+export const deleteUser = async (db: Database, id: string, tenantSlug?: string): Promise<boolean> => {
     const existing = await getUserById(db, id);
     if (!existing) {
         throw new NotFoundError('User not found');
     }
 
     await db.delete(users).where(eq(users.id, id));
+
+    // ── Remove from central DB global_users ──
+    try {
+        const tenantId = await resolveTenantId(tenantSlug);
+        if (tenantId) {
+            await centralDb.delete(globalUsers).where(
+                and(
+                    eq(globalUsers.email, existing.email),
+                    eq(globalUsers.tenantId, tenantId)
+                )
+            );
+            logger.info({ email: existing.email, tenantSlug }, 'User removed from global_users');
+        }
+    } catch (err) {
+        logger.warn({ err, email: existing.email, tenantSlug }, 'Failed to remove user from global_users');
+    }
+
     return true;
 };
 
 /**
  * Deactivate a user
  */
-export const deactivateUser = async (db: Database, id: string): Promise<boolean> => {
+export const deactivateUser = async (db: Database, id: string, tenantSlug?: string): Promise<boolean> => {
     const existing = await getUserById(db, id);
     if (!existing) {
         throw new NotFoundError('User not found');
@@ -407,6 +458,24 @@ export const deactivateUser = async (db: Database, id: string): Promise<boolean>
         .update(users)
         .set({ isActive: false, updatedAt: new Date() })
         .where(eq(users.id, id));
+
+    // ── Deactivate in central DB global_users ──
+    try {
+        const tenantId = await resolveTenantId(tenantSlug);
+        if (tenantId) {
+            await centralDb.update(globalUsers)
+                .set({ isActive: false })
+                .where(
+                    and(
+                        eq(globalUsers.email, existing.email),
+                        eq(globalUsers.tenantId, tenantId)
+                    )
+                );
+            logger.info({ email: existing.email, tenantSlug }, 'User deactivated in global_users');
+        }
+    } catch (err) {
+        logger.warn({ err, email: existing.email, tenantSlug }, 'Failed to deactivate user in global_users');
+    }
 
     return true;
 };

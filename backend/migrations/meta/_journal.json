@@ -1,68 +1,12 @@
 {
-  "version": "5",
-  "dialect": "pg",
+  "version": "7",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1769381371762,
-      "tag": "0000_bored_korvac",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1769424594050,
-      "tag": "0001_warm_the_executioner",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1769448108932,
-      "tag": "0002_next_moira_mactaggert",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1769461385886,
-      "tag": "0003_tan_sway",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1769709061483,
-      "tag": "0004_black_ultimo",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1770247391594,
-      "tag": "0005_nice_overlord",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "5",
-      "when": 1770520882786,
-      "tag": "0006_broad_luckman",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "5",
-      "when": 1770742800860,
-      "tag": "0007_furry_captain_flint",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "5",
-      "when": 1770846604252,
-      "tag": "0008_cultured_gabe_jones",
+      "version": "7",
+      "when": 1770861184269,
+      "tag": "0000_brave_storm",
       "breakpoints": true
     }
   ]

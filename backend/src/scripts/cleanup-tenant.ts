@@ -2,10 +2,16 @@ import { centralDb } from '../db/central-db.js';
 import { tenants, globalUsers } from '../db/central-schema.js';
 import { eq } from 'drizzle-orm';
 import postgres from 'postgres';
+import * as storage from '../services/storage.service.js';
 
-const slugArg = process.argv[2];
-if (!slugArg) {
+// Support both: cleanup-tenant.ts nueva-empresa  AND  cleanup-tenant.ts --slug nueva-empresa
+const args = process.argv.slice(2);
+const slugFlagIndex = args.indexOf('--slug');
+const slugArg = slugFlagIndex !== -1 ? args[slugFlagIndex + 1] : args[0];
+
+if (!slugArg || slugArg.startsWith('--')) {
     console.error('Usage: npx tsx src/scripts/cleanup-tenant.ts <slug>');
+    console.error('   or: npx tsx src/scripts/cleanup-tenant.ts --slug <slug>');
     process.exit(1);
 }
 const slug: string = slugArg;
@@ -25,6 +31,14 @@ async function cleanup() {
         console.log('✅ Deleted tenant from central DB');
     } else {
         console.log('⚠️  No tenant found in central DB');
+    }
+
+    // Delete MinIO bucket and all its contents
+    try {
+        await storage.deleteBucketWithContents(slug);
+        console.log(`✅ Deleted MinIO bucket "cuspia-${slug}"`);
+    } catch (err) {
+        console.warn(`⚠️  Could not delete MinIO bucket: ${err}`);
     }
 
     // Drop the database

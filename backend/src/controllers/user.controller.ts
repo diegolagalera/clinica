@@ -79,7 +79,7 @@ export const getUser = asyncHandler(async (req: AuthenticatedRequest, res: Respo
 export const createUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const input = createUserSchema.parse(req.body);
 
-    const result = await userService.createUser(req.db!, input as any);
+    const result = await userService.createUser(req.db!, input as any, req.user?.tenantSlug);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'User created successfully'));
@@ -121,7 +121,7 @@ export const resetPassword = asyncHandler(async (req: AuthenticatedRequest, res:
 export const deleteUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await userService.deleteUser(req.db!, id!);
+    await userService.deleteUser(req.db!, id!, req.user?.tenantSlug);
 
     res.json(success(null, 'User deleted successfully'));
 });
@@ -133,7 +133,7 @@ export const deleteUser = asyncHandler(async (req: AuthenticatedRequest, res: Re
 export const deactivateUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    await userService.deactivateUser(req.db!, id!);
+    await userService.deactivateUser(req.db!, id!, req.user?.tenantSlug);
 
     res.json(success(null, 'User deactivated successfully'));
 });
@@ -231,7 +231,7 @@ export const createOrgUser = asyncHandler(async (req: AuthenticatedRequest, res:
     const result = await userService.createUser(req.db!, {
         ...input as any,
         organizationId, // Force to current org
-    });
+    }, req.user?.tenantSlug);
 
     if (result.success) {
         res.status(201).json(success(result.data, 'User created successfully'));

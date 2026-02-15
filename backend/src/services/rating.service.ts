@@ -11,6 +11,7 @@ import {
     clinics,
 } from '../db/schema.js';
 import { logger } from '../utils/logger.js';
+import { config } from '../config/env.js';
 
 // Constants
 const HOURS_DELAY = 24; // Hours after completion to send email
@@ -19,7 +20,7 @@ const DAYS_VALID = 7; // Days the token is valid
 /**
  * Create a rating request when an appointment is marked as COMPLETED
  */
-export const createRatingRequest = async (db: Database, 
+export const createRatingRequest = async (db: Database,
     appointmentId: string,
     clinicId: string,
     patientId: string
@@ -58,10 +59,22 @@ export const createRatingRequest = async (db: Database,
             return { success: true, requestId: existingRequest.id };
         }
 
-        // Calculate scheduled time (now + 24h)
+        // Get appointment to use its endTime for scheduling
+        const appointment = await db.query.appointments.findFirst({
+            where: eq(appointments.id, appointmentId),
+        });
+
+        // Calculate scheduled time based on appointment end time (not now)
+        // This ensures the email arrives ~24h after the actual visit
         const now = new Date();
-        const scheduledFor = new Date(now);
+        const appointmentEnd = appointment?.endTime ? new Date(appointment.endTime) : now;
+        const scheduledFor = new Date(appointmentEnd);
         scheduledFor.setHours(scheduledFor.getHours() + HOURS_DELAY);
+
+        // If scheduledFor is already in the past (admin completed late), send in 1h
+        if (scheduledFor.getTime() < now.getTime()) {
+            scheduledFor.setTime(now.getTime() + 60 * 60 * 1000); // now + 1h
+        }
 
         // Calculate expiration time (scheduledFor + 7 days)
         const expiresAt = new Date(scheduledFor);
@@ -96,7 +109,7 @@ export const createRatingRequest = async (db: Database,
 /**
  * Validate a rating token and return the request data
  */
-export const validateToken = async (db: Database, 
+export const validateToken = async (db: Database,
     token: string
 ): Promise<{
     valid: boolean;
@@ -154,7 +167,7 @@ export const validateToken = async (db: Database,
 /**
  * Submit a rating for a visit
  */
-export const submitRating = async (db: Database, 
+export const submitRating = async (db: Database,
     token: string,
     rating: number,
     comment?: string
@@ -367,7 +380,7 @@ export const getWorkerRatingStats = async (db: Database, workerId: string, clini
 /**
  * Get recent ratings for a clinic with comments
  */
-export const getRecentRatings = async (db: Database, 
+export const getRecentRatings = async (db: Database,
     clinicId: string,
     limit: number = 10
 ) => {
@@ -408,7 +421,7 @@ export const getClinicRatingRequests = async (db: Database, clinicId: string) =>
  * Send a rating request email immediately (for testing)
  * Creates the request if it doesn't exist, or uses existing one
  */
-export const sendRatingEmailNow = async (db: Database, 
+export const sendRatingEmailNow = async (db: Database,
     appointmentId: string,
     clinicId: string
 ): Promise<{ success: boolean; error?: string; ratingUrl?: string; token?: string }> => {
@@ -438,7 +451,7 @@ export const sendRatingEmailNow = async (db: Database,
             where: eq(ratingRequests.appointmentId, appointmentId),
         });
 
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = config.frontend.url;
 
         if (!request) {
             // Create a new request that's immediately ready

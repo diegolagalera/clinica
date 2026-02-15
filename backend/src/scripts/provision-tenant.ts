@@ -91,10 +91,23 @@ async function main() {
     }
 
     // Build database URL for the new tenant
-    const dbHost = args['db-host'] || 'localhost';
-    const dbPort = args['db-port'] || '5432';
-    const dbUser = args['db-user'] || 'postgres';
-    const dbPassword = args['db-password'] || 'postgres';
+    // Auto-detect from DATABASE_URL env var (set by Docker) or use CLI args/defaults
+    const envDbUrl = process.env.DATABASE_URL;
+    let dbHost = args['db-host'] || 'localhost';
+    let dbPort = args['db-port'] || '5432';
+    let dbUser = args['db-user'] || 'postgres';
+    let dbPassword = args['db-password'] || 'postgres';
+
+    if (envDbUrl && !args['db-host'] && !args['db-password']) {
+        try {
+            const url = new URL(envDbUrl);
+            dbHost = url.hostname;
+            dbPort = url.port || '5432';
+            dbUser = url.username || dbUser;
+            dbPassword = url.password || dbPassword;
+        } catch { /* ignore parse errors, use defaults */ }
+    }
+
     const dbName = `cuspia_${args['slug']!.replace(/-/g, '_')}`;
     const databaseUrl = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${dbPort}/${dbName}`;
 

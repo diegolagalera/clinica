@@ -14,7 +14,8 @@ COPY . .
 ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
 
-RUN npm run build
+# Skip vue-tsc in Docker (type-check in CI instead)
+RUN npx vite build
 
 # =============================================
 # Stage 2: Serve with Nginx

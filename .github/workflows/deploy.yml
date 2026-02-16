@@ -35,6 +35,7 @@ jobs:
             cd /opt/cuspia
 
             echo "⬇️  Pulling latest code..."
+            git checkout -- .
             git pull origin main
 
             echo "🔨 Building containers..."

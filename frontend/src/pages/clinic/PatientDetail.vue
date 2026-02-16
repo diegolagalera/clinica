@@ -6,6 +6,8 @@ import { useActiveAppointmentsStore } from '@/stores/activeAppointments'
 import { toast } from '@/composables/useToast'
 import { api } from '@/services/api'
 import { getTenantSlug } from '@/utils/tenant'
+
+const API_BASE = import.meta.env.VITE_API_URL || '/api/v1'
 import { onSocketEvent, joinAppointmentRoom, leaveAppointmentRoom } from '@/services/websocket'
 import type { Patient, Appointment, ApiResponse, User, Radiograph } from '@/types'
 import OdontogramComponent from '@/components/odontogram/Odontogram.vue'
@@ -1521,7 +1523,7 @@ const handleRadiographFileChange = async (event: Event) => {
       headers['X-Organization-Id'] = authStore.currentOrganizationId
     }
 
-    const response = await fetch(`/api/v1/radiographs/patient/${patientId.value}`, {
+    const response = await fetch(`${API_BASE}/radiographs/patient/${patientId.value}`, {
       method: 'POST',
       headers,
       body: formData,
@@ -1586,7 +1588,7 @@ const loadRadiographImage = async (radiographId: string): Promise<string> => {
       headers['X-Clinic-Id'] = authStore.currentClinicId
     }
 
-    const response = await fetch(`/api/v1/radiographs/${radiographId}/image`, {
+    const response = await fetch(`${API_BASE}/radiographs/${radiographId}/image`, {
       headers,
     })
     

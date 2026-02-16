@@ -21,7 +21,9 @@ const app = express();
 // ============================================================================
 
 // Helmet for security headers
-app.use(helmet());
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 
 // CORS configuration - allow subdomain-based multi-tenant origins
 const allowedOrigins = [

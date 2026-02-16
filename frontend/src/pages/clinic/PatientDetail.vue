@@ -69,8 +69,9 @@ const patientId = computed(() => route.params.id as string)
 
 // Build image URL with tenant context for <img> tags (can't send auth headers)
 const _tenantSlug = getTenantSlug()
+const _API_BASE = import.meta.env.VITE_API_URL || '/api/v1'
 const stockImageUrl = (itemId: string) =>
-  `/api/v1/stock/items/${itemId}/image${_tenantSlug ? `?tenant=${_tenantSlug}` : ''}`
+  `${_API_BASE}/stock/items/${itemId}/image${_tenantSlug ? `?tenant=${_tenantSlug}` : ''}`
 
 // Check if current user is admin
 const isAdmin = computed(() => {

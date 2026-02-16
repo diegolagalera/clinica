@@ -31,8 +31,9 @@ import {
 
 // Build image URL with tenant context for <img> tags (can't send auth headers)
 const tenantSlug = getTenantSlug()
+const API_BASE = import.meta.env.VITE_API_URL || '/api/v1'
 const stockImageUrl = (itemId: string) =>
-  `/api/v1/stock/items/${itemId}/image${tenantSlug ? `?tenant=${tenantSlug}` : ''}`
+  `${API_BASE}/stock/items/${itemId}/image${tenantSlug ? `?tenant=${tenantSlug}` : ''}`
 
 interface InventoryItem {
   id: string

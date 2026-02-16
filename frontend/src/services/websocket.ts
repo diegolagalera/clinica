@@ -45,14 +45,25 @@ export function connectWebSocket(token: string): void {
 
     // Connection established
     socket.value.on('connect', () => {
+        const wasReconnect = status.value === 'disconnected' || status.value === 'error'
         status.value = 'connected'
         isConnected.value = true
         reconnectAttempts.value = 0
 
         console.log('🔌 WebSocket connected')
 
+        // Auto-rejoin rooms after reconnect
+        if (currentClinicRoom) {
+            socket.value?.emit('join:clinic', { clinicId: currentClinicRoom })
+            console.log('🔌 Re-joined clinic room:', currentClinicRoom)
+        }
+        if (currentAppointmentRoom) {
+            socket.value?.emit('join:appointment', { appointmentId: currentAppointmentRoom })
+            console.log('🔌 Re-joined appointment room:', currentAppointmentRoom)
+        }
+
         // Show success toast only if reconnecting
-        if (reconnectAttempts.value > 0) {
+        if (wasReconnect) {
             toast.success('Conexión restablecida')
         }
     })

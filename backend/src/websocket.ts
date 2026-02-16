@@ -158,6 +158,43 @@ export function initializeWebSocket(httpServer: HttpServer): Server {
             }, '🔌 User left appointment room');
         });
 
+        // Handle joining a clinic room dynamically (for WhatsApp chatbot etc.)
+        socket.on('join:clinic', (data: { clinicId: string }) => {
+            const { clinicId: reqClinicId } = data;
+            if (!reqClinicId) {
+                socket.emit('error', { message: 'clinicId required' });
+                return;
+            }
+
+            const room = `clinic:${reqClinicId}`;
+            socket.join(room);
+
+            logger.info({
+                socketId: socket.id,
+                userId,
+                clinicId: reqClinicId,
+                room,
+            }, '🔌 User joined clinic room');
+
+            socket.emit('joined:clinic', { clinicId: reqClinicId, success: true });
+        });
+
+        // Handle leaving a clinic room
+        socket.on('leave:clinic', (data: { clinicId: string }) => {
+            const { clinicId: reqClinicId } = data;
+            if (!reqClinicId) return;
+
+            const room = `clinic:${reqClinicId}`;
+            socket.leave(room);
+
+            logger.info({
+                socketId: socket.id,
+                userId,
+                clinicId: reqClinicId,
+                room,
+            }, '🔌 User left clinic room');
+        });
+
         // Handle disconnect
         socket.on('disconnect', (reason) => {
             logger.info({

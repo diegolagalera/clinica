@@ -190,6 +190,46 @@ export function leaveAppointmentRoom(appointmentId?: string): void {
     }
 }
 
+// Track which clinic room we're currently in
+let currentClinicRoom: string | null = null
+
+/**
+ * Join a clinic room to receive real-time chatbot events
+ */
+export function joinClinicRoom(clinicId: string): void {
+    if (!socket.value?.connected) {
+        console.warn('Cannot join clinic room: WebSocket not connected')
+        return
+    }
+
+    // Leave previous room if any
+    if (currentClinicRoom && currentClinicRoom !== clinicId) {
+        leaveClinicRoom(currentClinicRoom)
+    }
+
+    socket.value.emit('join:clinic', { clinicId })
+    currentClinicRoom = clinicId
+    console.log('🔌 Joining clinic room:', clinicId)
+}
+
+/**
+ * Leave a clinic room
+ */
+export function leaveClinicRoom(clinicId?: string): void {
+    if (!socket.value?.connected) {
+        return
+    }
+
+    const roomToLeave = clinicId || currentClinicRoom
+    if (roomToLeave) {
+        socket.value.emit('leave:clinic', { clinicId: roomToLeave })
+        console.log('🔌 Leaving clinic room:', roomToLeave)
+        if (roomToLeave === currentClinicRoom) {
+            currentClinicRoom = null
+        }
+    }
+}
+
 /**
  * Get current connection status and room management functions
  */
@@ -204,5 +244,7 @@ export function useWebSocket() {
         emit: emitSocketEvent,
         joinAppointmentRoom,
         leaveAppointmentRoom,
+        joinClinicRoom,
+        leaveClinicRoom,
     }
 }

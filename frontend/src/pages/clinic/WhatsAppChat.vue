@@ -4,7 +4,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { api } from '@/services/api'
 import { useToast } from '@/composables/useToast'
 import { getTenantSlug } from '@/utils/tenant'
-import { onSocketEvent } from '@/services/websocket'
+import { onSocketEvent, joinClinicRoom, leaveClinicRoom } from '@/services/websocket'
+import { useAuthStore } from '@/stores/auth'
 import {
   ChatBubbleLeftRightIcon,
   MagnifyingGlassIcon,
@@ -565,6 +566,12 @@ onMounted(async () => {
     aiStatus.value = { active: data.active, reason: data.reason }
   })
 
+  // Join clinic room for real-time chatbot events
+  const authStore = useAuthStore()
+  if (authStore.currentClinicId) {
+    joinClinicRoom(authStore.currentClinicId)
+  }
+
   // Resync on tab focus
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
@@ -573,6 +580,7 @@ onUnmounted(() => {
   if (unsubNewMessage) unsubNewMessage()
   if (unsubConversationUpdated) unsubConversationUpdated()
   if (unsubAiStatus) unsubAiStatus()
+  leaveClinicRoom()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 

@@ -168,18 +168,20 @@ let currentAppointmentRoom: string | null = null
  * Join an appointment room to receive real-time stock updates
  */
 export function joinAppointmentRoom(appointmentId: string): void {
-    if (!socket.value?.connected) {
-        console.warn('Cannot join appointment room: WebSocket not connected')
-        return
-    }
-
     // Leave previous room if any
     if (currentAppointmentRoom && currentAppointmentRoom !== appointmentId) {
         leaveAppointmentRoom(currentAppointmentRoom)
     }
 
-    socket.value.emit('join:appointment', { appointmentId })
+    // Always save the desired room — the connect handler will join when ready
     currentAppointmentRoom = appointmentId
+
+    if (!socket.value?.connected) {
+        console.warn('Cannot join appointment room yet: WebSocket not connected (will auto-join on connect)')
+        return
+    }
+
+    socket.value.emit('join:appointment', { appointmentId })
     console.log('🔌 Joining appointment room:', appointmentId)
 }
 
@@ -208,18 +210,20 @@ let currentClinicRoom: string | null = null
  * Join a clinic room to receive real-time chatbot events
  */
 export function joinClinicRoom(clinicId: string): void {
-    if (!socket.value?.connected) {
-        console.warn('Cannot join clinic room: WebSocket not connected')
-        return
-    }
-
     // Leave previous room if any
     if (currentClinicRoom && currentClinicRoom !== clinicId) {
         leaveClinicRoom(currentClinicRoom)
     }
 
-    socket.value.emit('join:clinic', { clinicId })
+    // Always save the desired room — the connect handler will join when ready
     currentClinicRoom = clinicId
+
+    if (!socket.value?.connected) {
+        console.warn('Cannot join clinic room yet: WebSocket not connected (will auto-join on connect)')
+        return
+    }
+
+    socket.value.emit('join:clinic', { clinicId })
     console.log('🔌 Joining clinic room:', clinicId)
 }
 

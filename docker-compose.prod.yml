@@ -56,6 +56,8 @@ services:
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
       interval: 30s

@@ -757,6 +757,24 @@ export class ChatbotConversationService {
             updatedAt: new Date(),
         }).where(eq(chatConversations.id, conversationId));
 
+        // Emit WebSocket event so other users see the human message in real-time
+        if (message) {
+            emitToClinic(clinicId, 'chatbot:new-message', {
+                conversationId,
+                message: {
+                    id: message.id,
+                    conversationId: message.conversationId,
+                    direction: message.direction,
+                    content: message.content,
+                    messageType: message.messageType,
+                    isFromAi: false,
+                    status: message.status,
+                    createdAt: message.createdAt,
+                    sentById: userId,
+                },
+            });
+        }
+
         return message;
     }
 
@@ -913,6 +931,25 @@ export class ChatbotConversationService {
             lastMessageAt: new Date(),
             updatedAt: new Date(),
         }).where(eq(chatConversations.id, conversationId));
+
+        // 6. Emit WebSocket event so other users see the media message in real-time
+        if (message) {
+            emitToClinic(clinicId, 'chatbot:new-message', {
+                conversationId,
+                message: {
+                    id: message.id,
+                    conversationId: message.conversationId,
+                    direction: message.direction,
+                    content: message.content,
+                    messageType: message.messageType,
+                    mediaUrl: message.mediaUrl,
+                    isFromAi: false,
+                    status: message.status,
+                    createdAt: message.createdAt,
+                    sentById: userId,
+                },
+            });
+        }
 
         return message;
     }

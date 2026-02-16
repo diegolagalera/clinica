@@ -445,7 +445,37 @@ export class ChatbotConversationService {
                 eq(chatConversations.waContactPhone, normalized),
             ));
 
-        if (existing) return existing;
+        if (existing) {
+            // Reconcile: if conversation is linked to a lead but patient now exists,
+            // upgrade the conversation to link to the patient instead
+            if (existing.leadId && !existing.patientId) {
+                const patient = await this.findPatientByPhone(db, clinicId, phone);
+                if (patient) {
+                    // Update conversation to point to the patient
+                    await db.update(chatConversations)
+                        .set({ patientId: patient.id, leadId: null })
+                        .where(eq(chatConversations.id, existing.id));
+
+                    // Mark the lead as converted
+                    await db.update(chatLeads)
+                        .set({
+                            status: 'CONVERTED',
+                            convertedPatientId: patient.id,
+                            convertedAt: new Date(),
+                        })
+                        .where(eq(chatLeads.id, existing.leadId));
+
+                    logger.info({
+                        conversationId: existing.id,
+                        leadId: existing.leadId,
+                        patientId: patient.id,
+                    }, 'Lead auto-reconciled to existing patient');
+
+                    return { ...existing, patientId: patient.id, leadId: null };
+                }
+            }
+            return existing;
+        }
 
         // Look up patient by phone (use original phone for patient lookup flexibility)
         const patient = await this.findPatientByPhone(db, clinicId, phone);

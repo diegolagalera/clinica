@@ -195,8 +195,8 @@ const createUser = async () => {
       phone: userForm.value.phoneNumber ? `${userForm.value.phoneCountry}${userForm.value.phoneNumber}` : undefined,
       role: userForm.value.role,
       clinicIds: userForm.value.clinicIds.length > 0 ? userForm.value.clinicIds : undefined,
-      licenseNumber: userForm.value.role === 'WORKER' ? userForm.value.licenseNumber || undefined : undefined,
-      specialty: userForm.value.role === 'WORKER' ? userForm.value.specialty || undefined : undefined,
+      licenseNumber: userForm.value.licenseNumber || undefined,
+      specialty: userForm.value.specialty || undefined,
     })
     showCreateModal.value = false
     resetUserForm()
@@ -222,10 +222,19 @@ const updateUser = async () => {
       phone: userForm.value.phoneNumber ? `${userForm.value.phoneCountry}${userForm.value.phoneNumber}` : undefined,
       role: userForm.value.role,
       clinicIds: userForm.value.clinicIds,
-      licenseNumber: userForm.value.role === 'WORKER' ? userForm.value.licenseNumber || undefined : undefined,
-      specialty: userForm.value.role === 'WORKER' ? userForm.value.specialty || undefined : undefined,
+      licenseNumber: userForm.value.licenseNumber || undefined,
+      specialty: userForm.value.specialty || undefined,
       clinicPermissions: userForm.value.role === 'WORKER' ? userForm.value.clinicPermissions : undefined,
     })
+    // If editing self, sync authStore so sidebar updates
+    if (selectedStaff.value.id === authStore.user?.id && authStore.user) {
+      authStore.user.firstName = userForm.value.firstName
+      authStore.user.lastName = userForm.value.lastName
+      if (userForm.value.phoneNumber) {
+        authStore.user.phone = `${userForm.value.phoneCountry}${userForm.value.phoneNumber}`
+      }
+      authStore.persistUser()
+    }
     showEditModal.value = false
     await loadStaff()
   } catch (err: any) {
@@ -737,7 +746,7 @@ onMounted(async () => {
                 <p class="text-xs text-surface-400 mt-1">Selecciona una o más clínicas</p>
               </div>
               
-              <template v-if="userForm.role === 'WORKER'">
+              <template v-if="userForm.role === 'WORKER' || userForm.role === 'ADMIN'">
                 <div>
                   <label class="label">Nº Colegiado</label>
                   <input v-model="userForm.licenseNumber" type="text" class="input" />

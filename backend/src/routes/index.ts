@@ -19,6 +19,7 @@ import assistantRoutes from './assistant.routes.js';
 import feedbackRoutes from './feedback.routes.js';
 import aiAdminRoutes from './ai-admin.routes.js';
 import adminRoutes from './admin.routes.js';
+import prescriptionRoutes from './prescription.routes.js';
 import chatbotRoutes from '../controllers/chatbot.controller.js';
 import webhookRoutes from '../controllers/webhook.controller.js';
 
@@ -43,7 +44,7 @@ router.get('/tenants/:slug/info', async (req: Request, res: Response) => {
     try {
         const { centralDb } = await import('../db/central-db.js');
         const result = await centralDb.execute(
-            /* sql */ `SELECT slug, name, is_active FROM tenants WHERE slug = '${req.params.slug!.replace(/'/g, "''")}' LIMIT 1`
+            /* sql */ `SELECT slug, name, is_active FROM tenants WHERE slug = '${req.params.slug!.replace(/'/g, "''")}'  LIMIT 1`
         );
         const tenant = (result as any).rows?.[0] || (result as any)[0];
         if (!tenant || !tenant.is_active) {
@@ -76,6 +77,7 @@ router.use('/assistant', assistantRoutes);
 router.use('/feedback', feedbackRoutes);
 router.use('/ai-admin', aiAdminRoutes);
 router.use('/admin', adminRoutes);
+router.use('/prescriptions', prescriptionRoutes);
 router.use('/chatbot', chatbotRoutes);
 router.use('/whatsapp', webhookRoutes);
 

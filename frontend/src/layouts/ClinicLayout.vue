@@ -8,6 +8,7 @@ import ActiveAppointmentChips from '@/components/ActiveAppointmentChips.vue'
 import AssistantChat from '@/components/AssistantChat.vue'
 import ReportBugModal from '@/components/ReportBugModal.vue'
 import PhoneCountrySelect from '@/components/PhoneCountrySelect.vue'
+import SignaturePad from '@/components/SignaturePad.vue'
 import {
   HomeIcon,
   UsersIcon,
@@ -114,8 +115,11 @@ const notchMargin = computed(() => sidebarCollapsed.value ? 'lg:left-16' : 'lg:l
 
 // Profile edit modal
 const showProfileModal = ref(false)
-const profileTab = ref<'info' | 'password'>('info')
+const profileTab = ref<'info' | 'password' | 'signature'>('info')
 const isSavingProfile = ref(false)
+// Signature state
+const signatureImage = ref<string | null>(null)
+const isSavingSignature = ref(false)
 
 // Country codes list (most common for Spain market)
 const countryCodes = [
@@ -138,6 +142,8 @@ const profileForm = ref({
   lastName: '',
   phoneCountry: '+34',
   phoneNumber: '',
+  licenseNumber: '',
+  specialty: '',
 })
 const passwordForm = ref({
   currentPassword: '',
@@ -172,6 +178,8 @@ const openProfileModal = () => {
     lastName: authStore.user?.lastName || '',
     phoneCountry,
     phoneNumber,
+    licenseNumber: '',
+    specialty: '',
   }
   passwordForm.value = {
     currentPassword: '',
@@ -181,6 +189,35 @@ const openProfileModal = () => {
   passwordError.value = ''
   profileTab.value = 'info'
   showProfileModal.value = true
+  // Load staff profile in background
+  loadStaffProfile()
+}
+
+// Load staff profile (signature + license + specialty)
+const loadStaffProfile = async () => {
+  try {
+    const res = await api.get<any>('/staff/me')
+    const data = (res as any).data
+    signatureImage.value = data?.signatureImage || null
+    profileForm.value.licenseNumber = data?.licenseNumber || ''
+    profileForm.value.specialty = data?.specialty || ''
+  } catch {
+    // Non-blocking
+  }
+}
+
+// Save signature
+const saveSignature = async (dataUrl: string) => {
+  isSavingSignature.value = true
+  try {
+    await api.put('/staff/profile', { signatureImage: dataUrl })
+    signatureImage.value = dataUrl
+    toast.success('Firma guardada correctamente')
+  } catch {
+    toast.error('Error al guardar la firma')
+  } finally {
+    isSavingSignature.value = false
+  }
 }
 
 // Save profile info
@@ -197,11 +234,17 @@ const saveProfileInfo = async () => {
       lastName: profileForm.value.lastName,
       phone,
     })
+    // Save staff profile fields (licenseNumber, specialty)
+    await api.put('/staff/profile', {
+      licenseNumber: profileForm.value.licenseNumber || undefined,
+      specialty: profileForm.value.specialty || undefined,
+    })
     // Update local auth store
     if (authStore.user) {
       authStore.user.firstName = profileForm.value.firstName
       authStore.user.lastName = profileForm.value.lastName
       authStore.user.phone = phone
+      authStore.persistUser()
     }
     toast.success('Perfil actualizado')
     showProfileModal.value = false
@@ -429,7 +472,7 @@ const changePassword = async () => {
         class="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4"
         @click.self="showProfileModal = false"
       >
-        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full">
           <!-- Header -->
           <div class="flex items-center justify-between p-4 border-b border-surface-200">
             <h3 class="text-lg font-semibold text-surface-900">Editar Perfil</h3>
@@ -453,6 +496,12 @@ const changePassword = async () => {
               :class="['flex-1 py-3 text-sm font-medium transition-colors', profileTab === 'password' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-surface-500 hover:text-surface-700']"
             >
               Contraseña
+            </button>
+            <button 
+              @click="profileTab = 'signature'"
+              :class="['flex-1 py-3 text-sm font-medium transition-colors', profileTab === 'signature' ? 'text-primary-600 border-b-2 border-primary-600' : 'text-surface-500 hover:text-surface-700']"
+            >
+              Firma
             </button>
           </div>
 
@@ -492,6 +541,24 @@ const changePassword = async () => {
                 </div>
                 <p class="text-xs text-surface-400 mt-1">Solo números, sin espacios</p>
               </div>
+              <div>
+                <label class="block text-sm font-medium text-surface-700 mb-1">Nº Colegiado</label>
+                <input 
+                  v-model="profileForm.licenseNumber"
+                  type="text"
+                  class="input w-full"
+                  placeholder="Ej: 28/12345"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-surface-700 mb-1">Especialidad</label>
+                <input 
+                  v-model="profileForm.specialty"
+                  type="text"
+                  class="input w-full"
+                  placeholder="Ej: Odontología General"
+                />
+              </div>
               <div class="flex gap-3 pt-2">
                 <button type="button" @click="showProfileModal = false" class="btn-secondary flex-1">
                   Cancelar
@@ -503,7 +570,7 @@ const changePassword = async () => {
             </form>
 
             <!-- Password Tab -->
-            <form v-else @submit.prevent="changePassword" class="space-y-4">
+            <form v-else-if="profileTab === 'password'" @submit.prevent="changePassword" class="space-y-4">
               <div>
                 <label class="block text-sm font-medium text-surface-700 mb-1">Contraseña actual</label>
                 <input 
@@ -543,6 +610,22 @@ const changePassword = async () => {
                 </button>
               </div>
             </form>
+
+            <!-- Signature Tab -->
+            <div v-else-if="profileTab === 'signature'" class="space-y-4">
+              <p class="text-sm text-surface-500">Tu firma se incluirá automáticamente en las recetas médicas generadas.</p>
+              <div v-if="isSavingSignature" class="flex items-center justify-center py-8">
+                <svg class="animate-spin h-6 w-6 text-primary-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+              <SignaturePad
+                v-else
+                :modelValue="signatureImage"
+                @update:modelValue="saveSignature"
+              />
+            </div>
           </div>
         </div>
       </div>

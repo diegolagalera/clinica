@@ -17,6 +17,7 @@ export const updateProfileSchema = z.object({
     specialty: z.string().max(100).optional(),
     bio: z.string().optional(),
     color: z.string().max(7).optional(),
+    signatureImage: z.string().optional(), // Base64 PNG of professional signature
 });
 
 /**
@@ -35,6 +36,15 @@ export const getStaff = asyncHandler(async (req: AuthenticatedRequest, res: Resp
     } else {
         res.json(success([]));
     }
+});
+
+/**
+ * GET /staff/me
+ * Get current user's staff profile
+ */
+export const getMyProfile = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const profile = await staffService.getStaffProfile(req.db!, req.user!.userId);
+    res.json(success(profile));
 });
 
 /**

@@ -22,6 +22,7 @@ import adminRoutes from './admin.routes.js';
 import prescriptionRoutes from './prescription.routes.js';
 import chatbotRoutes from '../controllers/chatbot.controller.js';
 import webhookRoutes from '../controllers/webhook.controller.js';
+import esignatureRoutes from './esignature.routes.js';
 
 const router = Router();
 
@@ -80,6 +81,7 @@ router.use('/admin', adminRoutes);
 router.use('/prescriptions', prescriptionRoutes);
 router.use('/chatbot', chatbotRoutes);
 router.use('/whatsapp', webhookRoutes);
+router.use('/esignature', esignatureRoutes);
 
 export default router;
 

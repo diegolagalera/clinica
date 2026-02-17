@@ -2602,3 +2602,131 @@ export const clinicMedicationsRelations = relations(clinicMedications, ({ one })
         references: [clinics.id],
     }),
 }));
+
+// ============================================================================
+// E-SIGNATURE: DOCUMENT TEMPLATES
+// ============================================================================
+
+export const documentTemplateCategoryEnum = pgEnum('document_template_category', [
+    'CONSENT',
+    'DATA_PROTECTION',
+    'SURGERY_AUTH',
+    'TREATMENT_PLAN',
+    'ORTHODONTICS',
+    'EXTRACTION',
+    'WHITENING',
+    'MINOR_AUTH',
+    'RADIOGRAPH_CONSENT',
+    'OTHER',
+]);
+
+export const signingStatusEnum = pgEnum('signing_status', [
+    'DRAFT',
+    'PENDING',
+    'SIGNED',
+    'DECLINED',
+    'EXPIRED',
+    'CANCELLED',
+]);
+
+export const signingMethodEnum = pgEnum('signing_method', [
+    'EMBEDDED',
+    'EMAIL',
+]);
+
+export const documentTemplates = pgTable(
+    'document_templates',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        name: varchar('name', { length: 255 }).notNull(),
+        description: text('description'),
+        category: documentTemplateCategoryEnum('category').notNull().default('OTHER'),
+        signnowTemplateId: varchar('signnow_template_id', { length: 255 }),
+        fileStorageKey: varchar('file_storage_key', { length: 500 }), // S3 backup of original PDF
+        fields: jsonb('fields').default([]), // Field positions [{name, type, x, y, width, height, page}]
+        fieldMappings: jsonb('field_mappings').default([]), // [{signnowFieldName, patientDataKey, label}]
+        isActive: boolean('is_active').default(true).notNull(),
+        isConfigured: boolean('is_configured').default(false).notNull(), // Whether fields have been placed via embedded editor
+        createdById: uuid('created_by_id').references(() => users.id),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('document_templates_clinic_id_idx').on(table.clinicId),
+        categoryIdx: index('document_templates_category_idx').on(table.category),
+    })
+);
+
+export const documentTemplatesRelations = relations(documentTemplates, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [documentTemplates.clinicId],
+        references: [clinics.id],
+    }),
+    createdBy: one(users, {
+        fields: [documentTemplates.createdById],
+        references: [users.id],
+    }),
+}));
+
+// ============================================================================
+// E-SIGNATURE: SIGNING DOCUMENTS (individual instances sent to patients)
+// ============================================================================
+
+export const signingDocuments = pgTable(
+    'signing_documents',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        patientId: uuid('patient_id')
+            .notNull()
+            .references(() => patients.id, { onDelete: 'cascade' }),
+        templateId: uuid('template_id')
+            .references(() => documentTemplates.id, { onDelete: 'set null' }),
+        name: varchar('name', { length: 255 }).notNull(), // Document name (copied from template or custom)
+        signnowDocumentId: varchar('signnow_document_id', { length: 255 }),
+        status: signingStatusEnum('status').notNull().default('DRAFT'),
+        signingMethod: signingMethodEnum('signing_method').notNull().default('EMBEDDED'),
+        signedAt: timestamp('signed_at', { withTimezone: true }),
+        signerIp: varchar('signer_ip', { length: 45 }),
+        signedPdfStorageKey: varchar('signed_pdf_storage_key', { length: 500 }), // S3 key of final signed PDF
+        sentById: uuid('sent_by_id')
+            .notNull()
+            .references(() => users.id),
+        emailSentTo: varchar('email_sent_to', { length: 255 }), // Email address used for EMAIL method
+        expiresAt: timestamp('expires_at', { withTimezone: true }), // Signing link expiration
+        metadata: jsonb('metadata').default({}), // Extra data: SignNow response details etc.
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('signing_documents_clinic_id_idx').on(table.clinicId),
+        patientIdIdx: index('signing_documents_patient_id_idx').on(table.patientId),
+        templateIdIdx: index('signing_documents_template_id_idx').on(table.templateId),
+        statusIdx: index('signing_documents_status_idx').on(table.status),
+        createdAtIdx: index('signing_documents_created_at_idx').on(table.createdAt),
+    })
+);
+
+export const signingDocumentsRelations = relations(signingDocuments, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [signingDocuments.clinicId],
+        references: [clinics.id],
+    }),
+    patient: one(patients, {
+        fields: [signingDocuments.patientId],
+        references: [patients.id],
+    }),
+    template: one(documentTemplates, {
+        fields: [signingDocuments.templateId],
+        references: [documentTemplates.id],
+    }),
+    sentBy: one(users, {
+        fields: [signingDocuments.sentById],
+        references: [users.id],
+    }),
+}));

@@ -58,6 +58,11 @@ const envSchema = z.object({
     WHATSAPP_VERIFY_TOKEN: z.string().optional(),
     ENCRYPTION_KEY: z.string().min(32).optional(),
     NGROK_AUTHTOKEN: z.string().optional(),
+
+    // SignNow E-Signature
+    SIGNNOW_API_KEY: z.string().optional(),
+    SIGNNOW_API_URL: z.string().url().optional(),
+
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -146,5 +151,11 @@ export const config = {
 
     ngrok: {
         authtoken: env.NGROK_AUTHTOKEN,
+    },
+
+    signnow: {
+        apiKey: env.SIGNNOW_API_KEY,
+        apiUrl: env.SIGNNOW_API_URL || 'https://api.signnow.com',
+
     },
 } as const;

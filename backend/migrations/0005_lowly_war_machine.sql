@@ -1,0 +1,2 @@
+ALTER TABLE "document_templates" ADD COLUMN "field_mappings" jsonb DEFAULT '[]'::jsonb;--> statement-breakpoint
+ALTER TABLE "document_templates" ADD COLUMN "is_configured" boolean DEFAULT false NOT NULL;

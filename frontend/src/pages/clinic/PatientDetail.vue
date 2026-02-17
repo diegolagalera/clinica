@@ -12,6 +12,7 @@ import { onSocketEvent, joinAppointmentRoom, leaveAppointmentRoom } from '@/serv
 import type { Patient, Appointment, ApiResponse, User, Radiograph } from '@/types'
 import OdontogramComponent from '@/components/odontogram/Odontogram.vue'
 import PrescriptionTab from '@/pages/clinic/components/PrescriptionTab.vue'
+import PatientDocuments from '@/pages/clinic/PatientDocuments.vue'
 import {
   ArrowLeftIcon,
   PhoneIcon,
@@ -2182,6 +2183,13 @@ onUnmounted(() => {
           >
             Recetas
           </button>
+          <button
+            @click="activeTab = 'documents'"
+            :class="['px-4 py-3 font-medium text-sm transition-colors border-b-2 -mb-px', 
+              activeTab === 'documents' ? 'border-primary-500 text-primary-600' : 'border-transparent text-surface-500 hover:text-surface-700']"
+          >
+            Documentos
+          </button>
         </nav>
       </div>
 
@@ -2688,6 +2696,11 @@ onUnmounted(() => {
       <!-- Tab: Prescriptions -->
       <div v-if="activeTab === 'prescriptions'" class="space-y-6">
         <PrescriptionTab :patientId="patientId" />
+      </div>
+
+      <!-- Tab: Documents (E-Signature) -->
+      <div v-if="activeTab === 'documents'" class="space-y-6">
+        <PatientDocuments :patientId="patientId" :patient="patient" />
       </div>
 
       <!-- Radiograph Upload Modal -->

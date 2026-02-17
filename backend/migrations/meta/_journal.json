@@ -29,6 +29,20 @@
       "when": 1771349024591,
       "tag": "0003_timezone-aware-timestamps",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771360666007,
+      "tag": "0004_messy_zeigeist",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1771370285167,
+      "tag": "0005_lowly_war_machine",
+      "breakpoints": true
     }
   ]
 }

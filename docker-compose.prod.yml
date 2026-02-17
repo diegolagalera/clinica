@@ -120,6 +120,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      SIGNNOW_API_KEY: ${SIGNNOW_API_KEY:-}
+      SIGNNOW_API_URL: ${SIGNNOW_API_URL:-https://api.signnow.com}
       RATE_LIMIT_WINDOW_MS: 60000
       RATE_LIMIT_MAX_REQUESTS: 100
     networks:

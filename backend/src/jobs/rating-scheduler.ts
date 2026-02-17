@@ -52,6 +52,7 @@ const sendRatingEmail = async (db: Database, request: any): Promise<boolean | 's
             year: 'numeric',
             month: 'long',
             day: 'numeric',
+            timeZone: 'Europe/Madrid',
         });
 
         // Try to get custom template, otherwise use default

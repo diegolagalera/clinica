@@ -28,7 +28,7 @@ interface AppointmentNotificationData {
 /**
  * Send appointment notification email
  */
-export const sendAppointmentNotification = async (db: Database, 
+export const sendAppointmentNotification = async (db: Database,
     data: AppointmentNotificationData
 ): Promise<{ success: boolean; logId?: string; error?: string }> => {
     try {
@@ -114,10 +114,12 @@ export const sendAppointmentNotification = async (db: Database,
             year: 'numeric',
             month: 'long',
             day: 'numeric',
+            timeZone: 'Europe/Madrid',
         });
         const timeFormatter = new Intl.DateTimeFormat('es-ES', {
             hour: '2-digit',
             minute: '2-digit',
+            timeZone: 'Europe/Madrid',
         });
 
         // Prepare variables
@@ -253,7 +255,7 @@ export const sendAppointmentNotification = async (db: Database,
 /**
  * Get notification logs for a clinic
  */
-export const getNotificationLogs = async (db: Database, 
+export const getNotificationLogs = async (db: Database,
     clinicId: string,
     options: { limit?: number; offset?: number } = {}
 ) => {

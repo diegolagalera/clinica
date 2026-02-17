@@ -392,7 +392,7 @@ const generatePrescriptionPdf = async (data: PdfData): Promise<Buffer> => {
                 : new Date(prescription.createdAt);
             doc.fontSize(10).font('Helvetica')
                 .fillColor('#64748B')
-                .text(`Fecha: ${createdAt.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, { align: 'right' });
+                .text(`Fecha: ${createdAt.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Madrid' })}`, { align: 'right' });
 
             // ── Patient info ──
             doc.moveDown(1);
@@ -411,7 +411,7 @@ const generatePrescriptionPdf = async (data: PdfData): Promise<Buffer> => {
                     ? patient.dateOfBirth
                     : new Date(patient.dateOfBirth);
                 const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
-                doc.text(`Fecha de nacimiento: ${dob.toLocaleDateString('es-ES')} (${age} años)`);
+                doc.text(`Fecha de nacimiento: ${dob.toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' })} (${age} años)`);
             }
 
             // ── Diagnosis ──

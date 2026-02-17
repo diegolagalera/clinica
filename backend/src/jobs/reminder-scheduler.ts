@@ -240,10 +240,10 @@ const processWaReminderType = async (db: Database, clinicId: string, type: '24h'
 
             // Format date/time
             const dateFormatter = new Intl.DateTimeFormat('es-ES', {
-                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Europe/Madrid',
             });
             const timeFormatter = new Intl.DateTimeFormat('es-ES', {
-                hour: '2-digit', minute: '2-digit',
+                hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid',
             });
 
             const appointmentDate = dateFormatter.format(new Date(appointment.startTime));

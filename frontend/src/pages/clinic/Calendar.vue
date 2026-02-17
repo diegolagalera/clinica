@@ -640,8 +640,8 @@ const saveAppointment = async () => {
       await api.put(`/appointments/${selectedAppointment.value.id}`, {
         type: formData.value.type,
         title: formData.value.title || undefined,
-        startTime: formData.value.startTime,
-        endTime: formData.value.endTime,
+        startTime: new Date(formData.value.startTime).toISOString(),
+        endTime: new Date(formData.value.endTime).toISOString(),
         notes: formData.value.notes || undefined,
         status: formData.value.status,
         workerIds: formData.value.workerIds.length > 0 ? formData.value.workerIds : undefined,
@@ -650,7 +650,12 @@ const saveAppointment = async () => {
       eventType = formData.value.status === 'CANCELLED' ? 'CANCELLED' : 'MODIFIED'
       toast.success('Cita actualizada')
     } else {
-      const resp = await api.post<ApiResponse<Appointment>>('/appointments', formData.value)
+      const payload = {
+        ...formData.value,
+        startTime: new Date(formData.value.startTime).toISOString(),
+        endTime: new Date(formData.value.endTime).toISOString(),
+      }
+      const resp = await api.post<ApiResponse<Appointment>>('/appointments', payload)
       savedAppointmentId = resp?.data?.id || ''
       eventType = 'CREATED'
       toast.success('Cita creada')

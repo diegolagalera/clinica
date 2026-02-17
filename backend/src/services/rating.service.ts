@@ -506,6 +506,7 @@ export const sendRatingEmailNow = async (db: Database,
             year: 'numeric',
             month: 'long',
             day: 'numeric',
+            timeZone: 'Europe/Madrid',
         });
 
         // Try to get custom template, otherwise use default

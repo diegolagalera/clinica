@@ -70,7 +70,7 @@ export const listAppointments = asyncHandler(async (req: AuthenticatedRequest, r
         endDate.setDate(endDate.getDate() + 7);
     }
 
-    const data = await appointmentService.getAppointments(req.db!, 
+    const data = await appointmentService.getAppointments(req.db!,
         req.tenantContext.clinicId,
         startDate,
         endDate,
@@ -92,7 +92,7 @@ export const getTodayAppointments = asyncHandler(async (req: AuthenticatedReques
     // If worker, show only their appointments
     const workerId = req.user.role === 'WORKER' ? req.user.userId : undefined;
 
-    const data = await appointmentService.getTodayAppointments(req.db!, 
+    const data = await appointmentService.getTodayAppointments(req.db!,
         req.tenantContext.clinicId,
         workerId
     );
@@ -108,7 +108,7 @@ export const getPatientAppointments = asyncHandler(async (req: AuthenticatedRequ
     const { patientId } = req.params;
     const params = parsePaginationParams(req.query);
 
-    const { data, total } = await appointmentService.getPatientAppointments(req.db!, 
+    const { data, total } = await appointmentService.getPatientAppointments(req.db!,
         patientId!,
         req.tenantContext,
         params
@@ -254,7 +254,7 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
                 type: notificationType,
             }).catch(err => logger.error(`Failed to send cancellation notification: ${err.message}`));
             // Also send WhatsApp cancellation immediately
-            sendWaAppointmentNotification(req.db!, 
+            sendWaAppointmentNotification(req.db!,
                 result.data.id,
                 req.tenantContext.clinicId,
                 result.data.patientId,
@@ -264,7 +264,7 @@ export const updateAppointment = asyncHandler(async (req: AuthenticatedRequest, 
 
         // Create rating request when appointment is marked as COMPLETED
         if (input.status === 'COMPLETED' && currentAppointment?.status !== 'COMPLETED') {
-            ratingService.createRatingRequest(req.db!, 
+            ratingService.createRatingRequest(req.db!,
                 result.data.id,
                 req.tenantContext.clinicId,
                 result.data.patientId
@@ -315,7 +315,7 @@ export const getWorkerSchedule = asyncHandler(async (req: AuthenticatedRequest, 
     const dateStr = req.query['date'] as string;
     const date = dateStr ? new Date(dateStr) : new Date();
 
-    const schedule = await appointmentService.getWorkerSchedule(req.db!, 
+    const schedule = await appointmentService.getWorkerSchedule(req.db!,
         workerId!,
         req.tenantContext.clinicId,
         date
@@ -337,7 +337,7 @@ export const getActiveAppointments = asyncHandler(async (req: AuthenticatedReque
         throw new BadRequestError('Clinic context required');
     }
 
-    const activeAppointments = await appointmentService.getActiveAppointments(req.db!, 
+    const activeAppointments = await appointmentService.getActiveAppointments(req.db!,
         req.tenantContext.clinicId,
         req.user.userId
     );
@@ -356,7 +356,7 @@ export const startAppointment = asyncHandler(async (req: AuthenticatedRequest, r
 
     const { id } = req.params;
 
-    const result = await appointmentService.startAppointment(req.db!, 
+    const result = await appointmentService.startAppointment(req.db!,
         id!,
         req.user.userId,
         req.tenantContext
@@ -427,7 +427,7 @@ export const completeAppointment = asyncHandler(async (req: AuthenticatedRequest
 
     // Create rating request after completion
     if (result) {
-        ratingService.createRatingRequest(req.db!, 
+        ratingService.createRatingRequest(req.db!,
             id!,
             req.tenantContext.clinicId,
             result.patientId
@@ -460,7 +460,7 @@ export const updateRealTime = asyncHandler(async (req: AuthenticatedRequest, res
     const { id } = req.params;
     const input = updateRealTimeSchema.parse(req.body);
 
-    const result = await appointmentService.updateRealTime(req.db!, 
+    const result = await appointmentService.updateRealTime(req.db!,
         id!,
         input,
         req.user.userId,
@@ -482,7 +482,7 @@ export const resetRealTime = asyncHandler(async (req: AuthenticatedRequest, res:
 
     const { id } = req.params;
 
-    const result = await appointmentService.resetRealTime(req.db!, 
+    const result = await appointmentService.resetRealTime(req.db!,
         id!,
         req.user.userId,
         req.tenantContext
@@ -499,7 +499,7 @@ export const resetRealTime = asyncHandler(async (req: AuthenticatedRequest, res:
 export const cancelActiveAppointment = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    const result = await appointmentService.cancelActiveAppointment(req.db!, 
+    const result = await appointmentService.cancelActiveAppointment(req.db!,
         id!,
         req.user.userId,
         req.tenantContext
@@ -607,10 +607,10 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
 
     // Format date and time
     const dateFormatter = new Intl.DateTimeFormat('es-ES', {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Europe/Madrid',
     });
     const timeFormatter = new Intl.DateTimeFormat('es-ES', {
-        hour: '2-digit', minute: '2-digit',
+        hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid',
     });
 
     const appointmentDate = dateFormatter.format(new Date(appointment.startTime));
@@ -658,7 +658,7 @@ export const sendWaNotification = asyncHandler(async (req: AuthenticatedRequest,
     const templateBody = `${eventLabels[input.eventType]}\n📅 ${appointmentDate}\n🕐 ${appointmentTime}\n👤 ${patient.firstName} ${patient.lastName}\n🏥 ${clinic?.name || 'Clínica'}\n👨‍⚕️ ${doctorName}`;
 
     // Send via ChatbotConversationService
-    const result = await ChatbotConversationService.sendTemplateMessage(req.db!, 
+    const result = await ChatbotConversationService.sendTemplateMessage(req.db!,
         clinicId,
         req.user.userId,
         patient.phone,

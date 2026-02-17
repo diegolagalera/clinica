@@ -706,8 +706,8 @@ const saveAppointment = async () => {
       await api.put(`/appointments/${selectedAppointment.value.id}`, {
         type: appointmentForm.value.type,
         title: appointmentForm.value.title || undefined,
-        startTime: appointmentForm.value.startTime,
-        endTime: appointmentForm.value.endTime,
+        startTime: new Date(appointmentForm.value.startTime).toISOString(),
+        endTime: new Date(appointmentForm.value.endTime).toISOString(),
         notes: appointmentForm.value.notes || undefined,
         status: appointmentForm.value.status,
         workerIds: appointmentForm.value.workerIds.length > 0 ? appointmentForm.value.workerIds : undefined,
@@ -723,8 +723,8 @@ const saveAppointment = async () => {
         patientId: patientId.value,
         type: appointmentForm.value.type,
         title: appointmentForm.value.title || undefined,
-        startTime: appointmentForm.value.startTime,
-        endTime: appointmentForm.value.endTime,
+        startTime: new Date(appointmentForm.value.startTime).toISOString(),
+        endTime: new Date(appointmentForm.value.endTime).toISOString(),
         notes: appointmentForm.value.notes || undefined,
         workerIds: appointmentForm.value.workerIds.length > 0 ? appointmentForm.value.workerIds : undefined,
       })

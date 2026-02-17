@@ -151,8 +151,8 @@ export const organizations = pgTable(
         logoUrl: varchar('logo_url', { length: 500 }),
         settings: jsonb('settings').default({}),
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         slugIdx: uniqueIndex('organizations_slug_idx').on(table.slug),
@@ -185,8 +185,8 @@ export const clinics = pgTable(
         aiEnabled: boolean('ai_enabled').default(false).notNull(),
         aiMonthlyTokenLimit: integer('ai_monthly_token_limit').default(100000),
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         orgIdIdx: index('clinics_organization_id_idx').on(table.organizationId),
@@ -217,13 +217,13 @@ export const users = pgTable(
         emailVerified: boolean('email_verified').default(false).notNull(),
         emailVerificationToken: varchar('email_verification_token', { length: 255 }),
         passwordResetToken: varchar('password_reset_token', { length: 255 }),
-        passwordResetExpires: timestamp('password_reset_expires'),
+        passwordResetExpires: timestamp('password_reset_expires', { withTimezone: true }),
         twoFactorEnabled: boolean('two_factor_enabled').default(false).notNull(),
         twoFactorSecret: varchar('two_factor_secret', { length: 255 }),
         tokenVersion: integer('token_version').default(0).notNull(),
-        lastLoginAt: timestamp('last_login_at'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         emailIdx: uniqueIndex('users_email_idx').on(table.email),
@@ -251,8 +251,8 @@ export const staffProfiles = pgTable(
         color: varchar('color', { length: 7 }), // For calendar display
         signatureImage: text('signature_image'), // Base64 PNG of doctor's professional signature
         workingDays: jsonb('working_days').default([]),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         userIdIdx: uniqueIndex('staff_profiles_user_id_idx').on(table.userId),
@@ -276,8 +276,8 @@ export const workerClinics = pgTable(
         role: varchar('role', { length: 50 }), // Optional specific role in this clinic
         permissions: jsonb('permissions').$type<string[]>().default([]).notNull(), // Module permissions: whatsapp, ratings, marketing, staff, settings
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         userClinicIdx: uniqueIndex('worker_clinics_user_clinic_idx').on(table.userId, table.clinicId),
@@ -303,7 +303,7 @@ export const patients = pgTable(
         lastName: varchar('last_name', { length: 100 }).notNull(),
         email: varchar('email', { length: 255 }),
         phone: varchar('phone', { length: 50 }),
-        dateOfBirth: timestamp('date_of_birth'),
+        dateOfBirth: timestamp('date_of_birth', { withTimezone: true }),
         gender: varchar('gender', { length: 20 }),
         idNumber: varchar('id_number', { length: 50 }), // DNI/NIE/Passport
         address: text('address'),
@@ -317,17 +317,17 @@ export const patients = pgTable(
         insuranceProvider: varchar('insurance_provider', { length: 100 }),
         insuranceNumber: varchar('insurance_number', { length: 100 }),
         consentGiven: boolean('consent_given').default(false).notNull(),
-        consentDate: timestamp('consent_date'),
+        consentDate: timestamp('consent_date', { withTimezone: true }),
         // Marketing preferences
         acceptsMarketing: boolean('accepts_marketing').default(true).notNull(),
         acceptsBirthdayEmails: boolean('accepts_birthday_emails').default(true).notNull(),
         marketingUnsubscribeToken: varchar('marketing_unsubscribe_token', { length: 64 }),
         // WhatsApp availability (null = unknown, true = confirmed, false = not on WA)
         whatsappAvailable: boolean('whatsapp_available'),
-        whatsappCheckedAt: timestamp('whatsapp_checked_at'),
+        whatsappCheckedAt: timestamp('whatsapp_checked_at', { withTimezone: true }),
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('patients_clinic_id_idx').on(table.clinicId),
@@ -357,20 +357,20 @@ export const appointments = pgTable(
         status: appointmentStatusEnum('status').notNull().default('SCHEDULED'),
         title: varchar('title', { length: 255 }),
         description: text('description'),
-        startTime: timestamp('start_time').notNull(),
-        endTime: timestamp('end_time').notNull(),
+        startTime: timestamp('start_time', { withTimezone: true }).notNull(),
+        endTime: timestamp('end_time', { withTimezone: true }).notNull(),
         duration: integer('duration').notNull(), // In minutes (planned)
         // Real-time tracking fields
-        realStartTime: timestamp('real_start_time'),  // Actual start time
-        realEndTime: timestamp('real_end_time'),      // Actual end time
+        realStartTime: timestamp('real_start_time', { withTimezone: true }),  // Actual start time
+        realEndTime: timestamp('real_end_time', { withTimezone: true }),      // Actual end time
         pausedDuration: integer('paused_duration').default(0), // Paused minutes
         startedById: uuid('started_by_id').references(() => users.id), // Who started
         notes: text('notes'),
         reminderSent: boolean('reminder_sent').default(false).notNull(),
-        waNotificationSentAt: timestamp('wa_notification_sent_at'),
+        waNotificationSentAt: timestamp('wa_notification_sent_at', { withTimezone: true }),
         createdById: uuid('created_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('appointments_clinic_id_idx').on(table.clinicId),
@@ -396,7 +396,7 @@ export const appointmentWorkers = pgTable(
             .notNull()
             .references(() => users.id, { onDelete: 'cascade' }),
         isPrimary: boolean('is_primary').default(false).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         appointmentUserIdx: uniqueIndex('appointment_workers_apt_user_idx').on(
@@ -439,10 +439,10 @@ export const clinicalRecords = pgTable(
         toothChart: jsonb('tooth_chart'), // Dental chart data
         attachments: jsonb('attachments'), // Array of file references
         isSigned: boolean('is_signed').default(false).notNull(),
-        signedAt: timestamp('signed_at'),
+        signedAt: timestamp('signed_at', { withTimezone: true }),
         signedById: uuid('signed_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('clinical_records_clinic_id_idx').on(table.clinicId),
@@ -482,8 +482,8 @@ export const radiographs = pgTable(
         notes: text('notes'),
         annotations: jsonb('annotations'), // User annotations on the image
         metadata: jsonb('metadata'), // DICOM metadata, etc.
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('radiographs_clinic_id_idx').on(table.clinicId),
@@ -512,12 +512,12 @@ export const radiographAiResults = pgTable(
         confidence: decimal('confidence', { precision: 5, scale: 4 }),
         rawResponse: jsonb('raw_response'),
         reviewedById: uuid('reviewed_by_id').references(() => users.id),
-        reviewedAt: timestamp('reviewed_at'),
+        reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
         reviewNotes: text('review_notes'),
         isAccepted: boolean('is_accepted'),
         errorMessage: text('error_message'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         radiographIdIdx: uniqueIndex('radiograph_ai_results_radiograph_id_idx').on(table.radiographId),
@@ -545,8 +545,8 @@ export const suppliers = pgTable(
         address: text('address'),
         notes: text('notes'),
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('suppliers_clinic_id_idx').on(table.clinicId),
@@ -579,12 +579,12 @@ export const inventoryItems = pgTable(
         sellPrice: decimal('sell_price', { precision: 10, scale: 2 }),
         supplier: varchar('supplier', { length: 255 }), // Legacy field, keep for backwards compatibility
         supplierCode: varchar('supplier_code', { length: 100 }),
-        expirationDate: timestamp('expiration_date'),
+        expirationDate: timestamp('expiration_date', { withTimezone: true }),
         location: varchar('location', { length: 100 }),
         imageUrl: varchar('image_url', { length: 500 }),
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('inventory_items_clinic_id_idx').on(table.clinicId),
@@ -619,7 +619,7 @@ export const stockMovements = pgTable(
         performedById: uuid('performed_by_id')
             .notNull()
             .references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('stock_movements_clinic_id_idx').on(table.clinicId),
@@ -644,8 +644,8 @@ export const stockPacks = pgTable(
         category: varchar('category', { length: 100 }),
         isActive: boolean('is_active').default(true).notNull(),
         createdById: uuid('created_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('stock_packs_clinic_id_idx').on(table.clinicId),
@@ -700,8 +700,8 @@ export const appointmentStockUsage = pgTable(
             .references(() => users.id),
         // Deferred confirmation: stock is only deducted when confirmed (on appointment completion)
         isConfirmed: boolean('is_confirmed').default(false).notNull(),
-        confirmedAt: timestamp('confirmed_at'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('appointment_stock_usage_clinic_id_idx').on(table.clinicId),
@@ -727,8 +727,8 @@ export const invoices = pgTable(
             .references(() => patients.id, { onDelete: 'cascade' }),
         invoiceNumber: varchar('invoice_number', { length: 50 }).notNull(),
         status: invoiceStatusEnum('status').notNull().default('DRAFT'),
-        issueDate: timestamp('issue_date').notNull(),
-        dueDate: timestamp('due_date'),
+        issueDate: timestamp('issue_date', { withTimezone: true }).notNull(),
+        dueDate: timestamp('due_date', { withTimezone: true }),
         subtotal: decimal('subtotal', { precision: 10, scale: 2 }).notNull(),
         taxRate: decimal('tax_rate', { precision: 5, scale: 2 }).default('21'),
         taxAmount: decimal('tax_amount', { precision: 10, scale: 2 }).notNull(),
@@ -740,8 +740,8 @@ export const invoices = pgTable(
         createdById: uuid('created_by_id')
             .notNull()
             .references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('invoices_clinic_id_idx').on(table.clinicId),
@@ -772,11 +772,11 @@ export const payments = pgTable(
         method: paymentMethodEnum('method').notNull(),
         reference: varchar('reference', { length: 255 }),
         notes: text('notes'),
-        paymentDate: timestamp('payment_date').notNull(),
+        paymentDate: timestamp('payment_date', { withTimezone: true }).notNull(),
         recordedById: uuid('recorded_by_id')
             .notNull()
             .references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('payments_clinic_id_idx').on(table.clinicId),
@@ -800,7 +800,7 @@ export const expenses = pgTable(
         description: text('description').notNull(),
         amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
         taxAmount: decimal('tax_amount', { precision: 10, scale: 2 }),
-        expenseDate: timestamp('expense_date').notNull(),
+        expenseDate: timestamp('expense_date', { withTimezone: true }).notNull(),
         vendor: varchar('vendor', { length: 255 }),
         invoiceReference: varchar('invoice_reference', { length: 100 }),
         attachmentUrl: varchar('attachment_url', { length: 500 }),
@@ -808,8 +808,8 @@ export const expenses = pgTable(
         recordedById: uuid('recorded_by_id')
             .notNull()
             .references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('expenses_clinic_id_idx').on(table.clinicId),
@@ -839,7 +839,7 @@ export const auditLogs = pgTable(
         ipAddress: varchar('ip_address', { length: 45 }),
         userAgent: text('user_agent'),
         metadata: jsonb('metadata'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         organizationIdIdx: index('audit_logs_organization_id_idx').on(table.organizationId),
@@ -869,8 +869,8 @@ export const documentEmbeddings = pgTable(
         // Note: embedding vector stored as text for now, will use pgvector extension
         embedding: text('embedding'),
         metadata: jsonb('metadata'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('document_embeddings_clinic_id_idx').on(table.clinicId),
@@ -891,9 +891,9 @@ export const refreshTokens = pgTable(
             .notNull()
             .references(() => users.id, { onDelete: 'cascade' }),
         token: varchar('token', { length: 500 }).notNull().unique(),
-        expiresAt: timestamp('expires_at').notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        revokedAt: timestamp('revoked_at'),
+        expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        revokedAt: timestamp('revoked_at', { withTimezone: true }),
         replacedByToken: varchar('replaced_by_token', { length: 500 }),
     },
     (table) => ({
@@ -1205,8 +1205,8 @@ export const odontograms = pgTable(
         isChild: boolean('is_child').default(false), // true = 20 teeth, false = 32 teeth
         notes: text('notes'),
         lastUpdatedById: uuid('last_updated_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('odontograms_clinic_idx').on(table.clinicId),
@@ -1233,8 +1233,8 @@ export const odontogramTeeth = pgTable(
         }),
         rootCondition: dentalConditionEnum('root_condition').default('HEALTHY'),
         notes: text('notes'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         odontogramIdx: index('odontogram_teeth_odontogram_idx').on(table.odontogramId),
@@ -1257,7 +1257,7 @@ export const odontogramHistory = pgTable(
             .notNull()
             .references(() => users.id),
         notes: text('notes'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         odontogramIdx: index('odontogram_history_odontogram_idx').on(table.odontogramId),
@@ -1315,7 +1315,7 @@ export const odontogramSnapshots = pgTable(
         createdById: uuid('created_by_id')
             .notNull()
             .references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         odontogramIdx: index('odontogram_snapshots_odontogram_idx').on(table.odontogramId),
@@ -1374,8 +1374,8 @@ export const emailSettings = pgTable('email_settings', {
     sendOnCancel: boolean('send_on_cancel').default(true).notNull(),
     reminder24hEnabled: boolean('reminder_24h_enabled').default(true).notNull(),
     reminder1hEnabled: boolean('reminder_1h_enabled').default(true).notNull(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Email Templates
@@ -1392,8 +1392,8 @@ export const emailTemplates = pgTable(
         blocks: jsonb('blocks').notNull().default([]), // Visual editor blocks
         isActive: boolean('is_active').default(true).notNull(),
         isDefault: boolean('is_default').default(false).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicTypeIdx: index('email_templates_clinic_type_idx').on(table.clinicId, table.type),
@@ -1417,8 +1417,8 @@ export const notificationLogs = pgTable(
         subject: varchar('subject', { length: 255 }),
         status: notificationStatusEnum('status').default('PENDING').notNull(),
         errorMessage: text('error_message'),
-        sentAt: timestamp('sent_at'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        sentAt: timestamp('sent_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('notification_logs_clinic_idx').on(table.clinicId),
@@ -1477,9 +1477,9 @@ export const pendingNotifications = pgTable(
             .notNull()
             .references(() => patients.id, { onDelete: 'cascade' }),
         type: emailTemplateTypeEnum('type').notNull(),
-        scheduledFor: timestamp('scheduled_for').notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        scheduledFor: timestamp('scheduled_for', { withTimezone: true }).notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         // Only one pending notification per appointment
@@ -1533,8 +1533,8 @@ export const smsSettings = pgTable('sms_settings', {
     sendOnCancel: boolean('send_on_cancel').default(true).notNull(),
     reminder24hEnabled: boolean('reminder_24h_enabled').default(true).notNull(),
     reminder1hEnabled: boolean('reminder_1h_enabled').default(true).notNull(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // SMS Templates
@@ -1550,8 +1550,8 @@ export const smsTemplates = pgTable(
         content: text('content').notNull(), // SMS text (recommend max 160 chars)
         isActive: boolean('is_active').default(true).notNull(),
         isDefault: boolean('is_default').default(false).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicTypeIdx: index('sms_templates_clinic_type_idx').on(table.clinicId, table.type),
@@ -1602,11 +1602,11 @@ export const ratingRequests = pgTable(
             .references(() => patients.id, { onDelete: 'cascade' }),
         token: varchar('token', { length: 64 }).notNull().unique(),
         status: ratingRequestStatusEnum('status').default('PENDING').notNull(),
-        scheduledFor: timestamp('scheduled_for').notNull(), // completedAt + 24h
-        expiresAt: timestamp('expires_at').notNull(), // scheduledFor + 7 days
-        sentAt: timestamp('sent_at'),
-        completedAt: timestamp('completed_at'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        scheduledFor: timestamp('scheduled_for', { withTimezone: true }).notNull(), // completedAt + 24h
+        expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(), // scheduledFor + 7 days
+        sentAt: timestamp('sent_at', { withTimezone: true }),
+        completedAt: timestamp('completed_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('rating_requests_clinic_idx').on(table.clinicId),
@@ -1635,7 +1635,7 @@ export const visitRatings = pgTable(
         patientId: uuid('patient_id').references(() => patients.id, { onDelete: 'set null' }),
         rating: integer('rating').notNull(), // 1-5 stars
         comment: text('comment'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('visit_ratings_clinic_idx').on(table.clinicId),
@@ -1659,7 +1659,7 @@ export const workerRatings = pgTable(
             .notNull()
             .references(() => appointments.id, { onDelete: 'cascade' }),
         rating: integer('rating').notNull(), // Same rating as visitRating (for fast queries)
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         visitRatingIdx: index('worker_ratings_visit_rating_idx').on(table.visitRatingId),
@@ -1762,8 +1762,8 @@ export const marketingTemplates = pgTable(
         isSystemTemplate: boolean('is_system_template').default(false).notNull(),
         isActive: boolean('is_active').default(true).notNull(),
         createdById: uuid('created_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('marketing_templates_clinic_id_idx').on(table.clinicId),
@@ -1786,8 +1786,8 @@ export const audienceSegments = pgTable(
         patientCount: integer('patient_count').default(0), // Cached count
         isActive: boolean('is_active').default(true).notNull(),
         createdById: uuid('created_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('audience_segments_clinic_id_idx').on(table.clinicId),
@@ -1808,14 +1808,14 @@ export const marketingCampaigns = pgTable(
         subject: varchar('subject', { length: 255 }).notNull(),
         htmlContent: text('html_content'), // Rendered content at send time
         status: campaignStatusEnum('status').default('DRAFT').notNull(),
-        scheduledAt: timestamp('scheduled_at'), // null = immediate
-        sentAt: timestamp('sent_at'),
+        scheduledAt: timestamp('scheduled_at', { withTimezone: true }), // null = immediate
+        sentAt: timestamp('sent_at', { withTimezone: true }),
         totalRecipients: integer('total_recipients').default(0),
         sentCount: integer('sent_count').default(0),
         failedCount: integer('failed_count').default(0),
         createdById: uuid('created_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('marketing_campaigns_clinic_id_idx').on(table.clinicId),
@@ -1837,9 +1837,9 @@ export const campaignRecipients = pgTable(
             .references(() => patients.id, { onDelete: 'cascade' }),
         email: varchar('email', { length: 255 }).notNull(),
         status: varchar('status', { length: 20 }).default('pending').notNull(), // pending, sent, failed
-        sentAt: timestamp('sent_at'),
+        sentAt: timestamp('sent_at', { withTimezone: true }),
         errorMessage: text('error_message'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         campaignIdIdx: index('campaign_recipients_campaign_id_idx').on(table.campaignId),
@@ -1858,8 +1858,8 @@ export const birthdaySettings = pgTable('birthday_settings', {
     templateId: uuid('template_id').references(() => marketingTemplates.id, { onDelete: 'set null' }),
     sendHour: integer('send_hour').default(9).notNull(), // 0-23 (9 = 9:00 AM)
     daysInAdvance: integer('days_in_advance').default(0).notNull(), // 0 = same day
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Birthday Email Log (prevents duplicate emails)
@@ -1874,7 +1874,7 @@ export const birthdayEmailLog = pgTable(
             .notNull()
             .references(() => patients.id, { onDelete: 'cascade' }),
         year: integer('year').notNull(), // Birthday year
-        sentAt: timestamp('sent_at').defaultNow().notNull(),
+        sentAt: timestamp('sent_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicPatientYearIdx: uniqueIndex('birthday_email_log_unique_idx').on(
@@ -1986,10 +1986,10 @@ export const bugReports = pgTable(
         pageUrl: varchar('page_url', { length: 500 }),
         userAgent: varchar('user_agent', { length: 500 }),
         adminNotes: text('admin_notes'),
-        resolvedAt: timestamp('resolved_at'),
+        resolvedAt: timestamp('resolved_at', { withTimezone: true }),
         resolvedById: uuid('resolved_by_id').references(() => users.id),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         userIdIdx: index('bug_reports_user_id_idx').on(table.userId),
@@ -2104,8 +2104,8 @@ export const whatsappSettings = pgTable('whatsapp_settings', {
     waTemplateMappingReminder1h: jsonb('wa_template_mapping_reminder_1h'),
     waReminder24hEnabled: boolean('wa_reminder_24h_enabled').default(false).notNull(),
     waReminder1hEnabled: boolean('wa_reminder_1h_enabled').default(false).notNull(),
-    createdAt: timestamp('created_at').defaultNow().notNull(),
-    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 // Chat Conversations
@@ -2123,13 +2123,13 @@ export const chatConversations = pgTable(
         status: chatConversationStatusEnum('status').default('ACTIVE').notNull(),
         controlMode: chatControlModeEnum('control_mode').default('AI').notNull(),
         assignedToId: uuid('assigned_to_id').references(() => users.id, { onDelete: 'set null' }),
-        lastMessageAt: timestamp('last_message_at'),
+        lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
         unreadCount: integer('unread_count').default(0).notNull(),
         metadata: jsonb('metadata').default({}),
-        closedAt: timestamp('closed_at'),
+        closedAt: timestamp('closed_at', { withTimezone: true }),
         closedById: uuid('closed_by_id').references(() => users.id, { onDelete: 'set null' }),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('chat_conversations_clinic_idx').on(table.clinicId),
@@ -2166,7 +2166,7 @@ export const chatMessages = pgTable(
         sentById: uuid('sent_by_id').references(() => users.id, { onDelete: 'set null' }), // null for inbound & AI
         errorMessage: text('error_message'),
         metadata: jsonb('metadata').default({}),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         conversationIdx: index('chat_messages_conversation_idx').on(table.conversationId),
@@ -2189,8 +2189,8 @@ export const chatKnowledgeBases = pgTable(
         icon: varchar('icon', { length: 50 }).default('📚'),
         isActive: boolean('is_active').default(true).notNull(),
         createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('chat_knowledge_bases_clinic_idx').on(table.clinicId),
@@ -2215,8 +2215,8 @@ export const chatKnowledgeArticles = pgTable(
         chunkCount: integer('chunk_count').default(0).notNull(),         // Number of generated chunks
         isProcessed: boolean('is_processed').default(false).notNull(),   // Embedding generation complete
         createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         knowledgeBaseIdx: index('chat_knowledge_articles_kb_idx').on(table.knowledgeBaseId),
@@ -2239,7 +2239,7 @@ export const chatKnowledgeChunks = pgTable(
         chunkIndex: integer('chunk_index').notNull(),                     // Position within article
         embedding: vector('embedding'),                                   // pgvector 1536-dim
         tokenCount: integer('token_count'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         articleIdx: index('chat_knowledge_chunks_article_idx').on(table.articleId),
@@ -2264,9 +2264,9 @@ export const chatLeads = pgTable(
         status: leadStatusEnum('status').default('NEW').notNull(),
         convertedPatientId: uuid('converted_patient_id').references(() => patients.id, { onDelete: 'set null' }),
         convertedById: uuid('converted_by_id').references(() => users.id, { onDelete: 'set null' }),
-        convertedAt: timestamp('converted_at'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        convertedAt: timestamp('converted_at', { withTimezone: true }),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('chat_leads_clinic_idx').on(table.clinicId),
@@ -2288,7 +2288,7 @@ export const chatConversationNotes = pgTable(
             .notNull()
             .references(() => users.id, { onDelete: 'cascade' }),
         content: text('content').notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         conversationIdx: index('chat_conversation_notes_conv_idx').on(table.conversationId),
@@ -2307,8 +2307,8 @@ export const chatQuickReplies = pgTable(
         content: text('content').notNull(),                              // Full response text
         category: varchar('category', { length: 50 }),
         sortOrder: integer('sort_order').default(0).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('chat_quick_replies_clinic_idx').on(table.clinicId),
@@ -2335,7 +2335,7 @@ export const chatAiLogs = pgTable(
         ragChunksUsed: integer('rag_chunks_used').default(0),
         ragContext: text('rag_context'),                                 // The context retrieved
         errorMessage: text('error_message'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         conversationIdx: index('chat_ai_logs_conversation_idx').on(table.conversationId),
@@ -2504,7 +2504,7 @@ export const aiUsageLogs = pgTable(
         totalTokens: integer('total_tokens').default(0).notNull(),
         estimatedCost: decimal('estimated_cost', { precision: 10, scale: 6 }).default('0'),
         metadata: jsonb('metadata'),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdx: index('ai_usage_logs_clinic_idx').on(table.clinicId),
@@ -2548,7 +2548,7 @@ export const prescriptions = pgTable(
         diagnosis: text('diagnosis'),
         notes: text('notes'),
         pdfStorageKey: varchar('pdf_storage_key', { length: 500 }),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('prescriptions_clinic_id_idx').on(table.clinicId),
@@ -2587,8 +2587,8 @@ export const clinicMedications = pgTable(
         defaultFrequency: varchar('default_frequency', { length: 255 }).notNull(),
         defaultDuration: varchar('default_duration', { length: 255 }).notNull(),
         isActive: boolean('is_active').default(true).notNull(),
-        createdAt: timestamp('created_at').defaultNow().notNull(),
-        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+        createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+        updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => ({
         clinicIdIdx: index('clinic_medications_clinic_id_idx').on(table.clinicId),

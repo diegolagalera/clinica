@@ -170,10 +170,10 @@ export const sendWaAppointmentNotification = async (db: Database,
 
         // Format date and time
         const dateFormatter = new Intl.DateTimeFormat('es-ES', {
-            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Europe/Madrid',
         });
         const timeFormatter = new Intl.DateTimeFormat('es-ES', {
-            hour: '2-digit', minute: '2-digit',
+            hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid',
         });
 
         const appointmentDate = dateFormatter.format(new Date(appointment.startTime));

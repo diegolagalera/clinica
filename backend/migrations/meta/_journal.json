@@ -22,6 +22,13 @@
       "when": 1771327259580,
       "tag": "0002_slow_hellion",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1771349024591,
+      "tag": "0003_timezone-aware-timestamps",
+      "breakpoints": true
     }
   ]
 }

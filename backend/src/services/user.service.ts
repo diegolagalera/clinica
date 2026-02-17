@@ -252,8 +252,8 @@ export const createUser = async (db: Database,
         })
         .returning();
 
-    // Create staff profile if worker
-    if (input.role === 'WORKER' && (input.licenseNumber || input.specialty)) {
+    // Create staff profile if worker or admin
+    if ((input.role === 'WORKER' || input.role === 'ADMIN') && (input.licenseNumber || input.specialty)) {
         await db.insert(staffProfiles).values({
             userId: user!.id,
             licenseNumber: input.licenseNumber ?? null,
@@ -351,8 +351,8 @@ export const updateUser = async (db: Database,
         .where(eq(users.id, id))
         .returning();
 
-    // Update or create staff profile if worker
-    if (input.role === 'WORKER' || existing.role === 'WORKER') {
+    // Update or create staff profile if worker or admin
+    if (['WORKER', 'ADMIN'].includes(input.role ?? existing.role)) {
         if (existing.staffProfile) {
             const profileData: Record<string, any> = { updatedAt: new Date() };
             if (input.licenseNumber !== undefined) profileData.licenseNumber = input.licenseNumber ?? null;

@@ -57,6 +57,29 @@ export const useAuthStore = defineStore('auth', () => {
         if (storedTenant) tenantSlug.value = storedTenant
     }
 
+    // Persist current user to localStorage
+    const persistUser = () => {
+        if (user.value) {
+            localStorage.setItem(USER_KEY, JSON.stringify(user.value))
+        }
+    }
+
+    // Fetch fresh user data from server and update store + localStorage
+    const fetchMe = async () => {
+        try {
+            const res = await api.get<ApiResponse<User>>('/auth/me')
+            if (res.success && res.data && user.value) {
+                user.value.firstName = res.data.firstName
+                user.value.lastName = res.data.lastName
+                user.value.phone = res.data.phone
+                user.value.email = res.data.email
+                persistUser()
+            }
+        } catch {
+            // Non-blocking — keep cached data on failure
+        }
+    }
+
     // Actions
     const login = async (email: string, password: string, twoFactorCode?: string) => {
         isLoading.value = true
@@ -295,6 +318,8 @@ export const useAuthStore = defineStore('auth', () => {
     // Eagerly start loading permissions if authenticated
     if (user.value) {
         _permissionsPromise = loadUserContext()
+        // Refresh user data from server in background
+        fetchMe()
     }
 
     return {
@@ -334,5 +359,7 @@ export const useAuthStore = defineStore('auth', () => {
         hasPermission,
         ensurePermissionsLoaded,
         setTenantSlug,
+        persistUser,
+        fetchMe,
     }
 })

@@ -11,6 +11,7 @@ import { config } from '../config/env.js';
 import { tenantManager } from '../db/tenant-manager.js';
 import { centralDb } from '../db/central-db.js';
 import { superadmins } from '../db/central-schema.js';
+import { users } from '../db/schema.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 // Validation schemas
@@ -229,12 +230,27 @@ export const disable2FA = asyncHandler(async (req: AuthenticatedRequest, res: Re
  * GET /auth/me
  */
 export const getCurrentUser = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const db = req.db!;
+    const user = await db.query.users.findFirst({
+        where: eq(users.id, req.user.userId),
+        columns: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            role: true,
+            organizationId: true,
+            clinicId: true,
+        },
+    });
+
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
     res.json(success({
-        id: req.user.userId,
-        email: req.user.email,
-        role: req.user.role,
-        organizationId: req.user.organizationId,
-        clinicId: req.user.clinicId,
+        ...user,
         tenantSlug: req.user.tenantSlug,
     }));
 });

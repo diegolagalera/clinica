@@ -98,7 +98,7 @@ export const getStaffByClinic = async (db: Database, clinicId: string) => {
 /**
  * Assign a worker to a clinic
  */
-export const assignWorkerToClinic = async (db: Database, 
+export const assignWorkerToClinic = async (db: Database,
     userId: string,
     clinicId: string,
     role?: string
@@ -244,15 +244,26 @@ export const getAccessibleClinics = async (db: Database, userId: string, role: s
 };
 
 /**
+ * Get staff profile for a user
+ */
+export const getStaffProfile = async (db: Database, userId: string) => {
+    const profile = await db.query.staffProfiles.findFirst({
+        where: eq(staffProfiles.userId, userId),
+    });
+    return profile || null;
+};
+
+/**
  * Update staff profile
  */
-export const updateStaffProfile = async (db: Database, 
+export const updateStaffProfile = async (db: Database,
     userId: string,
     data: {
         licenseNumber?: string;
         specialty?: string;
         bio?: string;
         color?: string;
+        signatureImage?: string;
     }
 ) => {
     const existing = await db.query.staffProfiles.findFirst({

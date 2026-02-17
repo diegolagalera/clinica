@@ -249,6 +249,7 @@ export const staffProfiles = pgTable(
         specialty: varchar('specialty', { length: 100 }),
         bio: text('bio'),
         color: varchar('color', { length: 7 }), // For calendar display
+        signatureImage: text('signature_image'), // Base64 PNG of doctor's professional signature
         workingDays: jsonb('working_days').default([]),
         createdAt: timestamp('created_at').defaultNow().notNull(),
         updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -2516,6 +2517,88 @@ export const aiUsageLogs = pgTable(
 export const aiUsageLogsRelations = relations(aiUsageLogs, ({ one }) => ({
     clinic: one(clinics, {
         fields: [aiUsageLogs.clinicId],
+        references: [clinics.id],
+    }),
+}));
+
+// ============================================================================
+// PRESCRIPTIONS
+// ============================================================================
+
+export const prescriptions = pgTable(
+    'prescriptions',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        patientId: uuid('patient_id')
+            .notNull()
+            .references(() => patients.id, { onDelete: 'cascade' }),
+        prescribedById: uuid('prescribed_by_id')
+            .notNull()
+            .references(() => users.id),
+        items: jsonb('items').$type<{
+            medication: string;
+            dosage: string;
+            frequency: string;
+            duration: string;
+            instructions?: string;
+        }[]>().notNull(),
+        diagnosis: text('diagnosis'),
+        notes: text('notes'),
+        pdfStorageKey: varchar('pdf_storage_key', { length: 500 }),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('prescriptions_clinic_id_idx').on(table.clinicId),
+        patientIdIdx: index('prescriptions_patient_id_idx').on(table.patientId),
+        prescribedByIdx: index('prescriptions_prescribed_by_idx').on(table.prescribedById),
+        createdAtIdx: index('prescriptions_created_at_idx').on(table.createdAt),
+    })
+);
+
+export const prescriptionsRelations = relations(prescriptions, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [prescriptions.clinicId],
+        references: [clinics.id],
+    }),
+    patient: one(patients, {
+        fields: [prescriptions.patientId],
+        references: [patients.id],
+    }),
+    prescribedBy: one(users, {
+        fields: [prescriptions.prescribedById],
+        references: [users.id],
+    }),
+}));
+
+// ── Clinic Medications Catalog ──────────────────────────────────────
+export const clinicMedications = pgTable(
+    'clinic_medications',
+    {
+        id: uuid('id').defaultRandom().primaryKey(),
+        clinicId: uuid('clinic_id')
+            .notNull()
+            .references(() => clinics.id, { onDelete: 'cascade' }),
+        medication: varchar('medication', { length: 255 }).notNull(),
+        category: varchar('category', { length: 100 }).notNull(),
+        defaultDosage: varchar('default_dosage', { length: 255 }).notNull(),
+        defaultFrequency: varchar('default_frequency', { length: 255 }).notNull(),
+        defaultDuration: varchar('default_duration', { length: 255 }).notNull(),
+        isActive: boolean('is_active').default(true).notNull(),
+        createdAt: timestamp('created_at').defaultNow().notNull(),
+        updatedAt: timestamp('updated_at').defaultNow().notNull(),
+    },
+    (table) => ({
+        clinicIdIdx: index('clinic_medications_clinic_id_idx').on(table.clinicId),
+        categoryIdx: index('clinic_medications_category_idx').on(table.category),
+    })
+);
+
+export const clinicMedicationsRelations = relations(clinicMedications, ({ one }) => ({
+    clinic: one(clinics, {
+        fields: [clinicMedications.clinicId],
         references: [clinics.id],
     }),
 }));

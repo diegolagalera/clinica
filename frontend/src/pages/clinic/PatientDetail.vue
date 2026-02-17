@@ -11,6 +11,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api/v1'
 import { onSocketEvent, joinAppointmentRoom, leaveAppointmentRoom } from '@/services/websocket'
 import type { Patient, Appointment, ApiResponse, User, Radiograph } from '@/types'
 import OdontogramComponent from '@/components/odontogram/Odontogram.vue'
+import PrescriptionTab from '@/pages/clinic/components/PrescriptionTab.vue'
 import {
   ArrowLeftIcon,
   PhoneIcon,
@@ -2174,6 +2175,13 @@ onUnmounted(() => {
           >
             Odontograma
           </button>
+          <button
+            @click="activeTab = 'prescriptions'"
+            :class="['px-4 py-3 font-medium text-sm transition-colors border-b-2 -mb-px', 
+              activeTab === 'prescriptions' ? 'border-primary-500 text-primary-600' : 'border-transparent text-surface-500 hover:text-surface-700']"
+          >
+            Recetas
+          </button>
         </nav>
       </div>
 
@@ -2675,6 +2683,11 @@ onUnmounted(() => {
       <!-- Tab: Odontogram -->
       <div v-if="activeTab === 'odontogram'" class="space-y-6">
         <OdontogramComponent :patientId="patientId" />
+      </div>
+
+      <!-- Tab: Prescriptions -->
+      <div v-if="activeTab === 'prescriptions'" class="space-y-6">
+        <PrescriptionTab :patientId="patientId" />
       </div>
 
       <!-- Radiograph Upload Modal -->

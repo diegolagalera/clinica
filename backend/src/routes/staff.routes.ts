@@ -11,6 +11,9 @@ router.use(authenticate);
 // Get clinics accessible to current user (requires tenant DB)
 router.get('/my-clinics', requireTenantDb, staffController.getMyClinics);
 
+// Get current user's staff profile
+router.get('/me', requireTenantDb, requireStaff, staffController.getMyProfile);
+
 // Update own profile
 router.put('/profile', requireTenantDb, requireStaff, staffController.updateMyProfile);
 

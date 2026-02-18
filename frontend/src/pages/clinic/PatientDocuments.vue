@@ -415,13 +415,13 @@ const createDocument = async () => {
   }
 }
 
-// ─── Hybrid signing detection: WebSocket + lightweight DB poll ───────────────
-// WebSocket provides instant push when webhook fires.
-// DB poll (every 10s) is the reliable fallback — queries our own DB, NOT SignNow API.
-// Manual "Comprobar estado" button calls SignNow API for a one-time force check.
+// ─── Real-time signing detection: WebSocket only (no polling) ────────────────
+// WebSocket: instant push when SignNow webhook fires → backend → WebSocket → frontend.
+// On close: one-time immediate check against SignNow API (guarantees status update).
+// Manual button: "Comprobar estado" calls SignNow API directly (one-time).
+// ZERO repeated API calls — no polling, no rate limit risk.
 
 let unsubscribeSignedEvent: (() => void) | null = null
-const statusPollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 
 const openSigning = async (docId: string) => {
   try {
@@ -430,70 +430,63 @@ const openSigning = async (docId: string) => {
       signingUrl.value = response.data.url
       signingDocId.value = docId
       showSigningModal.value = true
-      startSignedDetection(docId)
+      startWebSocketListener(docId)
     }
   } catch {
     toast.error('Error al generar el enlace de firma')
   }
 }
 
-const closeSigning = () => {
+/**
+ * Close the signing modal.
+ * Does ONE immediate check against SignNow API to update status,
+ * since the user likely just finished signing.
+ */
+const closeSigning = async () => {
+  const docId = signingDocId.value
   showSigningModal.value = false
   signingUrl.value = ''
-  stopSignedDetection()
-  fetchDocuments()
+  stopWebSocketListener()
+
+  // One-time immediate check — user likely just finished signing
+  if (docId) {
+    try {
+      const response = await api.get<ApiResponse<{ status: string; signed: boolean }>>(
+        `/esignature/documents/${docId}/status`
+      )
+      if (response.success && response.data.signed) {
+        toast.success('¡Documento firmado correctamente!')
+      }
+    } catch {
+      // Silent fail — will show current status from DB
+    }
+  }
+  await fetchDocuments()
 }
 
 /**
- * Start both detection mechanisms:
- * 1. WebSocket listener — instant notification when backend processes the webhook
- * 2. Lightweight DB poll — check our own DB every 10s (NOT SignNow API)
+ * Listen for the 'esignature:document-signed' WebSocket event.
+ * This fires instantly when SignNow's webhook reaches our backend.
  */
-const startSignedDetection = (docId: string) => {
-  stopSignedDetection()
-
-  // 1. WebSocket listener for instant push
+const startWebSocketListener = (docId: string) => {
+  stopWebSocketListener()
   unsubscribeSignedEvent = onSocketEvent('esignature:document-signed', (data: unknown) => {
     const event = data as { documentId?: string; patientId?: string; status?: string }
     if (event.documentId === docId || event.patientId === props.patientId) {
-      handleDocumentSigned()
+      toast.success('¡Documento firmado correctamente!')
+      stopWebSocketListener()
+      showSigningModal.value = false
+      signingUrl.value = ''
+      fetchDocuments()
     }
   })
-
-  // 2. Lightweight DB poll — only reads our DB, zero SignNow API calls
-  statusPollInterval.value = setInterval(async () => {
-    try {
-      const response = await api.get<ApiResponse<SigningDocument[]>>(
-        `/esignature/documents/patient/${props.patientId}`
-      )
-      if (response.success) {
-        const doc = response.data.find((d: SigningDocument) => d.id === docId)
-        if (doc && doc.status === 'SIGNED') {
-          handleDocumentSigned()
-        }
-      }
-    } catch {
-      // Silently fail — WebSocket is the primary mechanism
-    }
-  }, 10000) // 10 seconds — our own server, no rate limit risk
 }
 
-const stopSignedDetection = () => {
-  // Stop WebSocket listener
+const stopWebSocketListener = () => {
   if (unsubscribeSignedEvent) {
     unsubscribeSignedEvent()
     unsubscribeSignedEvent = null
   }
-  // Stop DB poll
-  if (statusPollInterval.value) {
-    clearInterval(statusPollInterval.value)
-    statusPollInterval.value = null
-  }
-}
-
-const handleDocumentSigned = () => {
-  toast.success('¡Documento firmado correctamente!')
-  closeSigning()
 }
 
 const downloadPdf = async (docId: string, docName: string) => {
@@ -538,7 +531,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  stopSignedDetection()
+  stopWebSocketListener()
 })
 </script>
 

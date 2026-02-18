@@ -289,9 +289,18 @@ const openFieldMapping = async (tmplId: string, tmplName: string) => {
     if (response.success) {
       signnowFields.value = response.data.signnowFields.filter(f => f.type === 'text')
       patientDataKeys.value = response.data.patientDataKeys
-      currentMappings.value = response.data.currentMappings.length > 0
-        ? [...response.data.currentMappings]
-        : signnowFields.value.map(f => ({ signnowFieldName: f.name, patientDataKey: '', label: f.name }))
+
+      // Always build mappings from fresh signnowFields, preserving any saved patientDataKey
+      const saved = response.data.currentMappings || []
+      currentMappings.value = signnowFields.value.map(f => {
+        // Try to find an existing mapping for this field (by name or ID)
+        const existing = saved.find(m => m.signnowFieldName === f.name || m.signnowFieldName === f.id)
+        return {
+          signnowFieldName: f.name,
+          patientDataKey: existing?.patientDataKey || '',
+          label: f.name,
+        }
+      })
     }
   } catch {
     toast.error('Error al cargar los campos de la plantilla')

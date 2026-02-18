@@ -12,6 +12,7 @@ import {
   CubeIcon,
   SwatchIcon,
   ArrowPathIcon,
+  DocumentTextIcon,
 } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
@@ -116,6 +117,14 @@ const configSections = [
     icon: ChatBubbleOvalLeftEllipsisIcon,
     color: 'bg-green-100 text-green-600',
     route: '/clinic/whatsapp/settings',
+  },
+  {
+    id: 'esignature',
+    name: 'Firma Electrónica',
+    description: 'Gestiona las plantillas de consentimientos y documentos para firma electrónica (SignNow)',
+    icon: DocumentTextIcon,
+    color: 'bg-indigo-100 text-indigo-600',
+    route: '/clinic/esignature/settings',
   },
 ]
 

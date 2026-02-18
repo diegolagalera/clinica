@@ -39,6 +39,7 @@ const ClinicNotifications = () => import('@/pages/clinic/Notifications.vue')
 const ClinicTemplateEditor = () => import('@/pages/clinic/TemplateEditor.vue')
 const ClinicSmsConfig = () => import('@/pages/clinic/SmsConfig.vue')
 const ClinicSettings = () => import('@/pages/clinic/Settings.vue')
+const ESignatureSettings = () => import('@/pages/clinic/ESignatureSettings.vue')
 const ClinicRatings = () => import('@/pages/clinic/Ratings.vue')
 const OdontogramFullscreen = () => import('@/pages/clinic/OdontogramFullscreen.vue')
 
@@ -155,6 +156,12 @@ const routes: RouteRecordRaw[] = [
                 path: 'settings',
                 name: 'clinic-settings',
                 component: ClinicSettings,
+                meta: { permission: 'settings' }
+            },
+            {
+                path: 'esignature/settings',
+                name: 'clinic-esignature-settings',
+                component: ESignatureSettings,
                 meta: { permission: 'settings' }
             },
             {

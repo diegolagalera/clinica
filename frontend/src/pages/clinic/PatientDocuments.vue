@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * PatientDocuments.vue
- * E-Signature module: manage document templates and signing workflows for a patient.
- * Fully isolated component - all logic is self-contained.
+ * E-Signature module: send documents for signing and track status.
+ * Template management has been moved to ESignatureSettings.vue (Settings → Firma Electrónica).
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { api } from '@/services/api'
@@ -10,7 +10,6 @@ import { toast } from '@/composables/useToast'
 import { onSocketEvent } from '@/services/websocket'
 import {
   DocumentTextIcon,
-  PlusIcon,
   XMarkIcon,
   ArrowDownTrayIcon,
   PaperAirplaneIcon,
@@ -18,11 +17,8 @@ import {
   ClockIcon,
   ExclamationCircleIcon,
   TrashIcon,
-  EyeIcon,
   ArrowPathIcon,
   PencilSquareIcon,
-  Cog6ToothIcon,
-  LinkIcon,
 } from '@heroicons/vue/24/outline'
 
 interface ApiResponse<T> {
@@ -38,27 +34,8 @@ interface DocumentTemplate {
   category: string
   isActive: boolean
   isConfigured: boolean
-  fieldMappings: FieldMapping[] | null
+  fieldMappings: { signnowFieldName: string; patientDataKey: string; label: string }[] | null
   createdAt: string
-}
-
-interface FieldMapping {
-  signnowFieldName: string
-  patientDataKey: string
-  label: string
-}
-
-interface SignNowField {
-  id: string
-  name: string
-  label: string
-  type: string
-  page_number: number
-}
-
-interface PatientDataKey {
-  key: string
-  label: string
 }
 
 interface SigningDocument {
@@ -99,28 +76,16 @@ const emailSubject = ref('')
 const emailMessage = ref('')
 const isCreating = ref(false)
 
-// Template upload modal
-const showTemplateModal = ref(false)
-const templateName = ref('')
-const templateDescription = ref('')
-const templateCategory = ref('OTHER')
-const templateFile = ref<File | null>(null)
-const isUploading = ref(false)
-
 // Embedded signing modal
 const showSigningModal = ref(false)
 const signingUrl = ref('')
 const signingDocId = ref('')
 
-// Field mapping modal
-const showFieldMappingModal = ref(false)
-const fieldMappingTemplateId = ref('')
-const fieldMappingTemplateName = ref('')
-const signnowFields = ref<SignNowField[]>([])
-const patientDataKeys = ref<PatientDataKey[]>([])
-const currentMappings = ref<FieldMapping[]>([])
-const isLoadingFields = ref(false)
-const isSavingMappings = ref(false)
+// Cancel confirmation modal
+const showCancelModal = ref(false)
+const cancelDocId = ref('')
+const cancelDocName = ref('')
+const isCancelling = ref(false)
 
 // One-time status check — calls SignNow API directly for real-time status
 const refreshDocumentStatus = async (docId: string) => {
@@ -137,8 +102,6 @@ const refreshDocumentStatus = async (docId: string) => {
   await fetchDocuments()
 }
 
-
-
 // ─── Category Labels ─────────────────────────────────────────────────────────
 
 const categoryLabels: Record<string, string> = {
@@ -154,16 +117,25 @@ const categoryLabels: Record<string, string> = {
   OTHER: 'Otro',
 }
 
-const cancelDocument = async (docId: string, docName: string) => {
-  const confirmed = confirm(`¿Estás seguro de que deseas cancelar el documento "${docName}"? Esta acción no se puede deshacer.`)
-  if (!confirmed) return
+// ─── Cancel Document (with modal) ────────────────────────────────────────────
 
+const openCancelModal = (docId: string, docName: string) => {
+  cancelDocId.value = docId
+  cancelDocName.value = docName
+  showCancelModal.value = true
+}
+
+const confirmCancelDocument = async () => {
+  isCancelling.value = true
   try {
-    await api.delete(`/esignature/documents/${docId}`)
+    await api.delete(`/esignature/documents/${cancelDocId.value}`)
     toast.success('Documento cancelado correctamente')
+    showCancelModal.value = false
     await fetchDocuments()
   } catch {
     toast.error('Error al cancelar el documento')
+  } finally {
+    isCancelling.value = false
   }
 }
 
@@ -216,159 +188,6 @@ const checkConfig = async () => {
   }
 }
 
-// ─── Template Management ─────────────────────────────────────────────────────
-
-const openTemplateModal = () => {
-  templateName.value = ''
-  templateDescription.value = ''
-  templateCategory.value = 'OTHER'
-  templateFile.value = null
-  showTemplateModal.value = true
-}
-
-const handleFileSelect = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  if (target.files?.length) {
-    templateFile.value = target.files[0]
-  }
-}
-
-const uploadTemplate = async () => {
-  if (!templateName.value.trim() || !templateFile.value) {
-    toast.error('Se requiere un nombre y un archivo PDF')
-    return
-  }
-
-  isUploading.value = true
-  try {
-    await api.upload<ApiResponse<DocumentTemplate>>(
-      '/esignature/templates',
-      templateFile.value,
-      'file',
-      {
-        name: templateName.value.trim(),
-        description: templateDescription.value.trim(),
-        category: templateCategory.value,
-      }
-    )
-    toast.success('Plantilla creada correctamente')
-    showTemplateModal.value = false
-    await fetchTemplates()
-  } catch (err) {
-    toast.error('Error al crear la plantilla')
-  } finally {
-    isUploading.value = false
-  }
-}
-
-const deleteTemplate = async (id: string) => {
-  if (!confirm('¿Desactivar esta plantilla?')) return
-  try {
-    await api.delete<ApiResponse<{ deleted: boolean }>>(`/esignature/templates/${id}`)
-    toast.success('Plantilla desactivada')
-    await fetchTemplates()
-  } catch {
-    toast.error('Error al desactivar la plantilla')
-  }
-}
-
-const previewTemplate = async (id: string) => {
-  try {
-    const response = await api.get<ArrayBuffer>(`/esignature/templates/${id}/preview`, {
-      responseType: 'arraybuffer',
-    })
-    const blob = new Blob([response], { type: 'application/pdf' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank')
-    // Clean up the object URL after a delay to allow the tab to load
-    setTimeout(() => URL.revokeObjectURL(url), 30000)
-  } catch {
-    toast.error('Error al previsualizar la plantilla')
-  }
-}
-
-// ─── Template Configuration (Editor + Field Mapping) ─────────────────────────
-
-const configureTemplate = async (tmplId: string) => {
-  try {
-    const response = await api.get<ApiResponse<{ url: string; templateId: string }>>(`/esignature/templates/${tmplId}/editor`)
-    if (response.success && response.data.url) {
-      // Open SignNow embedded editor in new tab
-      window.open(response.data.url, '_blank')
-      toast.success('Editor abierto en nueva pestaña. Configura los campos y guarda.')
-    }
-  } catch {
-    toast.error('Error al abrir el editor de campos')
-  }
-}
-
-const openFieldMapping = async (tmplId: string, tmplName: string) => {
-  fieldMappingTemplateId.value = tmplId
-  fieldMappingTemplateName.value = tmplName
-  isLoadingFields.value = true
-  showFieldMappingModal.value = true
-
-  try {
-    const response = await api.get<ApiResponse<{
-      signnowFields: SignNowField[]
-      patientDataKeys: PatientDataKey[]
-      currentMappings: FieldMapping[]
-    }>>(`/esignature/templates/${tmplId}/fields`)
-
-    if (response.success) {
-      signnowFields.value = response.data.signnowFields.filter(f => f.type === 'text')
-      patientDataKeys.value = response.data.patientDataKeys
-
-      // Always build mappings from fresh signnowFields, preserving any saved patientDataKey
-      // f.name = API name (used for prefill), f.label = display name (shown in UI)
-      const saved = response.data.currentMappings || []
-      currentMappings.value = signnowFields.value.map(f => {
-        // Try to find an existing mapping for this field (by name or ID)
-        const existing = saved.find(m => m.signnowFieldName === f.name || m.signnowFieldName === f.id)
-        return {
-          signnowFieldName: f.name,
-          patientDataKey: existing?.patientDataKey || '',
-          label: f.label || f.name,
-        }
-      })
-    }
-  } catch {
-    toast.error('Error al cargar los campos de la plantilla')
-    showFieldMappingModal.value = false
-  } finally {
-    isLoadingFields.value = false
-  }
-}
-
-const updateMapping = (index: number, patientDataKey: string) => {
-  if (currentMappings.value[index]) {
-    currentMappings.value[index].patientDataKey = patientDataKey
-    // Update label from patient data keys
-    const keyInfo = patientDataKeys.value.find(k => k.key === patientDataKey)
-    if (keyInfo) {
-      currentMappings.value[index].label = keyInfo.label
-    }
-  }
-}
-
-const saveFieldMappings = async () => {
-  const validMappings = currentMappings.value.filter(m => m.patientDataKey)
-  isSavingMappings.value = true
-  try {
-    await api.put<ApiResponse<{ saved: boolean }>>(
-      `/esignature/templates/${fieldMappingTemplateId.value}/field-mappings`,
-      { mappings: validMappings }
-    )
-    toast.success(`${validMappings.length} campos mapeados correctamente`)
-    showFieldMappingModal.value = false
-    await fetchTemplates()
-  } catch {
-    toast.error('Error al guardar los mapeos')
-  } finally {
-    isSavingMappings.value = false
-  }
-}
-
 // ─── Signing Document Management ─────────────────────────────────────────────
 
 const openNewDocModal = () => {
@@ -393,7 +212,7 @@ const createDocument = async () => {
   // Check if template is configured
   const selectedTemplate = templates.value.find(t => t.id === selectedTemplateId.value)
   if (selectedTemplate && !selectedTemplate.isConfigured) {
-    toast.error('La plantilla no está configurada. Configura los campos primero.')
+    toast.error('La plantilla no está configurada. Configura los campos primero desde Ajustes → Firma Electrónica.')
     return
   }
 
@@ -578,17 +397,10 @@ onUnmounted(() => {
       <div>
         <h2 class="text-lg font-semibold text-surface-900">Documentos y Firma Electrónica</h2>
         <p class="text-sm text-surface-500 mt-1">
-          Gestiona consentimientos y documentos con firma electrónica
+          Envía documentos para firma y gestiona su estado
         </p>
       </div>
       <div class="flex items-center gap-3">
-        <button
-          @click="openTemplateModal"
-          class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-300 rounded-xl hover:bg-surface-50 transition-colors"
-        >
-          <PlusIcon class="w-4 h-4" />
-          Nueva Plantilla
-        </button>
         <button
           @click="openNewDocModal"
           :disabled="templates.length === 0"
@@ -607,7 +419,20 @@ onUnmounted(() => {
         <div>
           <p class="text-sm font-medium text-amber-800">SignNow no configurado</p>
           <p class="text-sm text-amber-600 mt-1">
-            Las credenciales de SignNow no están configuradas. Puedes crear plantillas y documentos, pero la firma electrónica no estará disponible hasta configurar las variables de entorno SIGNNOW_*.
+            Las credenciales de SignNow no están configuradas. Configura las variables de entorno SIGNNOW_* para habilitar la firma electrónica.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- No templates hint -->
+    <div v-if="templates.length === 0 && !isLoading" class="p-4 rounded-xl bg-surface-50 border border-surface-200">
+      <div class="flex items-start gap-3">
+        <DocumentTextIcon class="w-5 h-5 text-surface-400 mt-0.5 shrink-0" />
+        <div>
+          <p class="text-sm font-medium text-surface-700">No hay plantillas disponibles</p>
+          <p class="text-sm text-surface-500 mt-1">
+            Crea plantillas desde <strong>Configuración → Firma Electrónica</strong> para poder enviar documentos a firmar.
           </p>
         </div>
       </div>
@@ -640,27 +465,19 @@ onUnmounted(() => {
       <h3 class="text-lg font-semibold text-surface-700 mb-2">Sin documentos</h3>
       <p class="text-surface-500 mb-6">
         Este paciente aún no tiene documentos para firmar.
-        {{ templates.length === 0 ? 'Crea una plantilla primero.' : 'Envía un documento para comenzar.' }}
+        {{ templates.length === 0 ? 'Crea plantillas desde Configuración → Firma Electrónica.' : 'Envía un documento para comenzar.' }}
       </p>
       <button
-        v-if="templates.length === 0"
-        @click="openTemplateModal"
-        class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 transition-colors"
-      >
-        <PlusIcon class="w-4 h-4" />
-        Crear primera plantilla
-      </button>
-      <button
-        v-else
+        v-if="templates.length > 0"
         @click="openNewDocModal"
         class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 transition-colors"
       >
         <PaperAirplaneIcon class="w-4 h-4" />
-        Enviar primer documento
+        Enviar Documento
       </button>
     </div>
 
-    <!-- Documents list -->
+    <!-- Document list -->
     <div v-else class="space-y-3">
       <div
         v-for="doc in documents"
@@ -739,7 +556,7 @@ onUnmounted(() => {
               <!-- Cancel (DRAFT/PENDING only) -->
               <button
                 v-if="doc.status === 'DRAFT' || doc.status === 'PENDING'"
-                @click="cancelDocument(doc.id, doc.name)"
+                @click="openCancelModal(doc.id, doc.name)"
                 class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                 title="Cancelar documento"
               >
@@ -771,73 +588,6 @@ onUnmounted(() => {
           <p class="text-sm text-surface-500">
             📩 Enviado a: {{ doc.emailSentTo }}
           </p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Templates section -->
-    <div v-if="templates.length > 0" class="mt-8">
-      <h3 class="text-sm font-semibold text-surface-500 uppercase tracking-wider mb-3">Plantillas disponibles</h3>
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <div
-          v-for="tmpl in templates"
-          :key="tmpl.id"
-          class="card p-4 group hover:shadow-md transition-shadow"
-        >
-          <div class="flex items-start justify-between">
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <p class="font-medium text-surface-900 truncate">{{ tmpl.name }}</p>
-                <!-- Configuration badge -->
-                <span
-                  v-if="tmpl.isConfigured"
-                  class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700"
-                >
-                  <CheckCircleIcon class="w-3 h-3" />
-                  Configurada
-                </span>
-                <span
-                  v-else
-                  class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
-                >
-                  <ExclamationCircleIcon class="w-3 h-3" />
-                  Sin configurar
-                </span>
-              </div>
-              <p class="text-sm text-surface-500 mt-1">{{ categoryLabels[tmpl.category] || tmpl.category }}</p>
-              <p v-if="tmpl.description" class="text-xs text-surface-400 mt-1 line-clamp-2">{{ tmpl.description }}</p>
-            </div>
-            <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2">
-              <button
-                @click="configureTemplate(tmpl.id)"
-                class="p-1.5 text-surface-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                title="Configurar campos en editor"
-              >
-                <Cog6ToothIcon class="w-4 h-4" />
-              </button>
-              <button
-                @click="openFieldMapping(tmpl.id, tmpl.name)"
-                class="p-1.5 text-surface-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors"
-                title="Mapear campos a datos del paciente"
-              >
-                <LinkIcon class="w-4 h-4" />
-              </button>
-              <button
-                @click="previewTemplate(tmpl.id)"
-                class="p-1.5 text-surface-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
-                title="Ver plantilla"
-              >
-                <EyeIcon class="w-4 h-4" />
-              </button>
-              <button
-                @click="deleteTemplate(tmpl.id)"
-                class="p-1.5 text-surface-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                title="Desactivar"
-              >
-                <TrashIcon class="w-4 h-4" />
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -951,91 +701,6 @@ onUnmounted(() => {
       </div>
     </Teleport>
 
-    <!-- Template Upload Modal -->
-    <Teleport to="body">
-      <div v-if="showTemplateModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-surface-900/50" @click="showTemplateModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md animate-scale-in">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
-            <h2 class="text-lg font-semibold text-surface-900">Nueva Plantilla</h2>
-            <button @click="showTemplateModal = false" class="text-surface-400 hover:text-surface-600">
-              <XMarkIcon class="w-5 h-5" />
-            </button>
-          </div>
-
-          <div class="p-6 space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-surface-700 mb-1">Nombre *</label>
-              <input
-                v-model="templateName"
-                type="text"
-                class="input w-full"
-                placeholder="Ej: Consentimiento informado general"
-              />
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-surface-700 mb-1">Descripción</label>
-              <textarea
-                v-model="templateDescription"
-                class="input w-full"
-                rows="2"
-                placeholder="Descripción opcional..."
-              ></textarea>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-surface-700 mb-1">Categoría</label>
-              <select v-model="templateCategory" class="input w-full">
-                <option v-for="(label, key) in categoryLabels" :key="key" :value="key">
-                  {{ label }}
-                </option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-surface-700 mb-1">Archivo PDF *</label>
-              <div
-                class="border-2 border-dashed border-surface-200 rounded-xl p-6 text-center hover:border-primary-300 transition-colors cursor-pointer"
-                @click="($refs.fileInput as HTMLInputElement)?.click()"
-              >
-                <input
-                  ref="fileInput"
-                  type="file"
-                  accept=".pdf,.doc,.docx"
-                  class="hidden"
-                  @change="handleFileSelect"
-                />
-                <DocumentTextIcon class="w-10 h-10 text-surface-300 mx-auto mb-2" />
-                <p v-if="templateFile" class="text-sm font-medium text-primary-600">
-                  {{ templateFile.name }}
-                </p>
-                <p v-else class="text-sm text-surface-500">
-                  Haz clic para seleccionar un archivo PDF
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div class="px-6 py-4 bg-surface-50 border-t border-surface-100 rounded-b-2xl flex justify-end gap-3">
-            <button
-              @click="showTemplateModal = false"
-              class="px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 rounded-xl transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              @click="uploadTemplate"
-              :disabled="!templateName.trim() || !templateFile || isUploading"
-              class="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50"
-            >
-              {{ isUploading ? 'Subiendo...' : 'Crear Plantilla' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
-
     <!-- Embedded Signing Modal (Full-screen iframe) -->
     <Teleport to="body">
       <div v-if="showSigningModal" class="fixed inset-0 z-[60] bg-white flex flex-col">
@@ -1068,82 +733,33 @@ onUnmounted(() => {
       </div>
     </Teleport>
 
-    <!-- Field Mapping Modal -->
+    <!-- Cancel Confirmation Modal -->
     <Teleport to="body">
-      <div v-if="showFieldMappingModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-surface-900/50" @click="showFieldMappingModal = false"></div>
-        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-lg animate-scale-in max-h-[85vh] flex flex-col">
-          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
-            <div>
-              <h2 class="text-lg font-semibold text-surface-900">Mapear Campos</h2>
-              <p class="text-sm text-surface-500 mt-0.5">{{ fieldMappingTemplateName }}</p>
+      <div v-if="showCancelModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-surface-900/50" @click="showCancelModal = false"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-sm animate-scale-in">
+          <div class="p-6 text-center">
+            <div class="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-4">
+              <ExclamationCircleIcon class="w-6 h-6 text-red-600" />
             </div>
-            <button @click="showFieldMappingModal = false" class="text-surface-400 hover:text-surface-600">
-              <XMarkIcon class="w-5 h-5" />
-            </button>
+            <h3 class="text-lg font-semibold text-surface-900 mb-2">Cancelar documento</h3>
+            <p class="text-sm text-surface-500">
+              ¿Estás seguro de que deseas cancelar el documento <strong>"{{ cancelDocName }}"</strong>? Esta acción no se puede deshacer.
+            </p>
           </div>
-
-          <div class="p-6 overflow-y-auto flex-1">
-            <div v-if="isLoadingFields" class="flex items-center justify-center py-12">
-              <div class="animate-spin rounded-full h-8 w-8 border-2 border-primary-600 border-t-transparent"></div>
-            </div>
-
-            <div v-else-if="signnowFields.length === 0" class="text-center py-8">
-              <ExclamationCircleIcon class="w-12 h-12 text-amber-400 mx-auto mb-3" />
-              <p class="font-medium text-surface-700">No se encontraron campos de texto</p>
-              <p class="text-sm text-surface-500 mt-1">
-                Primero usa el editor para colocar campos de texto en la plantilla.
-              </p>
-              <button
-                @click="showFieldMappingModal = false; configureTemplate(fieldMappingTemplateId)"
-                class="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 transition-colors"
-              >
-                <Cog6ToothIcon class="w-4 h-4" />
-                Abrir editor
-              </button>
-            </div>
-
-            <div v-else class="space-y-4">
-              <div class="p-3 rounded-xl bg-surface-50 text-sm text-surface-600">
-                <p>Conecta cada campo del documento con los datos del paciente que se autocompletarán al crear un documento para firma.</p>
-              </div>
-
-              <div
-                v-for="(mapping, idx) in currentMappings"
-                :key="idx"
-                class="p-4 border border-surface-200 rounded-xl space-y-2"
-              >
-                <div class="flex items-center justify-between">
-                  <p class="text-sm font-medium text-surface-900">{{ mapping.label || mapping.signnowFieldName }}</p>
-                  <span class="text-xs px-2 py-0.5 rounded bg-surface-100 text-surface-500">Campo de texto</span>
-                </div>
-                <select
-                  :value="mapping.patientDataKey"
-                  @change="updateMapping(idx, ($event.target as HTMLSelectElement).value)"
-                  class="input w-full text-sm"
-                >
-                  <option value="">— No mapear —</option>
-                  <option v-for="pk in patientDataKeys" :key="pk.key" :value="pk.key">
-                    {{ pk.label }}
-                  </option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="signnowFields.length > 0" class="px-6 py-4 bg-surface-50 border-t border-surface-100 rounded-b-2xl flex justify-end gap-3">
+          <div class="px-6 py-4 bg-surface-50 border-t border-surface-100 rounded-b-2xl flex justify-end gap-3">
             <button
-              @click="showFieldMappingModal = false"
+              @click="showCancelModal = false"
               class="px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 rounded-xl transition-colors"
             >
-              Cancelar
+              No, mantener
             </button>
             <button
-              @click="saveFieldMappings"
-              :disabled="isSavingMappings"
-              class="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50"
+              @click="confirmCancelDocument"
+              :disabled="isCancelling"
+              class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-xl hover:bg-red-700 transition-colors disabled:opacity-50"
             >
-              {{ isSavingMappings ? 'Guardando...' : 'Guardar Mapeos' }}
+              {{ isCancelling ? 'Cancelando...' : 'Sí, cancelar' }}
             </button>
           </div>
         </div>

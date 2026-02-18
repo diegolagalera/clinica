@@ -408,7 +408,8 @@ export const createSigningDocument = async (
         emailMessage?: string;
     },
     tenantContext: TenantContext,
-    requestOrigin?: string
+    requestOrigin?: string,
+    tenantSlug?: string
 ): Promise<typeof signingDocuments.$inferSelect> => {
     const { clinicId, patientId, templateId, signingMethod, sentById } = data;
 
@@ -479,10 +480,11 @@ export const createSigningDocument = async (
             }
 
             // Subscribe to webhook for document completion (best-effort)
-            // Uses the request origin (api.cuspia.com) to build the webhook URL
+            // Include tenantSlug in URL for direct DB resolution in multi-tenant setup
             if (requestOrigin) {
                 try {
-                    const webhookUrl = `${requestOrigin}/api/v1/esignature/webhook/signnow`;
+                    const slugParam = tenantSlug ? `?tenant=${encodeURIComponent(tenantSlug)}` : '';
+                    const webhookUrl = `${requestOrigin}/api/v1/esignature/webhook/signnow${slugParam}`;
                     await signnowService.subscribeToWebhook(
                         signnowDocumentId,
                         webhookUrl,

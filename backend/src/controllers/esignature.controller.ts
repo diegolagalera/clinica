@@ -250,7 +250,8 @@ export const createSigningDocument = asyncHandler(async (req: AuthenticatedReque
             emailMessage,
         },
         req.tenantContext,
-        requestOrigin
+        requestOrigin,
+        req.user?.tenantSlug
     );
 
     res.status(201).json(success(document));
@@ -334,20 +335,33 @@ export const handleWebhook = asyncHandler(async (req: Request, res: Response) =>
     console.log(`[ESignature Webhook] Received event: ${event} for document: ${documentId}`);
 
     if (documentId) {
-        // Webhook is a public route — no auth middleware, so no req.db.
-        // Search across all active tenant databases for the signing document.
-        const stats = tenantManager.getConnectionStats();
-        for (const { slug } of stats) {
+        // Extract tenant slug from the query param (embedded during subscription)
+        const tenantSlug = req.query.tenant as string | undefined;
+
+        if (tenantSlug) {
+            // Direct DB resolution — the clean multi-tenant path
             try {
-                const db = await tenantManager.getConnection(slug);
-                const handled = await esignatureService.handleWebhook(
-                    db,
-                    { document_id: documentId, event },
-                    slug
-                );
-                if (handled) break; // Document found and processed
+                const db = await tenantManager.getConnection(tenantSlug);
+                await esignatureService.handleWebhook(db, { document_id: documentId, event }, tenantSlug);
+                console.log(`[ESignature Webhook] Processed in tenant: ${tenantSlug}`);
             } catch (err) {
-                console.error(`[ESignature Webhook] Error processing in tenant ${slug}:`, err);
+                console.error(`[ESignature Webhook] Error processing in tenant ${tenantSlug}:`, err);
+            }
+        } else {
+            // Fallback: iterate active tenant connections (for old subscriptions without slug)
+            const stats = tenantManager.getConnectionStats();
+            for (const { slug } of stats) {
+                try {
+                    const db = await tenantManager.getConnection(slug);
+                    const handled = await esignatureService.handleWebhook(
+                        db,
+                        { document_id: documentId, event },
+                        slug
+                    );
+                    if (handled) break;
+                } catch (err) {
+                    console.error(`[ESignature Webhook] Error processing in tenant ${slug}:`, err);
+                }
             }
         }
     }

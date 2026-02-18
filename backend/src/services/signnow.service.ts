@@ -89,8 +89,32 @@ export const getDocumentRoles = async (
         return [];
     }
 
-    const data = (await response.json()) as { roles?: SignNowRole[] };
-    return data.roles || [];
+    const data = (await response.json()) as Record<string, unknown>;
+
+    // Debug: log roles-related keys
+    console.log('[SignNow] Document roles lookup:', {
+        hasRoles: Array.isArray(data.roles),
+        rolesCount: Array.isArray(data.roles) ? (data.roles as unknown[]).length : 0,
+        hasRoutingDetails: Array.isArray(data.routing_details),
+        routingDetailsCount: Array.isArray(data.routing_details) ? (data.routing_details as unknown[]).length : 0,
+    });
+
+    // Try 'roles' first, then 'routing_details'
+    const roles = (data.roles || []) as SignNowRole[];
+    if (roles.length > 0) return roles;
+
+    // Fall back to routing_details (SignNow v2 API structure)
+    const routingDetails = (data.routing_details || []) as Array<Record<string, unknown>>;
+    if (routingDetails.length > 0) {
+        console.log('[SignNow] routing_details[0]:', JSON.stringify(routingDetails[0], null, 2));
+        return routingDetails.map(rd => ({
+            unique_id: String(rd.unique_id || rd.id || ''),
+            name: String(rd.name || rd.role_name || 'Signer'),
+            signing_order: Number(rd.signing_order || rd.order || 1),
+        }));
+    }
+
+    return [];
 };
 
 /**

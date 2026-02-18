@@ -34,8 +34,8 @@ const upload = multer({
 // SignNow webhook callback (must be before auth middleware)
 router.post('/webhook/signnow', esignatureController.handleWebhook);
 
-// Editor callback redirect from SignNow (uses tenantContext for DB access)
-router.get('/templates/editor-callback', tenantContext, esignatureController.handleEditorCallback);
+// Editor callback redirect from SignNow (public — resolves tenant DB from query slug)
+router.get('/templates/editor-callback', esignatureController.handleEditorCallback);
 
 // ─── Protected Routes (require auth + staff + tenant) ────────────────────────
 router.use(authenticate);

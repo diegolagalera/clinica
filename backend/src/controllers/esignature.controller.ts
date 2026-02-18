@@ -2,14 +2,15 @@
  * E-Signature Controller
  * REST endpoints for managing document templates and signing workflows.
  */
-import { Response } from 'express';
+import { Response, Request } from 'express';
 import { asyncHandler } from '../middleware/index.js';
 import { AuthenticatedRequest } from '../types/index.js';
 import * as esignatureService from '../services/esignature.service.js';
 import * as signnowService from '../services/signnow.service.js';
 import { success } from '../utils/response.js';
 import { BadRequestError } from '../utils/errors.js';
-import type { Request } from 'express';
+import { tenantManager } from '../db/tenant-manager.js';
+import { config } from '../config/env.js';
 
 // ─── Template Endpoints ──────────────────────────────────────────────────────
 
@@ -88,7 +89,7 @@ export const getTemplatePreview = asyncHandler(async (req: AuthenticatedRequest,
 export const getTemplateEditor = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
     const { id } = req.params;
 
-    // Derive the origin from the request so the editor redirects back to the correct tenant subdomain
+    // Derive the origin from the request so the editor redirects back to the correct API host
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
     const host = req.headers['x-forwarded-host'] || req.headers.host || '';
     const requestOrigin = `${protocol}://${host}`;
@@ -97,7 +98,8 @@ export const getTemplateEditor = asyncHandler(async (req: AuthenticatedRequest, 
         req.db!,
         id!,
         req.tenantContext,
-        requestOrigin
+        requestOrigin,
+        req.user?.tenantSlug
     );
 
     res.json(success(result));
@@ -105,21 +107,54 @@ export const getTemplateEditor = asyncHandler(async (req: AuthenticatedRequest, 
 
 /**
  * GET /esignature/templates/editor-callback
- * Handle redirect from SignNow embedded editor (marks template as configured)
+ * Handle redirect from SignNow embedded editor.
+ * This is a PUBLIC endpoint (no auth) — resolves tenant DB from query slug.
+ * Marks the template as configured and redirects user to the frontend.
  */
-export const handleEditorCallback = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-    const { templateId } = req.query;
+export const handleEditorCallback = asyncHandler(async (req: Request, res: Response) => {
+    const { templateId, slug } = req.query;
 
     if (!templateId || typeof templateId !== 'string') {
-        // Redirect to frontend with error
-        res.redirect('/clinic/patients?editor=error');
+        res.status(400).send('Missing templateId parameter');
         return;
     }
 
-    await esignatureService.handleEditorCallback(req.db!, templateId);
+    if (!slug || typeof slug !== 'string') {
+        res.status(400).send('Missing tenant slug parameter');
+        return;
+    }
 
-    // Redirect to frontend with success indicator
-    res.redirect(`/clinic/patients?editor=success&templateId=${templateId}`);
+    try {
+        // Resolve tenant DB directly (no auth middleware needed)
+        const db = await tenantManager.getConnection(slug);
+
+        await esignatureService.handleEditorCallback(db, templateId);
+
+        // Redirect to the tenant's frontend
+        const frontendBaseUrl = config.frontend.url || 'http://localhost:5173';
+        // Replace the domain with the tenant's subdomain
+        // e.g. https://app.cuspia.com → https://mi-clinica.cuspia.com
+        let redirectUrl: string;
+        try {
+            const url = new URL(frontendBaseUrl);
+            const hostParts = url.hostname.split('.');
+            if (hostParts.length >= 2) {
+                // Replace the first subdomain (e.g. 'app') with the tenant slug
+                hostParts[0] = slug;
+                url.hostname = hostParts.join('.');
+            }
+            url.pathname = '/';
+            url.searchParams.set('editor', 'success');
+            redirectUrl = url.toString();
+        } catch {
+            redirectUrl = `${frontendBaseUrl}/?editor=success`;
+        }
+
+        res.redirect(redirectUrl);
+    } catch (err) {
+        console.error('[ESignature] Editor callback error:', err);
+        res.status(500).send('Error processing editor callback. Please close this tab and try again.');
+    }
 });
 
 /**

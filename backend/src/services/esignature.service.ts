@@ -236,13 +236,14 @@ export const deactivateTemplate = async (
 /**
  * Get embedded editor URL for configuring template fields.
  * The admin opens this URL to visually place signature/text fields on the PDF.
- * Uses the requestOrigin (e.g. https://mi-clinica.cuspia.com) for the redirect.
+ * Uses the requestOrigin (e.g. https://api.cuspia.com) for the redirect.
  */
 export const getTemplateEditorUrl = async (
     db: Database,
     templateId: string,
     tenantContext: TenantContext,
-    requestOrigin?: string
+    requestOrigin?: string,
+    tenantSlug?: string
 ): Promise<{ url: string; templateId: string }> => {
     const template = await getTemplateById(db, templateId, tenantContext);
     if (!template) throw new NotFoundError('Plantilla no encontrada');
@@ -252,7 +253,7 @@ export const getTemplateEditorUrl = async (
 
     // Use the request origin for redirect (e.g. https://api.cuspia.com)
     const baseUrl = requestOrigin || 'http://localhost:3000';
-    const redirectUri = `${baseUrl}/api/esignature/templates/editor-callback?templateId=${templateId}`;
+    const redirectUri = `${baseUrl}/api/esignature/templates/editor-callback?templateId=${templateId}&slug=${tenantSlug || ''}`;
 
     const editorUrl = await signnowService.getEditorLink(template.signnowTemplateId, redirectUri);
 

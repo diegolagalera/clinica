@@ -440,6 +440,7 @@ export const register = async (db: Database, input: RegisterInput, tenantSlug: s
 export const refreshAccessToken = async (db: Database, token: string, tenantSlug?: string): Promise<ServiceResult<AuthTokens>> => {
     try {
         const decoded = jwt.verify(token, config.jwt.refreshSecret) as RefreshTokenPayload;
+        logger.info({ userId: decoded.userId, jti: decoded.jti, tenantSlug: decoded.tenantSlug }, '[TOKEN REFRESH] JWT verified, looking up in DB');
 
         const storedToken = await db.query.refreshTokens.findFirst({
             where: and(
@@ -452,11 +453,13 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
         });
 
         if (!storedToken) {
+            logger.warn({ userId: decoded.userId, jti: decoded.jti }, '[TOKEN REFRESH] Token NOT found in DB — possible DB cleanup or server restart');
             throw new UnauthorizedError('Invalid refresh token');
         }
 
         // Handle race condition: token already revoked by another tab
         if (storedToken.revokedAt) {
+            logger.warn({ userId: decoded.userId, jti: decoded.jti, revokedAt: storedToken.revokedAt, hasReplacement: !!storedToken.replacedByToken }, '[TOKEN REFRESH] Token is REVOKED, attempting recovery');
             if (storedToken.replacedByToken) {
                 const replacementToken = await db.query.refreshTokens.findFirst({
                     where: and(
@@ -471,6 +474,7 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
                 if (replacementToken && !replacementToken.revokedAt && new Date() < replacementToken.expiresAt) {
                     const user = replacementToken.user;
                     if (user.tokenVersion === decoded.tokenVersion) {
+                        logger.info({ userId: decoded.userId }, '[TOKEN REFRESH] Recovery SUCCESS — using replacement token');
                         const accessPayload: AccessTokenPayload = {
                             userId: user.id,
                             email: user.email,
@@ -490,18 +494,23 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
                             },
                         };
                     }
+                    logger.warn({ userId: decoded.userId, dbVersion: user.tokenVersion, jwtVersion: decoded.tokenVersion }, '[TOKEN REFRESH] Recovery FAILED — tokenVersion mismatch');
+                } else {
+                    logger.warn({ userId: decoded.userId, replacementExists: !!replacementToken, replacementRevoked: !!replacementToken?.revokedAt, replacementExpired: replacementToken ? new Date() >= replacementToken.expiresAt : null }, '[TOKEN REFRESH] Recovery FAILED — replacement token invalid');
                 }
             }
             throw new UnauthorizedError('Refresh token has been revoked');
         }
 
         if (new Date() > storedToken.expiresAt) {
+            logger.warn({ userId: decoded.userId, expiresAt: storedToken.expiresAt, now: new Date() }, '[TOKEN REFRESH] Token EXPIRED in DB');
             throw new UnauthorizedError('Refresh token expired');
         }
 
         const user = storedToken.user;
 
         if (user.tokenVersion !== decoded.tokenVersion) {
+            logger.warn({ userId: decoded.userId, dbVersion: user.tokenVersion, jwtVersion: decoded.tokenVersion }, '[TOKEN REFRESH] tokenVersion MISMATCH — password was changed?');
             throw new UnauthorizedError('Token version mismatch');
         }
 
@@ -542,6 +551,8 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
             });
         });
 
+        logger.info({ userId: decoded.userId }, '[TOKEN REFRESH] SUCCESS — tokens rotated');
+
         return {
             success: true,
             data: {
@@ -552,6 +563,7 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
         };
     } catch (error) {
         if (error instanceof jwt.JsonWebTokenError) {
+            logger.error({ error: error.message }, '[TOKEN REFRESH] JWT verification FAILED — signature/secret mismatch');
             throw new UnauthorizedError('Invalid refresh token');
         }
         throw error;

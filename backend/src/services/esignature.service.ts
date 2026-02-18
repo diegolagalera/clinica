@@ -3,7 +3,7 @@
  * Business logic layer for managing document templates and signing workflows.
  * Orchestrates between our DB, SignNow API, and S3 storage.
  */
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, ne } from 'drizzle-orm';
 import type { Database } from '../db/index.js';
 import type { TenantContext } from '../types/index.js';
 import {
@@ -424,7 +424,8 @@ export const getPatientDocuments = async (
         .where(
             and(
                 eq(signingDocuments.patientId, patientId),
-                eq(signingDocuments.clinicId, clinicId)
+                eq(signingDocuments.clinicId, clinicId),
+                ne(signingDocuments.status, 'CANCELLED')
             )
         )
         .orderBy(desc(signingDocuments.createdAt));

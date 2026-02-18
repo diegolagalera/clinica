@@ -4,9 +4,10 @@
  * E-Signature module: manage document templates and signing workflows for a patient.
  * Fully isolated component - all logic is self-contained.
  */
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { api } from '@/services/api'
 import { toast } from '@/composables/useToast'
+import { onSocketEvent } from '@/services/websocket'
 import {
   DocumentTextIcon,
   PlusIcon,
@@ -121,8 +122,12 @@ const currentMappings = ref<FieldMapping[]>([])
 const isLoadingFields = ref(false)
 const isSavingMappings = ref(false)
 
-// Status polling
-const pollingInterval = ref<ReturnType<typeof setInterval> | null>(null)
+// Document status refresh (one-time check, no polling)
+const refreshDocumentStatus = async (_docId: string) => {
+  await fetchDocuments()
+}
+
+
 
 // ─── Category Labels ─────────────────────────────────────────────────────────
 
@@ -400,6 +405,9 @@ const createDocument = async () => {
   }
 }
 
+// WebSocket listener cleanup function
+let unsubscribeSignedEvent: (() => void) | null = null
+
 const openSigning = async (docId: string) => {
   try {
     const response = await api.get<ApiResponse<{ url: string }>>(`/esignature/documents/${docId}/signing-url`)
@@ -407,7 +415,7 @@ const openSigning = async (docId: string) => {
       signingUrl.value = response.data.url
       signingDocId.value = docId
       showSigningModal.value = true
-      startStatusPolling(docId)
+      startListeningForSigned(docId)
     }
   } catch {
     toast.error('Error al generar el enlace de firma')
@@ -417,32 +425,30 @@ const openSigning = async (docId: string) => {
 const closeSigning = () => {
   showSigningModal.value = false
   signingUrl.value = ''
-  stopStatusPolling()
+  stopListeningForSigned()
   fetchDocuments()
 }
 
-const checkStatus = async (docId: string) => {
-  try {
-    const response = await api.get<ApiResponse<{ status: string; signed: boolean }>>(`/esignature/documents/${docId}/status`)
-    if (response.success && response.data.signed) {
+/**
+ * Listen for the 'esignature:document-signed' WebSocket event
+ * pushed by the backend when SignNow's webhook fires.
+ */
+const startListeningForSigned = (docId: string) => {
+  stopListeningForSigned()
+  unsubscribeSignedEvent = onSocketEvent('esignature:document-signed', (data: unknown) => {
+    const event = data as { documentId?: string; patientId?: string; status?: string }
+    if (event.documentId === docId || event.patientId === props.patientId) {
       toast.success('¡Documento firmado correctamente!')
       closeSigning()
-      await fetchDocuments()
+      fetchDocuments()
     }
-  } catch {
-    // Silently fail status checks
-  }
+  })
 }
 
-const startStatusPolling = (docId: string) => {
-  stopStatusPolling()
-  pollingInterval.value = setInterval(() => checkStatus(docId), 5000)
-}
-
-const stopStatusPolling = () => {
-  if (pollingInterval.value) {
-    clearInterval(pollingInterval.value)
-    pollingInterval.value = null
+const stopListeningForSigned = () => {
+  if (unsubscribeSignedEvent) {
+    unsubscribeSignedEvent()
+    unsubscribeSignedEvent = null
   }
 }
 
@@ -485,6 +491,10 @@ onMounted(async () => {
   } finally {
     isLoading.value = false
   }
+})
+
+onUnmounted(() => {
+  stopListeningForSigned()
 })
 </script>
 
@@ -641,10 +651,10 @@ onMounted(async () => {
                 <PencilSquareIcon class="w-4 h-4" />
               </button>
 
-              <!-- Check status (PENDING) -->
+              <!-- Refresh status (PENDING) -->
               <button
                 v-if="doc.status === 'PENDING'"
-                @click="checkStatus(doc.id)"
+                @click="refreshDocumentStatus(doc.id)"
                 class="p-2 text-surface-500 hover:bg-surface-100 rounded-lg transition-colors"
                 title="Comprobar estado"
               >

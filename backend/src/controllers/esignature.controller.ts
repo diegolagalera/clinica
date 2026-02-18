@@ -334,13 +334,22 @@ export const handleWebhook = asyncHandler(async (req: Request, res: Response) =>
     console.log(`[ESignature Webhook] Received event: ${event} for document: ${documentId}`);
 
     if (documentId) {
-        // Use a minimal db connection for webhook processing
-        // The webhook handler in the service will find the right tenant
-        await esignatureService.handleWebhook(
-            (req as AuthenticatedRequest).db!,
-            { document_id: documentId, event },
-            undefined
-        );
+        // Webhook is a public route — no auth middleware, so no req.db.
+        // Search across all active tenant databases for the signing document.
+        const stats = tenantManager.getConnectionStats();
+        for (const { slug } of stats) {
+            try {
+                const db = await tenantManager.getConnection(slug);
+                const handled = await esignatureService.handleWebhook(
+                    db,
+                    { document_id: documentId, event },
+                    slug
+                );
+                if (handled) break; // Document found and processed
+            } catch (err) {
+                console.error(`[ESignature Webhook] Error processing in tenant ${slug}:`, err);
+            }
+        }
     }
 
     res.status(200).json({ status: 'ok' });

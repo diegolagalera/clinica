@@ -484,7 +484,7 @@ export const createSigningDocument = async (
                 try {
                     const webhookUrl = `${requestOrigin}/api/v1/esignature/webhook/signnow`;
                     await signnowService.subscribeToWebhook(
-                        doc.id,
+                        signnowDocumentId,
                         webhookUrl,
                         'document.complete'
                     );
@@ -679,13 +679,14 @@ export const downloadSignedPdf = async (
 
 /**
  * Handle SignNow webhook callback (document signed)
+ * Returns true if the document was found and processed in this tenant DB.
  */
 export const handleWebhook = async (
     db: Database,
     payload: { document_id?: string; event?: string },
     tenantSlug?: string
-): Promise<void> => {
-    if (!payload.document_id) return;
+): Promise<boolean> => {
+    if (!payload.document_id) return false;
 
     // Find the signing document by SignNow document ID
     const [doc] = await db
@@ -694,12 +695,9 @@ export const handleWebhook = async (
         .where(eq(signingDocuments.signnowDocumentId, payload.document_id))
         .limit(1);
 
-    if (!doc) {
-        console.warn('[ESignature] Webhook: document not found for SignNow ID:', payload.document_id);
-        return;
-    }
+    if (!doc) return false; // Not in this tenant
 
-    if (doc.status === 'SIGNED') return; // Already processed
+    if (doc.status === 'SIGNED') return true; // Already processed
 
     // Download signed PDF
     let signedPdfStorageKey: string | null = null;
@@ -730,4 +728,19 @@ export const handleWebhook = async (
         .where(eq(signingDocuments.id, doc.id));
 
     console.log(`[ESignature] Document ${doc.id} marked as SIGNED via webhook`);
+
+    // Push real-time update to frontend via WebSocket
+    try {
+        const { emitToClinic } = await import('../websocket.js');
+        emitToClinic(doc.clinicId, 'esignature:document-signed', {
+            documentId: doc.id,
+            patientId: doc.patientId,
+            status: 'SIGNED',
+        });
+        console.log(`[ESignature] WebSocket notification sent to clinic ${doc.clinicId}`);
+    } catch (wsErr) {
+        console.warn('[ESignature] WebSocket emit failed (non-critical):', wsErr);
+    }
+
+    return true;
 };

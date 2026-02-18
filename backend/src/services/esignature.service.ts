@@ -253,7 +253,7 @@ export const getTemplateEditorUrl = async (
 
     // Use the request origin for redirect (e.g. https://api.cuspia.com)
     const baseUrl = requestOrigin || 'http://localhost:3000';
-    const redirectUri = `${baseUrl}/api/esignature/templates/editor-callback?templateId=${templateId}&slug=${tenantSlug || ''}`;
+    const redirectUri = `${baseUrl}/api/v1/esignature/templates/editor-callback?templateId=${templateId}&slug=${tenantSlug || ''}`;
 
     const editorUrl = await signnowService.getEditorLink(template.signnowTemplateId, redirectUri);
 
@@ -479,7 +479,7 @@ export const createSigningDocument = async (
             // Uses the request origin (api.cuspia.com) to build the webhook URL
             if (requestOrigin) {
                 try {
-                    const webhookUrl = `${requestOrigin}/api/esignature/webhook/signnow`;
+                    const webhookUrl = `${requestOrigin}/api/v1/esignature/webhook/signnow`;
                     await signnowService.subscribeToWebhook(
                         doc.id,
                         webhookUrl,

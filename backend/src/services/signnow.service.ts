@@ -381,7 +381,7 @@ export const prefillDocumentFields = async (
     };
     console.log(`[SignNow] Prefill request for doc ${documentId}:`, JSON.stringify(requestBody, null, 2));
 
-    const response = await fetch(`${getApiUrl()}/v2/documents/${documentId}/prefill-text`, {
+    const response = await fetch(`${getApiUrl()}/v2/documents/${documentId}/prefill-texts`, {
         method: 'PUT',
         headers: {
             'Authorization': `Bearer ${token}`,

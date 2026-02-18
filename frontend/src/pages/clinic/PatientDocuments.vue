@@ -415,13 +415,14 @@ const createDocument = async () => {
   }
 }
 
-// ─── Real-time signing detection: WebSocket only (no polling) ────────────────
+// ─── Real-time signing detection: WebSocket + iframe navigation ──────────────
 // WebSocket: instant push when SignNow webhook fires → backend → WebSocket → frontend.
+// Iframe load detection: when SignNow redirects after signing → auto-close immediately.
 // On close: one-time immediate check against SignNow API (guarantees status update).
-// Manual button: "Comprobar estado" calls SignNow API directly (one-time).
 // ZERO repeated API calls — no polling, no rate limit risk.
 
 let unsubscribeSignedEvent: (() => void) | null = null
+const iframeLoadCount = ref(0)
 
 const openSigning = async (docId: string) => {
   try {
@@ -429,6 +430,7 @@ const openSigning = async (docId: string) => {
     if (response.success && response.data.url) {
       signingUrl.value = response.data.url
       signingDocId.value = docId
+      iframeLoadCount.value = 0 // Reset load counter for new signing session
       showSigningModal.value = true
       startWebSocketListener(docId)
     }
@@ -486,6 +488,19 @@ const stopWebSocketListener = () => {
   if (unsubscribeSignedEvent) {
     unsubscribeSignedEvent()
     unsubscribeSignedEvent = null
+  }
+}
+
+/**
+ * Detect iframe navigation: after the initial load (signing page),
+ * any subsequent load (e.g. SignNow redirects to login) means signing is done.
+ */
+const onSigningIframeLoad = () => {
+  iframeLoadCount.value++
+  // First load = signing page loaded. Second load = signing complete, redirected.
+  if (iframeLoadCount.value > 1) {
+    console.log('[ESignature] Iframe navigated after signing — auto-closing modal')
+    closeSigning()
   }
 }
 
@@ -1015,6 +1030,7 @@ onUnmounted(() => {
           class="flex-1 w-full border-0"
           allow="camera; microphone"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
+          @load="onSigningIframeLoad"
         ></iframe>
       </div>
     </Teleport>

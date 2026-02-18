@@ -61,6 +61,7 @@ const envSchema = z.object({
 
     // SignNow E-Signature
     SIGNNOW_API_KEY: z.string().optional(),
+    SIGNNOW_EMAIL: z.string().email().optional(),
     SIGNNOW_API_URL: z.string().url().optional(),
 
 });
@@ -156,6 +157,6 @@ export const config = {
     signnow: {
         apiKey: env.SIGNNOW_API_KEY,
         apiUrl: env.SIGNNOW_API_URL || 'https://api.signnow.com',
-
+        email: env.SIGNNOW_EMAIL,
     },
 } as const;

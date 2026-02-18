@@ -546,6 +546,16 @@ export const sendEmailInvite = async (
 ): Promise<void> => {
     const token = await getAccessToken();
 
+    // 'from' is REQUIRED by SignNow — must be the SignNow account email
+    const senderEmail = fromEmail || config.signnow.email;
+    if (!senderEmail) {
+        throw new AppError(
+            'SIGNNOW_EMAIL no configurado. Se requiere para enviar invitaciones por email.',
+            503,
+            'SIGNNOW_EMAIL_NOT_CONFIGURED'
+        );
+    }
+
     // Fetch actual role from document (same pattern as createEmbeddedInvite)
     const roles = await getDocumentRoles(documentId);
     if (roles.length === 0) {
@@ -558,7 +568,7 @@ export const sendEmailInvite = async (
 
     const roleId = roles[0]!.unique_id;
     const roleName = roles[0]!.name || 'Signer 1';
-    console.log(`[SignNow] Email invite using role_id: ${roleId}, role: ${roleName} for: ${signerEmail}`);
+    console.log(`[SignNow] Email invite using role_id: ${roleId}, role: ${roleName}, from: ${senderEmail}, to: ${signerEmail}`);
 
     const response = await fetch(`${getApiUrl()}/document/${documentId}/invite`, {
         method: 'POST',
@@ -575,7 +585,7 @@ export const sendEmailInvite = async (
                     order: 1,
                 },
             ],
-            ...(fromEmail ? { from: fromEmail } : {}),
+            from: senderEmail,
             subject,
             message,
         }),

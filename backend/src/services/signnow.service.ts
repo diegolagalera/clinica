@@ -470,11 +470,43 @@ export const createEmbeddedInvite = async (
         throw new AppError(`Error al crear invitación embebida: ${inviteResponse.status}`, 502, 'SIGNNOW_EMBED_INVITE_ERROR');
     }
 
-    const inviteData = (await inviteResponse.json()) as EmbeddedInviteResponse;
+    const inviteRaw = await inviteResponse.json();
+    console.log('[SignNow] Embedded invite response:', JSON.stringify(inviteRaw, null, 2));
 
-    // Step 3: Generate the signing link
+    // Extract invite ID — handle different response formats
+    let inviteId: string | undefined;
+    const inviteAny = inviteRaw as Record<string, unknown>;
+
+    // Format 1: { data: { id: "..." } }
+    if (inviteAny.data && typeof inviteAny.data === 'object') {
+        const d = inviteAny.data as Record<string, unknown>;
+        if (d.id) {
+            inviteId = String(d.id);
+        }
+        // Format 2: { data: [{ id: "..." }] }
+        if (Array.isArray(d)) {
+            inviteId = String((d[0] as Record<string, unknown>)?.id || '');
+        }
+    }
+    // Format 3: { id: "..." } (direct)
+    if (!inviteId && inviteAny.id) {
+        inviteId = String(inviteAny.id);
+    }
+    // Format 4: response is array [{id: "..."}]
+    if (!inviteId && Array.isArray(inviteRaw)) {
+        inviteId = String((inviteRaw[0] as Record<string, unknown>)?.id || '');
+    }
+
+    if (!inviteId) {
+        console.error('[SignNow] Could not extract invite ID from response');
+        throw new AppError('No se pudo obtener el ID de la invitación', 502, 'SIGNNOW_INVITE_ID_ERROR');
+    }
+
+    console.log(`[SignNow] Invite ID: ${inviteId}`);
+
+    // Step 4: Generate the signing link
     const linkResponse = await fetch(
-        `${getApiUrl()}/v2/documents/${documentId}/embedded-invites/${inviteData.data.id}/link`,
+        `${getApiUrl()}/v2/documents/${documentId}/embedded-invites/${inviteId}/link`,
         {
             method: 'POST',
             headers: {
@@ -494,8 +526,13 @@ export const createEmbeddedInvite = async (
         throw new AppError(`Error al generar enlace de firma: ${linkResponse.status}`, 502, 'SIGNNOW_LINK_ERROR');
     }
 
-    const linkData = (await linkResponse.json()) as { data: { link: string } };
-    return linkData.data.link;
+    const linkRaw = await linkResponse.json();
+    console.log('[SignNow] Signing link response:', JSON.stringify(linkRaw, null, 2));
+
+    // Extract link — handle different response formats
+    const linkAny = linkRaw as Record<string, unknown>;
+    const link = (linkAny.data as Record<string, unknown>)?.link || linkAny.link || '';
+    return String(link);
 };
 
 /**

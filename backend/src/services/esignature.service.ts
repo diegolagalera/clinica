@@ -440,10 +440,12 @@ export const createSigningDocument = async (
 
             // Pre-fill patient data using field mappings from the template
             const fieldMappings = (template.fieldMappings || []) as FieldMapping[];
+            console.log(`[ESignature] Field mappings from DB (${fieldMappings.length}):`, JSON.stringify(fieldMappings));
             if (fieldMappings.length > 0) {
                 const prefillFields: Array<{ field_name: string; prefilled_text: string }> = [];
 
                 for (const mapping of fieldMappings) {
+                    if (!mapping.patientDataKey) continue; // skip unmapped fields
                     const dataKeyConfig = PATIENT_DATA_KEYS[mapping.patientDataKey];
                     if (dataKeyConfig) {
                         const value = dataKeyConfig.getValue(patient as unknown as Record<string, unknown>);
@@ -456,6 +458,7 @@ export const createSigningDocument = async (
                     }
                 }
 
+                console.log(`[ESignature] Prefill fields to send (${prefillFields.length}):`, JSON.stringify(prefillFields));
                 if (prefillFields.length > 0) {
                     await signnowService.prefillDocumentFields(doc.id, prefillFields);
                 }

@@ -373,27 +373,31 @@ export const prefillDocumentFields = async (
 
     const token = await getAccessToken();
 
+    const requestBody = {
+        fields: fields.map(f => ({
+            field_name: f.field_name,
+            prefilled_text: f.prefilled_text,
+        })),
+    };
+    console.log(`[SignNow] Prefill request for doc ${documentId}:`, JSON.stringify(requestBody, null, 2));
+
     const response = await fetch(`${getApiUrl()}/v2/documents/${documentId}/prefill-text`, {
         method: 'PUT',
         headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            fields: fields.map(f => ({
-                field_name: f.field_name,
-                prefilled_text: f.prefilled_text,
-            })),
-        }),
+        body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
         const errorText = await response.text();
-        console.error('[SignNow] Prefill error:', errorText);
+        console.error('[SignNow] Prefill error:', response.status, errorText);
         // Prefill is best-effort — log but don't throw
         console.warn(`[SignNow] Prefill failed for document ${documentId}, continuing...`);
     } else {
-        console.log(`[SignNow] Prefilled ${fields.length} fields on document ${documentId}`);
+        const responseText = await response.text();
+        console.log(`[SignNow] Prefilled ${fields.length} fields on document ${documentId}. Response:`, responseText);
     }
 };
 

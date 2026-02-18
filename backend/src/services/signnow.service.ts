@@ -123,7 +123,7 @@ export const getDocumentRoles = async (
  */
 export const getDocumentFields = async (
     documentId: string
-): Promise<Array<{ id: string; name: string; type: string; role_id: string; page_number: number }>> => {
+): Promise<Array<{ id: string; name: string; label: string; type: string; role_id: string; page_number: number }>> => {
     const token = await getAccessToken();
 
     const response = await fetch(`${getApiUrl()}/document/${documentId}`, {
@@ -140,25 +140,15 @@ export const getDocumentFields = async (
     }
 
     const data = (await response.json()) as Record<string, unknown>;
-    const fields: Array<{ id: string; name: string; type: string; role_id: string; page_number: number }> = [];
-
-    // Debug: log all top-level keys and array lengths to understand the response structure
-    console.log('[SignNow] Document response keys:', Object.keys(data));
-    for (const key of Object.keys(data)) {
-        if (Array.isArray(data[key])) {
-            console.log(`[SignNow]   ${key}: array with ${(data[key] as unknown[]).length} items`);
-            if ((data[key] as unknown[]).length > 0) {
-                console.log(`[SignNow]   ${key}[0] keys:`, Object.keys((data[key] as unknown[])[0] as Record<string, unknown>));
-            }
-        }
-    }
+    const fields: Array<{ id: string; name: string; label: string; type: string; role_id: string; page_number: number }> = [];
 
     // Extract text fields (may be under 'texts' or 'fields')
     const texts = (data.texts || []) as Array<Record<string, unknown>>;
     for (const t of texts) {
         fields.push({
             id: String(t.id || ''),
-            name: String(t.label || t.name || `text_${t.id}`),
+            name: String(t.name || t.label || `text_${t.id}`),
+            label: String(t.label || t.name || `text_${t.id}`),
             type: 'text',
             role_id: String(t.role_id || ''),
             page_number: parseInt(String(t.page_number || '0'), 10),
@@ -167,10 +157,6 @@ export const getDocumentFields = async (
 
     // Extract from 'fields' array — SignNow nests properties inside json_attributes
     const genericFields = (data.fields || []) as Array<Record<string, unknown>>;
-    if (genericFields.length > 0) {
-        console.log('[SignNow] fields[0] type of json_attributes:', typeof genericFields[0]?.json_attributes);
-        console.log('[SignNow] fields[0] FULL object:', JSON.stringify(genericFields[0], null, 2));
-    }
     for (const f of genericFields) {
         // json_attributes may be an object or a JSON string
         let attrs: Record<string, unknown> = {};
@@ -179,11 +165,14 @@ export const getDocumentFields = async (
         } else if (f.json_attributes && typeof f.json_attributes === 'object') {
             attrs = f.json_attributes as Record<string, unknown>;
         }
-        const fieldName = String(attrs.label || attrs.name || f.label || f.name || `field_${f.id}`);
-        console.log(`[SignNow] Field extracted: id=${f.id}, name="${fieldName}", attrs.label="${attrs.label}", attrs.name="${attrs.name}"`);
+        // name = API name (for prefill), label = display name (for UI)
+        const apiName = String(attrs.name || attrs.label || f.name || `field_${f.id}`);
+        const displayLabel = String(attrs.label || attrs.name || f.label || `field_${f.id}`);
+        console.log(`[SignNow] Field extracted: id=${f.id}, apiName="${apiName}", label="${displayLabel}"`);
         fields.push({
             id: String(f.id || ''),
-            name: fieldName,
+            name: apiName,
+            label: displayLabel,
             type: String(f.type || attrs.type || 'text'),
             role_id: String(f.role_id || ''),
             page_number: parseInt(String(attrs.page_number ?? f.page_number ?? '0'), 10),
@@ -193,9 +182,12 @@ export const getDocumentFields = async (
     // Extract signature fields
     const signatures = (data.signatures || []) as Array<Record<string, unknown>>;
     for (const s of signatures) {
+        const sAttrs = (typeof s.json_attributes === 'object' && s.json_attributes)
+            ? s.json_attributes as Record<string, unknown> : {};
         fields.push({
             id: String(s.id || ''),
-            name: String(s.name || s.label || `signature_${s.id}`),
+            name: String(sAttrs.name || s.name || `signature_${s.id}`),
+            label: String(sAttrs.label || sAttrs.name || s.name || `signature_${s.id}`),
             type: 'signature',
             role_id: String(s.role_id || ''),
             page_number: parseInt(String(s.page_number || '0'), 10),
@@ -205,9 +197,12 @@ export const getDocumentFields = async (
     // Extract checkbox fields
     const checks = (data.checks || []) as Array<Record<string, unknown>>;
     for (const c of checks) {
+        const cAttrs = (typeof c.json_attributes === 'object' && c.json_attributes)
+            ? c.json_attributes as Record<string, unknown> : {};
         fields.push({
             id: String(c.id || ''),
-            name: String(c.label || c.name || `check_${c.id}`),
+            name: String(cAttrs.name || c.name || `check_${c.id}`),
+            label: String(cAttrs.label || cAttrs.name || `check_${c.id}`),
             type: 'checkbox',
             role_id: String(c.role_id || ''),
             page_number: parseInt(String(c.page_number || '0'), 10),

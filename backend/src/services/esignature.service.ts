@@ -287,7 +287,7 @@ export const getTemplateFields = async (
     templateId: string,
     tenantContext: TenantContext
 ): Promise<{
-    signnowFields: Array<{ id: string; name: string; type: string; page_number: number }>;
+    signnowFields: Array<{ id: string; name: string; label: string; type: string; page_number: number }>;
     patientDataKeys: Array<{ key: string; label: string }>;
     currentMappings: FieldMapping[];
 }> => {

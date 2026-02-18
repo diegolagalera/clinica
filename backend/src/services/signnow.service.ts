@@ -141,18 +141,19 @@ export const getDocumentFields = async (
         });
     }
 
-    // Extract from 'fields' array (some SignNow API versions use this)
+    // Extract from 'fields' array — SignNow nests properties inside json_attributes
     const genericFields = (data.fields || []) as Array<Record<string, unknown>>;
     if (genericFields.length > 0) {
         console.log('[SignNow] fields[0] FULL object:', JSON.stringify(genericFields[0], null, 2));
     }
     for (const f of genericFields) {
+        const attrs = (f.json_attributes || {}) as Record<string, unknown>;
         fields.push({
             id: String(f.id || ''),
-            name: String(f.label || f.name || `field_${f.id}`),
-            type: String(f.type || 'text'),
+            name: String(attrs.label || attrs.name || f.label || f.name || `field_${f.id}`),
+            type: String(f.type || attrs.type || 'text'),
             role_id: String(f.role_id || ''),
-            page_number: parseInt(String(f.page_number || '0'), 10),
+            page_number: parseInt(String(attrs.page_number ?? f.page_number ?? '0'), 10),
         });
     }
 

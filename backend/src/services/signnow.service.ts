@@ -546,6 +546,20 @@ export const sendEmailInvite = async (
 ): Promise<void> => {
     const token = await getAccessToken();
 
+    // Fetch actual role from document (same pattern as createEmbeddedInvite)
+    const roles = await getDocumentRoles(documentId);
+    if (roles.length === 0) {
+        throw new AppError(
+            'La plantilla no tiene campos de firma configurados. Use el editor para configurar los campos primero.',
+            400,
+            'SIGNNOW_TEMPLATE_NOT_CONFIGURED'
+        );
+    }
+
+    const roleId = roles[0]!.unique_id;
+    const roleName = roles[0]!.name || 'Signer 1';
+    console.log(`[SignNow] Email invite using role_id: ${roleId}, role: ${roleName} for: ${signerEmail}`);
+
     const response = await fetch(`${getApiUrl()}/document/${documentId}/invite`, {
         method: 'POST',
         headers: {
@@ -556,8 +570,8 @@ export const sendEmailInvite = async (
             to: [
                 {
                     email: signerEmail,
-                    role: 'Signer 1',
-                    role_id: '',
+                    role: roleName,
+                    role_id: roleId,
                     order: 1,
                 },
             ],

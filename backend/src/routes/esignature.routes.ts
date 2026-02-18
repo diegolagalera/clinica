@@ -63,5 +63,6 @@ router.post('/documents', esignatureController.createSigningDocument);
 router.get('/documents/:id/signing-url', esignatureController.getSigningUrl);
 router.get('/documents/:id/status', esignatureController.getDocumentStatus);
 router.get('/documents/:id/download', esignatureController.downloadSignedPdf);
+router.delete('/documents/:id', esignatureController.cancelSigningDocument);
 
 export default router;

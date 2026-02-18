@@ -711,6 +711,28 @@ export const getEditorLink = async (
 };
 
 /**
+ * Cancel all active signing invites on a document.
+ * This revokes access to the signing page so the signer can no longer sign.
+ * Non-throwing: logs a warning on failure (e.g., no active invites).
+ */
+export const cancelInvites = async (documentId: string): Promise<void> => {
+    const token = await getAccessToken();
+
+    const response = await fetch(`${getApiUrl()}/document/${documentId}/fieldinvitecancel`, {
+        method: 'PUT',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+        },
+    });
+
+    if (!response.ok) {
+        // Non-critical: invites might not exist or already be cancelled
+        console.warn(`[SignNow] Cancel invites warning for ${documentId}: ${response.status}`);
+    }
+};
+
+/**
  * Delete a document from SignNow
  */
 export const deleteDocument = async (documentId: string): Promise<void> => {

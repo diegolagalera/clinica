@@ -154,6 +154,19 @@ const categoryLabels: Record<string, string> = {
   OTHER: 'Otro',
 }
 
+const cancelDocument = async (docId: string, docName: string) => {
+  const confirmed = confirm(`¿Estás seguro de que deseas cancelar el documento "${docName}"? Esta acción no se puede deshacer.`)
+  if (!confirmed) return
+
+  try {
+    await api.delete(`/esignature/documents/${docId}`)
+    toast.success('Documento cancelado correctamente')
+    await fetchDocuments()
+  } catch {
+    toast.error('Error al cancelar el documento')
+  }
+}
+
 const statusConfig: Record<string, { label: string; class: string; icon: string }> = {
   DRAFT: { label: 'Borrador', class: 'bg-surface-100 text-surface-600', icon: 'draft' },
   PENDING: { label: 'Pendiente', class: 'bg-amber-100 text-amber-700', icon: 'pending' },
@@ -662,11 +675,13 @@ onUnmounted(() => {
                 'w-10 h-10 rounded-xl flex items-center justify-center shrink-0',
                 doc.status === 'SIGNED' ? 'bg-emerald-100' :
                 doc.status === 'PENDING' ? 'bg-amber-100' :
+                doc.status === 'CANCELLED' || doc.status === 'DECLINED' ? 'bg-red-50' :
                 'bg-surface-100'
               ]"
             >
               <CheckCircleIcon v-if="doc.status === 'SIGNED'" class="w-5 h-5 text-emerald-600" />
               <ClockIcon v-else-if="doc.status === 'PENDING'" class="w-5 h-5 text-amber-600" />
+              <XMarkIcon v-else-if="doc.status === 'CANCELLED' || doc.status === 'DECLINED'" class="w-5 h-5 text-red-500" />
               <DocumentTextIcon v-else class="w-5 h-5 text-surface-500" />
             </div>
 
@@ -719,6 +734,16 @@ onUnmounted(() => {
                 title="Comprobar estado"
               >
                 <ArrowPathIcon class="w-4 h-4" />
+              </button>
+
+              <!-- Cancel (DRAFT/PENDING only) -->
+              <button
+                v-if="doc.status === 'DRAFT' || doc.status === 'PENDING'"
+                @click="cancelDocument(doc.id, doc.name)"
+                class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                title="Cancelar documento"
+              >
+                <TrashIcon class="w-4 h-4" />
               </button>
 
               <!-- Download (SIGNED) -->

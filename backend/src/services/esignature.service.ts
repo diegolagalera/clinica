@@ -715,6 +715,70 @@ export const downloadSignedPdf = async (
 };
 
 /**
+ * Cancel a signing document.
+ * - DRAFT/PENDING: cancels invites in SignNow, deletes the SignNow document, marks as CANCELLED.
+ * - SIGNED: cannot cancel — throws error.
+ * - Already CANCELLED/DECLINED/EXPIRED: no-op.
+ */
+export const cancelSigningDocument = async (
+    db: Database,
+    signingDocumentId: string,
+    tenantContext: TenantContext
+): Promise<void> => {
+    const clinicId = tenantContext.clinicId;
+    if (!clinicId) throw new BadRequestError('Se requiere contexto de clínica');
+
+    const [doc] = await db
+        .select()
+        .from(signingDocuments)
+        .where(
+            and(
+                eq(signingDocuments.id, signingDocumentId),
+                eq(signingDocuments.clinicId, clinicId)
+            )
+        )
+        .limit(1);
+
+    if (!doc) throw new NotFoundError('Documento no encontrado');
+
+    // Already in a terminal state — no-op
+    if (['CANCELLED', 'DECLINED', 'EXPIRED'].includes(doc.status)) {
+        return;
+    }
+
+    // Cannot cancel a signed document
+    if (doc.status === 'SIGNED') {
+        throw new BadRequestError('No se puede cancelar un documento ya firmado');
+    }
+
+    // Clean up in SignNow
+    if (doc.signnowDocumentId) {
+        try {
+            // Cancel active invites first (so the signing link stops working)
+            if (doc.status === 'PENDING') {
+                await signnowService.cancelInvites(doc.signnowDocumentId);
+            }
+            // Delete the document from SignNow
+            await signnowService.deleteDocument(doc.signnowDocumentId);
+        } catch (err: any) {
+            // Non-critical: document might already be deleted in SignNow
+            console.warn(`[ESignature] SignNow cleanup warning for doc ${doc.id}:`, err.message);
+        }
+    }
+
+    // Update status in DB
+    await db
+        .update(signingDocuments)
+        .set({
+            status: 'CANCELLED',
+            updatedAt: new Date(),
+        })
+        .where(eq(signingDocuments.id, doc.id));
+
+    console.log(`[ESignature] Document ${doc.id} cancelled (was ${doc.status})`);
+};
+
+/**
  * Handle SignNow webhook callback (document signed)
  * Returns true if the document was found and processed in this tenant DB.
  */

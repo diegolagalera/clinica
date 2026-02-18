@@ -320,6 +320,17 @@ export const getPatientDataKeys = asyncHandler(async (_req: AuthenticatedRequest
 });
 
 /**
+ * DELETE /esignature/documents/:id
+ * Cancel a signing document (DRAFT or PENDING only).
+ * Cancels invites in SignNow, deletes the SignNow document, and marks as CANCELLED.
+ */
+export const cancelSigningDocument = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    await esignatureService.cancelSigningDocument(req.db!, id!, req.tenantContext);
+    res.json(success({ cancelled: true }));
+});
+
+/**
  * POST /esignature/webhook/signnow
  * SignNow webhook callback (public endpoint, no auth required)
  * Receives document completion events from SignNow.

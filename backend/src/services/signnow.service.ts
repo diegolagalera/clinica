@@ -118,30 +118,66 @@ export const getDocumentFields = async (
     const data = (await response.json()) as Record<string, unknown>;
     const fields: Array<{ id: string; name: string; type: string; role_id: string; page_number: number }> = [];
 
-    // Extract text fields
-    const texts = (data.texts || []) as Array<{ id: string; label: string; page_number: string }>;
+    // Debug: log all top-level keys and array lengths to understand the response structure
+    console.log('[SignNow] Document response keys:', Object.keys(data));
+    for (const key of Object.keys(data)) {
+        if (Array.isArray(data[key])) {
+            console.log(`[SignNow]   ${key}: array with ${(data[key] as unknown[]).length} items`);
+            if ((data[key] as unknown[]).length > 0) {
+                console.log(`[SignNow]   ${key}[0] keys:`, Object.keys((data[key] as unknown[])[0] as Record<string, unknown>));
+            }
+        }
+    }
+
+    // Extract text fields (may be under 'texts' or 'fields')
+    const texts = (data.texts || []) as Array<Record<string, unknown>>;
     for (const t of texts) {
         fields.push({
-            id: t.id,
-            name: t.label || `text_${t.id}`,
+            id: String(t.id || ''),
+            name: String(t.label || t.name || `text_${t.id}`),
             type: 'text',
-            role_id: '',
-            page_number: parseInt(t.page_number, 10) || 0,
+            role_id: String(t.role_id || ''),
+            page_number: parseInt(String(t.page_number || '0'), 10),
+        });
+    }
+
+    // Extract from 'fields' array (some SignNow API versions use this)
+    const genericFields = (data.fields || []) as Array<Record<string, unknown>>;
+    for (const f of genericFields) {
+        fields.push({
+            id: String(f.id || ''),
+            name: String(f.label || f.name || `field_${f.id}`),
+            type: String(f.type || 'text'),
+            role_id: String(f.role_id || ''),
+            page_number: parseInt(String(f.page_number || '0'), 10),
         });
     }
 
     // Extract signature fields
-    const signatures = (data.signatures || []) as Array<{ id: string; name: string; page_number: string; role_id: string }>;
+    const signatures = (data.signatures || []) as Array<Record<string, unknown>>;
     for (const s of signatures) {
         fields.push({
-            id: s.id,
-            name: s.name || `signature_${s.id}`,
+            id: String(s.id || ''),
+            name: String(s.name || s.label || `signature_${s.id}`),
             type: 'signature',
-            role_id: s.role_id || '',
-            page_number: parseInt(s.page_number, 10) || 0,
+            role_id: String(s.role_id || ''),
+            page_number: parseInt(String(s.page_number || '0'), 10),
         });
     }
 
+    // Extract checkbox fields
+    const checks = (data.checks || []) as Array<Record<string, unknown>>;
+    for (const c of checks) {
+        fields.push({
+            id: String(c.id || ''),
+            name: String(c.label || c.name || `check_${c.id}`),
+            type: 'checkbox',
+            role_id: String(c.role_id || ''),
+            page_number: parseInt(String(c.page_number || '0'), 10),
+        });
+    }
+
+    console.log(`[SignNow] Found ${fields.length} fields in document ${documentId}`);
     return fields;
 };
 

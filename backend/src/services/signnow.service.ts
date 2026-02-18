@@ -434,7 +434,18 @@ export const createEmbeddedInvite = async (
     const roleId = roles[0]!.unique_id;
     console.log(`[SignNow] Using role_id: ${roleId} for signer: ${signerEmail}`);
 
-    // Step 2: Create an invite for the document with the correct role_id
+    // Step 2: Cancel any existing embedded invites (they cause 400 if one already exists)
+    try {
+        await fetch(`${getApiUrl()}/v2/documents/${documentId}/embedded-invites`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${token}` },
+        });
+        console.log('[SignNow] Cleared existing embedded invites');
+    } catch {
+        // Ignore — there might be no existing invites
+    }
+
+    // Step 3: Create an invite for the document with the correct role_id
     const inviteResponse = await fetch(`${getApiUrl()}/v2/documents/${documentId}/embedded-invites`, {
         method: 'POST',
         headers: {

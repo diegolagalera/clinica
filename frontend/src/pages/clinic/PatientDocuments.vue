@@ -423,6 +423,7 @@ const createDocument = async () => {
 
 let unsubscribeSignedEvent: (() => void) | null = null
 const iframeLoadCount = ref(0)
+let isClosingSigning = false // Guard against double-close from iframe + WebSocket race
 
 const openSigning = async (docId: string) => {
   try {
@@ -445,6 +446,10 @@ const openSigning = async (docId: string) => {
  * since the user likely just finished signing.
  */
 const closeSigning = async () => {
+  // Guard against re-entrance (iframe load + WebSocket can fire simultaneously)
+  if (isClosingSigning) return
+  isClosingSigning = true
+
   const docId = signingDocId.value
   showSigningModal.value = false
   signingUrl.value = ''
@@ -464,6 +469,7 @@ const closeSigning = async () => {
     }
   }
   await fetchDocuments()
+  isClosingSigning = false
 }
 
 /**
@@ -475,6 +481,8 @@ const startWebSocketListener = (docId: string) => {
   unsubscribeSignedEvent = onSocketEvent('esignature:document-signed', (data: unknown) => {
     const event = data as { documentId?: string; patientId?: string; status?: string }
     if (event.documentId === docId || event.patientId === props.patientId) {
+      // Prevent double-toast if iframe detection already triggered closeSigning
+      if (isClosingSigning) return
       toast.success('¡Documento firmado correctamente!')
       stopWebSocketListener()
       showSigningModal.value = false

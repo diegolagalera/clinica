@@ -11,6 +11,7 @@ import routes from './routes/index.js';
 import { startReminderScheduler } from './jobs/reminder-scheduler.js';
 import { startRatingScheduler } from './jobs/rating-scheduler.js';
 import { startCleanupScheduler } from './jobs/cleanup-scheduler.js';
+import { startSignedPdfRecoveryScheduler } from './jobs/esignature-recovery-scheduler.js';
 import { initializeWebSocket } from './websocket.js';
 import { tenantManager } from './db/tenant-manager.js';
 
@@ -213,6 +214,9 @@ const start = async () => {
 
             // Start message & media cleanup scheduler
             startCleanupScheduler();
+
+            // Start signed PDF recovery scheduler (re-downloads from SignNow if MinIO upload failed)
+            startSignedPdfRecoveryScheduler();
         });
 
         // Graceful shutdown

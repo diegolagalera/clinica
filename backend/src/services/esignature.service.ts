@@ -16,6 +16,50 @@ import * as signnowService from './signnow.service.js';
 import * as storage from './storage.service.js';
 import { BadRequestError, NotFoundError, AppError } from '../utils/errors.js';
 
+/**
+ * Helper: Download signed PDF from SignNow and upload to MinIO with retry.
+ * Retries up to 3 times with exponential backoff (2s, 4s, 8s).
+ * Returns the storage key on success, or null if all retries fail.
+ */
+const downloadAndStoreSignedPdf = async (
+    signnowDocumentId: string,
+    docId: string,
+    clinicId: string,
+    tenantSlug?: string
+): Promise<string | null> => {
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 2000;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const pdfBuffer = await signnowService.downloadSignedDocument(signnowDocumentId);
+            const key = storage.buildKey(
+                '',
+                clinicId,
+                'esignature',
+                'signed',
+                `${docId}_signed.pdf`
+            );
+            await storage.uploadFile(key, pdfBuffer, 'application/pdf', tenantSlug);
+            return key;
+        } catch (err: any) {
+            const isLastAttempt = attempt === MAX_RETRIES;
+            if (isLastAttempt) {
+                console.error(
+                    `[ESignature] Failed to download/store signed PDF after ${MAX_RETRIES} attempts:`,
+                    err.message
+                );
+                return null;
+            }
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+            console.warn(
+                `[ESignature] PDF upload attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`
+            );
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+    return null;
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -608,22 +652,13 @@ export const checkAndUpdateStatus = async (
     const snStatus = await signnowService.getDocumentStatus(doc.signnowDocumentId);
 
     if (snStatus.signed) {
-        // Download signed PDF and store in S3
-        let signedPdfStorageKey: string | null = null;
-        try {
-            const pdfBuffer = await signnowService.downloadSignedDocument(doc.signnowDocumentId);
-            const key = storage.buildKey(
-                '',
-                clinicId,
-                'esignature',
-                'signed',
-                `${doc.id}_signed.pdf`
-            );
-            await storage.uploadFile(key, pdfBuffer, 'application/pdf', tenantSlug);
-            signedPdfStorageKey = key;
-        } catch (err) {
-            console.error('[ESignature] Failed to download/store signed PDF:', err);
-        }
+        // Download signed PDF with retry (3 attempts, exponential backoff)
+        const signedPdfStorageKey = await downloadAndStoreSignedPdf(
+            doc.signnowDocumentId,
+            doc.id,
+            clinicId,
+            tenantSlug
+        );
 
         // Update DB
         await db
@@ -701,22 +736,13 @@ export const handleWebhook = async (
 
     if (doc.status === 'SIGNED') return true; // Already processed
 
-    // Download signed PDF
-    let signedPdfStorageKey: string | null = null;
-    try {
-        const pdfBuffer = await signnowService.downloadSignedDocument(payload.document_id);
-        const key = storage.buildKey(
-            '',
-            doc.clinicId,
-            'esignature',
-            'signed',
-            `${doc.id}_signed.pdf`
-        );
-        await storage.uploadFile(key, pdfBuffer, 'application/pdf', tenantSlug);
-        signedPdfStorageKey = key;
-    } catch (err) {
-        console.error('[ESignature] Webhook: failed to download signed PDF:', err);
-    }
+    // Download signed PDF with retry (3 attempts, exponential backoff)
+    const signedPdfStorageKey = await downloadAndStoreSignedPdf(
+        payload.document_id,
+        doc.id,
+        doc.clinicId,
+        tenantSlug
+    );
 
     // Update status
     await db

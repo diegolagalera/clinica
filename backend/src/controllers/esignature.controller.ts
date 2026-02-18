@@ -327,22 +327,12 @@ export const getPatientDataKeys = asyncHandler(async (_req: AuthenticatedRequest
 export const handleWebhook = asyncHandler(async (req: Request, res: Response) => {
     const payload = req.body;
 
-    // ── Comprehensive logging for webhook diagnosis ──
-    console.log('[ESignature Webhook] ═══ INCOMING WEBHOOK ═══');
-    console.log('[ESignature Webhook] Headers:', JSON.stringify({
-        'content-type': req.headers['content-type'],
-        'user-agent': req.headers['user-agent'],
-        'x-signnow-signature': req.headers['x-signnow-signature'] || 'none',
-    }));
-    console.log('[ESignature Webhook] Query params:', JSON.stringify(req.query));
-    console.log('[ESignature Webhook] Full payload:', JSON.stringify(payload, null, 2));
-
     // Extract document_id from the webhook payload
     // SignNow sends: { meta: { event, ... }, content: { document_id, ... } }
     const documentId = payload?.content?.document_id || payload?.document_id;
     const event = payload?.meta?.event || payload?.event;
 
-    console.log(`[ESignature Webhook] Received event: ${event} for document: ${documentId}`);
+    console.log(`[ESignature Webhook] Received: event=${event}, document=${documentId}, tenant=${req.query.tenant || 'none'}`);
 
     if (documentId) {
         // Extract tenant slug from the query param (embedded during subscription)

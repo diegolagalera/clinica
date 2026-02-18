@@ -122,8 +122,18 @@ const currentMappings = ref<FieldMapping[]>([])
 const isLoadingFields = ref(false)
 const isSavingMappings = ref(false)
 
-// Document status refresh (one-time check, no polling)
-const refreshDocumentStatus = async (_docId: string) => {
+// One-time status check — calls SignNow API directly for real-time status
+const refreshDocumentStatus = async (docId: string) => {
+  try {
+    const response = await api.get<ApiResponse<{ status: string; signed: boolean }>>(
+      `/esignature/documents/${docId}/status`
+    )
+    if (response.success && response.data.signed) {
+      toast.success('¡Documento firmado correctamente!')
+    }
+  } catch {
+    // Silent fail
+  }
   await fetchDocuments()
 }
 
@@ -405,8 +415,13 @@ const createDocument = async () => {
   }
 }
 
-// WebSocket listener cleanup function
+// ─── Hybrid signing detection: WebSocket + lightweight DB poll ───────────────
+// WebSocket provides instant push when webhook fires.
+// DB poll (every 10s) is the reliable fallback — queries our own DB, NOT SignNow API.
+// Manual "Comprobar estado" button calls SignNow API for a one-time force check.
+
 let unsubscribeSignedEvent: (() => void) | null = null
+const statusPollInterval = ref<ReturnType<typeof setInterval> | null>(null)
 
 const openSigning = async (docId: string) => {
   try {
@@ -415,7 +430,7 @@ const openSigning = async (docId: string) => {
       signingUrl.value = response.data.url
       signingDocId.value = docId
       showSigningModal.value = true
-      startListeningForSigned(docId)
+      startSignedDetection(docId)
     }
   } catch {
     toast.error('Error al generar el enlace de firma')
@@ -425,31 +440,60 @@ const openSigning = async (docId: string) => {
 const closeSigning = () => {
   showSigningModal.value = false
   signingUrl.value = ''
-  stopListeningForSigned()
+  stopSignedDetection()
   fetchDocuments()
 }
 
 /**
- * Listen for the 'esignature:document-signed' WebSocket event
- * pushed by the backend when SignNow's webhook fires.
+ * Start both detection mechanisms:
+ * 1. WebSocket listener — instant notification when backend processes the webhook
+ * 2. Lightweight DB poll — check our own DB every 10s (NOT SignNow API)
  */
-const startListeningForSigned = (docId: string) => {
-  stopListeningForSigned()
+const startSignedDetection = (docId: string) => {
+  stopSignedDetection()
+
+  // 1. WebSocket listener for instant push
   unsubscribeSignedEvent = onSocketEvent('esignature:document-signed', (data: unknown) => {
     const event = data as { documentId?: string; patientId?: string; status?: string }
     if (event.documentId === docId || event.patientId === props.patientId) {
-      toast.success('¡Documento firmado correctamente!')
-      closeSigning()
-      fetchDocuments()
+      handleDocumentSigned()
     }
   })
+
+  // 2. Lightweight DB poll — only reads our DB, zero SignNow API calls
+  statusPollInterval.value = setInterval(async () => {
+    try {
+      const response = await api.get<ApiResponse<SigningDocument[]>>(
+        `/esignature/documents/patient/${props.patientId}`
+      )
+      if (response.success) {
+        const doc = response.data.find((d: SigningDocument) => d.id === docId)
+        if (doc && doc.status === 'SIGNED') {
+          handleDocumentSigned()
+        }
+      }
+    } catch {
+      // Silently fail — WebSocket is the primary mechanism
+    }
+  }, 10000) // 10 seconds — our own server, no rate limit risk
 }
 
-const stopListeningForSigned = () => {
+const stopSignedDetection = () => {
+  // Stop WebSocket listener
   if (unsubscribeSignedEvent) {
     unsubscribeSignedEvent()
     unsubscribeSignedEvent = null
   }
+  // Stop DB poll
+  if (statusPollInterval.value) {
+    clearInterval(statusPollInterval.value)
+    statusPollInterval.value = null
+  }
+}
+
+const handleDocumentSigned = () => {
+  toast.success('¡Documento firmado correctamente!')
+  closeSigning()
 }
 
 const downloadPdf = async (docId: string, docName: string) => {
@@ -494,7 +538,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  stopListeningForSigned()
+  stopSignedDetection()
 })
 </script>
 

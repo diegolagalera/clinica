@@ -143,6 +143,9 @@ export const getDocumentFields = async (
 
     // Extract from 'fields' array (some SignNow API versions use this)
     const genericFields = (data.fields || []) as Array<Record<string, unknown>>;
+    if (genericFields.length > 0) {
+        console.log('[SignNow] fields[0] FULL object:', JSON.stringify(genericFields[0], null, 2));
+    }
     for (const f of genericFields) {
         fields.push({
             id: String(f.id || ''),

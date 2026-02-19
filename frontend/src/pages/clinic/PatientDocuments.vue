@@ -413,7 +413,7 @@ const sendEmailDocuments = async () => {
       documentIds: selectedDocIds.value,
       patientId: props.patientId,
     })
-    const result = (res as any).data?.data
+    const result = (res as any).data
     if (result?.success) {
       toast.success(`${result.sentCount} documento${result.sentCount > 1 ? 's' : ''} enviado${result.sentCount > 1 ? 's' : ''} por correo`)
       showEmailModal.value = false
@@ -464,7 +464,7 @@ onUnmounted(() => {
           class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 transition-colors"
         >
           <EnvelopeIcon class="w-4 h-4" />
-          Enviar por correo
+          Compartir firmados
         </button>
         <button
           @click="openNewDocModal"
@@ -472,7 +472,7 @@ onUnmounted(() => {
           class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <PaperAirplaneIcon class="w-4 h-4" />
-          Enviar Documento
+          Firmar documento
         </button>
       </div>
     </div>
@@ -538,7 +538,7 @@ onUnmounted(() => {
         class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 transition-colors"
       >
         <PaperAirplaneIcon class="w-4 h-4" />
-        Enviar Documento
+        Firmar documento
       </button>
     </div>
 

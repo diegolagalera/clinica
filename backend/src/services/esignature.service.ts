@@ -3,7 +3,7 @@
  * Business logic layer for managing document templates and signing workflows.
  * Orchestrates between our DB, SignNow API, and S3 storage.
  */
-import { eq, desc, and, ne } from 'drizzle-orm';
+import { eq, desc, and, ne, inArray } from 'drizzle-orm';
 import type { Database } from '../db/index.js';
 import type { TenantContext } from '../types/index.js';
 import {
@@ -993,4 +993,185 @@ export const handleWebhook = async (
     }
 
     return true;
+};
+
+/**
+ * Email multiple signed documents to a patient in ONE email.
+ * Downloads all PDFs from MinIO and attaches them.
+ */
+export const emailSignedDocumentsToPatient = async (
+    db: Database,
+    documentIds: string[],
+    patientId: string,
+    tenantContext: TenantContext,
+    tenantSlug?: string
+): Promise<{ success: boolean; sentCount: number; error?: string }> => {
+    const clinicId = tenantContext.clinicId;
+    if (!clinicId) throw new BadRequestError('Se requiere contexto de clínica');
+
+    if (!documentIds.length) {
+        throw new BadRequestError('Selecciona al menos un documento');
+    }
+
+    // 1. Fetch all requested documents
+    const docs = await db
+        .select()
+        .from(signingDocuments)
+        .where(
+            and(
+                inArray(signingDocuments.id, documentIds),
+                eq(signingDocuments.clinicId, clinicId),
+                eq(signingDocuments.patientId, patientId),
+                eq(signingDocuments.status, 'SIGNED')
+            )
+        );
+
+    if (docs.length === 0) {
+        throw new BadRequestError('No se encontraron documentos firmados válidos');
+    }
+
+    // 2. Get patient info
+    const [patient] = await db
+        .select({ email: patients.email, firstName: patients.firstName, lastName: patients.lastName })
+        .from(patients)
+        .where(eq(patients.id, patientId))
+        .limit(1);
+
+    if (!patient?.email) {
+        throw new BadRequestError('El paciente no tiene dirección de correo electrónico');
+    }
+
+    // 3. Get clinic name
+    const [clinic] = await db
+        .select({ name: clinics.name })
+        .from(clinics)
+        .where(eq(clinics.id, clinicId))
+        .limit(1);
+
+    const clinicName = clinic?.name || 'La Clínica';
+    const patientName = [patient.firstName, patient.lastName].filter(Boolean).join(' ') || 'Paciente';
+
+    // 4. Download all PDFs from MinIO
+    const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
+    for (const doc of docs) {
+        if (!doc.signedPdfStorageKey) continue;
+        try {
+            const buffer = await storage.getFileBuffer(doc.signedPdfStorageKey, tenantSlug);
+            const safeName = (doc.name || 'Documento').replace(/[^a-zA-Z0-9áéíóúñÁÉÍÓÚÑ _-]/g, '');
+            attachments.push({
+                filename: `${safeName}_firmado.pdf`,
+                content: buffer,
+                contentType: 'application/pdf',
+            });
+        } catch (err: any) {
+            logger.warn(`[E-Signature] Could not download PDF for doc ${doc.id}`, { error: err.message });
+        }
+    }
+
+    if (attachments.length === 0) {
+        throw new BadRequestError('No se pudieron descargar los documentos firmados');
+    }
+
+    // 5. Build email
+    const signedDate = new Date().toLocaleDateString('es-ES', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+    });
+
+    const docListHtml = attachments.map(a => `
+        <tr>
+            <td style="padding: 12px 16px; border-bottom: 1px solid #f1f5f9;">
+                <div style="display: flex; align-items: center;">
+                    <div style="background: #dc2626; border-radius: 6px; width: 32px; height: 32px; text-align: center; line-height: 32px; margin-right: 12px; flex-shrink: 0;">
+                        <span style="color: white; font-size: 11px; font-weight: bold;">PDF</span>
+                    </div>
+                    <span style="color: #0f172a; font-size: 14px; font-weight: 500;">${a.filename}</span>
+                </div>
+            </td>
+        </tr>`).join('');
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: 'Segoe UI', Arial, sans-serif;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-radius: 16px 16px 0 0; padding: 32px 40px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px;">
+                📄 Documentos Firmados
+            </h1>
+            <p style="color: #94a3b8; margin: 8px 0 0; font-size: 14px;">
+                ${clinicName}
+            </p>
+        </div>
+
+        <!-- Body -->
+        <div style="background: #ffffff; padding: 40px; border-radius: 0 0 16px 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+            <p style="color: #334155; font-size: 16px; line-height: 1.6; margin: 0 0 20px;">
+                Estimado/a <strong>${patientName}</strong>,
+            </p>
+            <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px;">
+                Le enviamos una copia de ${attachments.length === 1 ? 'su documento firmado' : `sus ${attachments.length} documentos firmados`} para su archivo personal.
+            </p>
+
+            <!-- Document list -->
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; margin: 0 0 24px;">
+                <div style="padding: 12px 16px; background: #f1f5f9; border-bottom: 1px solid #e2e8f0;">
+                    <span style="color: #475569; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                        ${attachments.length} documento${attachments.length > 1 ? 's' : ''} adjunto${attachments.length > 1 ? 's' : ''}
+                    </span>
+                </div>
+                <table style="width: 100%; border-collapse: collapse;">
+                    ${docListHtml}
+                </table>
+            </div>
+
+            <p style="color: #64748b; font-size: 13px; line-height: 1.6; margin: 0 0 8px;">
+                Estos documentos tienen plena validez legal. Conserve esta copia para sus registros.
+            </p>
+
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+
+            <p style="color: #94a3b8; font-size: 12px; text-align: center; margin: 0;">
+                Este correo ha sido enviado automáticamente por <strong>${clinicName}</strong>.
+                <br>Si tiene alguna duda, contacte directamente con la clínica.
+            </p>
+        </div>
+
+        <!-- Footer -->
+        <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 16px 0 0;">
+            © ${new Date().getFullYear()} ${clinicName}. Todos los derechos reservados.
+        </p>
+    </div>
+</body>
+</html>`;
+
+    // 6. Send
+    const docNames = docs.map(d => d.name || 'Documento').join(', ');
+    const subject = attachments.length === 1
+        ? `📄 Documento firmado: ${docs[0]!.name || 'Documento'} — ${clinicName}`
+        : `📄 ${attachments.length} documentos firmados — ${clinicName}`;
+
+    const result = await sendEmail(db, clinicId, {
+        to: patient.email,
+        subject,
+        html: htmlContent,
+        attachments,
+    });
+
+    if (result.success) {
+        logger.info(`[E-Signature] Bulk email sent: ${attachments.length} docs to ${patient.email}`, {
+            documentIds: docs.map(d => d.id),
+            messageId: result.messageId,
+        });
+        return { success: true, sentCount: attachments.length };
+    } else {
+        logger.error(`[E-Signature] Bulk email failed`, { error: result.error });
+        return { success: false, sentCount: 0, error: result.error || 'Error desconocido al enviar email' };
+    }
 };

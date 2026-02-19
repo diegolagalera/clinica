@@ -19,6 +19,7 @@ import {
   TrashIcon,
   ArrowPathIcon,
   PencilSquareIcon,
+  EnvelopeIcon,
 } from '@heroicons/vue/24/outline'
 
 interface ApiResponse<T> {
@@ -86,6 +87,16 @@ const showCancelModal = ref(false)
 const cancelDocId = ref('')
 const cancelDocName = ref('')
 const isCancelling = ref(false)
+
+// Email signed documents modal
+const showEmailModal = ref(false)
+const selectedDocIds = ref<string[]>([])
+const isSendingEmail = ref(false)
+
+const signedDocuments = computed(() => documents.value.filter(d => d.status === 'SIGNED'))
+const allDocsSelected = computed(() =>
+  signedDocuments.value.length > 0 && selectedDocIds.value.length === signedDocuments.value.length
+)
 
 // One-time status check — calls SignNow API directly for real-time status
 const refreshDocumentStatus = async (docId: string) => {
@@ -370,6 +381,52 @@ const formatDate = (dateStr: string) => {
   })
 }
 
+// ─── Email Signed Documents ──────────────────────────────────────────────────
+
+const openEmailModal = () => {
+  selectedDocIds.value = signedDocuments.value.map(d => d.id)
+  showEmailModal.value = true
+}
+
+const toggleDocSelection = (docId: string) => {
+  const idx = selectedDocIds.value.indexOf(docId)
+  if (idx >= 0) {
+    selectedDocIds.value.splice(idx, 1)
+  } else {
+    selectedDocIds.value.push(docId)
+  }
+}
+
+const toggleAllDocs = () => {
+  if (allDocsSelected.value) {
+    selectedDocIds.value = []
+  } else {
+    selectedDocIds.value = signedDocuments.value.map(d => d.id)
+  }
+}
+
+const sendEmailDocuments = async () => {
+  if (selectedDocIds.value.length === 0) return
+  isSendingEmail.value = true
+  try {
+    const res = await api.post('/esignature/documents/email-signed', {
+      documentIds: selectedDocIds.value,
+      patientId: props.patientId,
+    })
+    const result = (res as any).data?.data
+    if (result?.success) {
+      toast.success(`${result.sentCount} documento${result.sentCount > 1 ? 's' : ''} enviado${result.sentCount > 1 ? 's' : ''} por correo`)
+      showEmailModal.value = false
+    } else {
+      toast.error(result?.error || 'Error al enviar documentos')
+    }
+  } catch (err: any) {
+    toast.error(err?.response?.data?.error?.message || 'Error al enviar documentos por correo')
+  } finally {
+    isSendingEmail.value = false
+  }
+}
+
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
 onMounted(async () => {
@@ -401,6 +458,14 @@ onUnmounted(() => {
         </p>
       </div>
       <div class="flex items-center gap-3">
+        <button
+          v-if="signedDocuments.length > 0"
+          @click="openEmailModal"
+          class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 transition-colors"
+        >
+          <EnvelopeIcon class="w-4 h-4" />
+          Enviar por correo
+        </button>
         <button
           @click="openNewDocModal"
           :disabled="templates.length === 0"
@@ -760,6 +825,91 @@ onUnmounted(() => {
               class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-xl hover:bg-red-700 transition-colors disabled:opacity-50"
             >
               {{ isCancelling ? 'Cancelando...' : 'Sí, cancelar' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Email Signed Documents Modal -->
+    <Teleport to="body">
+      <div v-if="showEmailModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-surface-900/50" @click="showEmailModal = false"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md animate-scale-in">
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
+            <h2 class="text-lg font-semibold text-surface-900">Enviar documentos por correo</h2>
+            <button @click="showEmailModal = false" class="text-surface-400 hover:text-surface-600">
+              <XMarkIcon class="w-5 h-5" />
+            </button>
+          </div>
+
+          <div class="p-6 space-y-4">
+            <!-- Patient email -->
+            <div class="p-3 rounded-xl bg-surface-50 flex items-center gap-3">
+              <EnvelopeIcon class="w-5 h-5 text-surface-400 shrink-0" />
+              <div>
+                <p class="text-xs text-surface-500">Se enviará a</p>
+                <p class="text-sm font-medium text-surface-900">{{ patient?.email || 'Sin email' }}</p>
+              </div>
+            </div>
+
+            <!-- Select all toggle -->
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium text-surface-700">
+                {{ selectedDocIds.length }} de {{ signedDocuments.length }} seleccionado{{ selectedDocIds.length !== 1 ? 's' : '' }}
+              </span>
+              <button
+                @click="toggleAllDocs"
+                class="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
+              >
+                {{ allDocsSelected ? 'Deseleccionar todos' : 'Seleccionar todos' }}
+              </button>
+            </div>
+
+            <!-- Document list -->
+            <div class="max-h-64 overflow-y-auto space-y-2 -mx-1 px-1">
+              <label
+                v-for="doc in signedDocuments"
+                :key="doc.id"
+                class="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all"
+                :class="selectedDocIds.includes(doc.id) ? 'border-primary-300 bg-primary-50/50' : 'border-surface-200 hover:border-surface-300'"
+              >
+                <input
+                  type="checkbox"
+                  :checked="selectedDocIds.includes(doc.id)"
+                  @change="toggleDocSelection(doc.id)"
+                  class="w-4 h-4 rounded border-surface-300 text-primary-600 focus:ring-primary-500"
+                />
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-surface-900 truncate">{{ doc.name }}</p>
+                  <p class="text-xs text-surface-500" v-if="doc.signedAt">Firmado el {{ formatDate(doc.signedAt) }}</p>
+                </div>
+                <CheckCircleIcon class="w-4 h-4 text-emerald-500 shrink-0" />
+              </label>
+            </div>
+
+            <!-- No email warning -->
+            <div v-if="!patient?.email" class="p-3 rounded-xl bg-amber-50 border border-amber-200">
+              <p class="text-sm text-amber-700">
+                ⚠️ El paciente no tiene email. Añade un email antes de enviar documentos.
+              </p>
+            </div>
+          </div>
+
+          <div class="px-6 py-4 bg-surface-50 border-t border-surface-100 rounded-b-2xl flex justify-end gap-3">
+            <button
+              @click="showEmailModal = false"
+              class="px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 rounded-xl transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              @click="sendEmailDocuments"
+              :disabled="selectedDocIds.length === 0 || !patient?.email || isSendingEmail"
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <EnvelopeIcon class="w-4 h-4" />
+              {{ isSendingEmail ? 'Enviando...' : `Enviar ${selectedDocIds.length} documento${selectedDocIds.length !== 1 ? 's' : ''}` }}
             </button>
           </div>
         </div>

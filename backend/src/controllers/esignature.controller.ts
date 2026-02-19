@@ -329,6 +329,27 @@ export const cancelSigningDocument = asyncHandler(async (req: AuthenticatedReque
     await esignatureService.cancelSigningDocument(req.db!, id!, req.tenantContext);
     res.json(success({ cancelled: true }));
 });
+/**
+ * POST /esignature/documents/email-signed
+ * Email selected signed documents to the patient in a single email.
+ */
+export const emailSignedDocuments = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+    const { documentIds, patientId } = req.body;
+
+    if (!patientId || !Array.isArray(documentIds) || documentIds.length === 0) {
+        throw new BadRequestError('Se requiere patientId y al menos un documentId');
+    }
+
+    const result = await esignatureService.emailSignedDocumentsToPatient(
+        req.db!,
+        documentIds,
+        patientId,
+        req.tenantContext,
+        req.user?.tenantSlug
+    );
+
+    res.json(success(result));
+});
 
 /**
  * POST /esignature/webhook/signnow

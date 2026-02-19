@@ -10,7 +10,7 @@ import { BadRequestError } from '../utils/errors.js';
 import { config } from '../config/env.js';
 import { tenantManager } from '../db/tenant-manager.js';
 import { centralDb } from '../db/central-db.js';
-import { superadmins } from '../db/central-schema.js';
+import { superadmins, superadminRefreshTokens } from '../db/central-schema.js';
 import { users } from '../db/schema.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -104,7 +104,7 @@ export const refreshToken = asyncHandler(async (req: AuthenticatedRequest, res: 
         throw new BadRequestError('Invalid refresh token');
     }
 
-    // ── SUPERADMIN: stateless refresh (no tenantSlug in JWT) ──
+    // ── SUPERADMIN: stateful refresh using central DB ──
     if (!tenantSlug) {
         const sa = await centralDb.query.superadmins.findFirst({
             where: and(
@@ -117,7 +117,86 @@ export const refreshToken = asyncHandler(async (req: AuthenticatedRequest, res: 
             throw new BadRequestError('Superadmin account not found or deactivated');
         }
 
-        // Re-issue tokens statelessly
+        // Look up the refresh token in central DB
+        const storedToken = await centralDb.query.superadminRefreshTokens.findFirst({
+            where: and(
+                eq(superadminRefreshTokens.token, refreshToken),
+                eq(superadminRefreshTokens.superadminId, decoded.userId),
+            ),
+        });
+
+        if (!storedToken) {
+            throw new BadRequestError('Refresh token not found');
+        }
+
+        // Handle revoked tokens — follow replacement chain
+        if (storedToken.revokedAt) {
+            let currentToken = storedToken;
+            const MAX_CHAIN_DEPTH = 10;
+
+            for (let depth = 0; depth < MAX_CHAIN_DEPTH; depth++) {
+                if (!currentToken.replacedByToken) break;
+
+                const nextToken = await centralDb.query.superadminRefreshTokens.findFirst({
+                    where: and(
+                        eq(superadminRefreshTokens.token, currentToken.replacedByToken),
+                        eq(superadminRefreshTokens.superadminId, decoded.userId),
+                    ),
+                });
+
+                if (!nextToken) break;
+
+                if (!nextToken.revokedAt && new Date() < nextToken.expiresAt) {
+                    // Found valid replacement — issue new access token
+                    const newAccessToken = authService.generateAccessToken({
+                        userId: sa.id,
+                        email: sa.email,
+                        role: 'SUPERADMIN' as any,
+                        organizationId: null,
+                        clinicId: null,
+                    });
+
+                    return res.json(success({
+                        accessToken: newAccessToken,
+                        refreshToken: nextToken.token,
+                        expiresIn: authService.getAccessExpirySeconds(),
+                    }));
+                }
+
+                currentToken = nextToken;
+            }
+
+            throw new BadRequestError('Refresh token has been revoked');
+        }
+
+        // Check expiration
+        if (new Date() > storedToken.expiresAt) {
+            throw new BadRequestError('Refresh token expired');
+        }
+
+        // Rotate: revoke old, create new
+        const newRefreshToken = authService.generateRefreshToken({
+            userId: sa.id,
+            tokenVersion: 0,
+            jti: crypto.randomUUID(),
+        });
+
+        const expiresAt = new Date();
+        expiresAt.setSeconds(expiresAt.getSeconds() + authService.getRefreshExpirySeconds());
+
+        await centralDb.update(superadminRefreshTokens)
+            .set({
+                revokedAt: new Date(),
+                replacedByToken: newRefreshToken,
+            })
+            .where(eq(superadminRefreshTokens.id, storedToken.id));
+
+        await centralDb.insert(superadminRefreshTokens).values({
+            superadminId: sa.id,
+            token: newRefreshToken,
+            expiresAt,
+        });
+
         const newAccessToken = authService.generateAccessToken({
             userId: sa.id,
             email: sa.email,
@@ -126,16 +205,10 @@ export const refreshToken = asyncHandler(async (req: AuthenticatedRequest, res: 
             clinicId: null,
         });
 
-        const newRefreshToken = authService.generateRefreshToken({
-            userId: sa.id,
-            tokenVersion: 0,
-            jti: crypto.randomUUID(),
-        });
-
         return res.json(success({
             accessToken: newAccessToken,
             refreshToken: newRefreshToken,
-            expiresIn: 3600, // 1h default, matches config.jwt.accessExpiry
+            expiresIn: authService.getAccessExpirySeconds(),
         }));
     }
 

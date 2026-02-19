@@ -180,16 +180,26 @@ export const useAuthStore = defineStore('auth', () => {
         }
     }
 
+    let _isLoggingOut = false
     const logout = async () => {
+        // Guard against recursive logout calls (interceptor → logout → /auth/logout 401 → interceptor → logout...)
+        if (_isLoggingOut) return
+        _isLoggingOut = true
+
         try {
-            if (accessToken.value) {
-                await api.post('/auth/logout', { refreshToken: refreshTokenValue.value })
+            if (accessToken.value && refreshTokenValue.value) {
+                // Best-effort server-side revocation — use _silentError to prevent toast
+                await api.post('/auth/logout', { refreshToken: refreshTokenValue.value }, {
+                    _silentError: true,
+                    _retry: true, // prevent interceptor from retrying this request
+                } as any)
             }
         } catch {
-            // Ignore errors during logout
+            // Ignore errors during logout — token will expire naturally
         } finally {
             clearAuthData()
             router.push('/login')
+            _isLoggingOut = false
         }
     }
 

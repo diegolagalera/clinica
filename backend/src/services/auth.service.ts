@@ -4,7 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { authenticator } from 'otplib';
 import type { Database } from '../db/index.js';
 import { centralDb } from '../db/central-db.js';
-import { superadmins, globalUsers } from '../db/central-schema.js';
+import { superadmins, globalUsers, superadminRefreshTokens } from '../db/central-schema.js';
 import { tenantManager } from '../db/tenant-manager.js';
 import { users, refreshTokens } from '../db/schema.js';
 import { config } from '../config/env.js';
@@ -112,6 +112,16 @@ const parseExpiry = (expiry: string): number => {
         default: return 900;
     }
 };
+
+/**
+ * Get access token expiry in seconds (for expiresIn responses)
+ */
+export const getAccessExpirySeconds = (): number => parseExpiry(config.jwt.accessExpiry);
+
+/**
+ * Get refresh token expiry in seconds (for DB expiresAt calculation)
+ */
+export const getRefreshExpirySeconds = (): number => parseExpiry(config.jwt.refreshExpiry);
 
 /**
  * Build a UserInfo object from a user record
@@ -225,6 +235,16 @@ const loginAsSuperadmin = async (
     const accessToken = generateAccessToken(accessPayload);
     const refreshToken = generateRefreshToken(refreshPayload);
 
+    // Store refresh token in central DB for revocation support
+    const expiresAt = new Date();
+    expiresAt.setSeconds(expiresAt.getSeconds() + parseExpiry(config.jwt.refreshExpiry));
+
+    await centralDb.insert(superadminRefreshTokens).values({
+        superadminId: superadmin.id,
+        token: refreshToken,
+        expiresAt,
+    });
+
     return {
         success: true,
         data: {
@@ -314,7 +334,7 @@ const loginAgainstTenantDb = async (
 
     // Store refresh token in tenant DB
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7);
+    expiresAt.setSeconds(expiresAt.getSeconds() + parseExpiry(config.jwt.refreshExpiry));
 
     await db.insert(refreshTokens).values({
         userId: user.id,
@@ -458,12 +478,23 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
         }
 
         // Handle race condition: token already revoked by another tab
+        // Follow the replacement chain (multi-tab can create chains > 1 level deep)
         if (storedToken.revokedAt) {
             logger.warn({ userId: decoded.userId, jti: decoded.jti, revokedAt: storedToken.revokedAt, hasReplacement: !!storedToken.replacedByToken }, '[TOKEN REFRESH] Token is REVOKED, attempting recovery');
-            if (storedToken.replacedByToken) {
-                const replacementToken = await db.query.refreshTokens.findFirst({
+
+            // Walk the replacement chain (max 10 hops to prevent infinite loops)
+            let currentToken = storedToken;
+            const MAX_CHAIN_DEPTH = 10;
+
+            for (let depth = 0; depth < MAX_CHAIN_DEPTH; depth++) {
+                if (!currentToken.replacedByToken) {
+                    logger.warn({ userId: decoded.userId, depth }, '[TOKEN REFRESH] Recovery FAILED — chain ended without valid replacement');
+                    break;
+                }
+
+                const nextToken = await db.query.refreshTokens.findFirst({
                     where: and(
-                        eq(refreshTokens.token, storedToken.replacedByToken),
+                        eq(refreshTokens.token, currentToken.replacedByToken),
                         eq(refreshTokens.userId, decoded.userId)
                     ),
                     with: {
@@ -471,10 +502,16 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
                     },
                 });
 
-                if (replacementToken && !replacementToken.revokedAt && new Date() < replacementToken.expiresAt) {
-                    const user = replacementToken.user;
+                if (!nextToken) {
+                    logger.warn({ userId: decoded.userId, depth }, '[TOKEN REFRESH] Recovery FAILED — replacement token not found in DB');
+                    break;
+                }
+
+                // Found a valid (non-revoked, non-expired) replacement!
+                if (!nextToken.revokedAt && new Date() < nextToken.expiresAt) {
+                    const user = nextToken.user;
                     if (user.tokenVersion === decoded.tokenVersion) {
-                        logger.info({ userId: decoded.userId }, '[TOKEN REFRESH] Recovery SUCCESS — using replacement token');
+                        logger.info({ userId: decoded.userId, depth: depth + 1 }, '[TOKEN REFRESH] Recovery SUCCESS — found valid token in chain');
                         const accessPayload: AccessTokenPayload = {
                             userId: user.id,
                             email: user.email,
@@ -489,16 +526,20 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
                             success: true,
                             data: {
                                 accessToken: newAccessToken,
-                                refreshToken: storedToken.replacedByToken,
+                                refreshToken: nextToken.token,
                                 expiresIn: parseExpiry(config.jwt.accessExpiry),
                             },
                         };
                     }
                     logger.warn({ userId: decoded.userId, dbVersion: user.tokenVersion, jwtVersion: decoded.tokenVersion }, '[TOKEN REFRESH] Recovery FAILED — tokenVersion mismatch');
-                } else {
-                    logger.warn({ userId: decoded.userId, replacementExists: !!replacementToken, replacementRevoked: !!replacementToken?.revokedAt, replacementExpired: replacementToken ? new Date() >= replacementToken.expiresAt : null }, '[TOKEN REFRESH] Recovery FAILED — replacement token invalid');
+                    break;
                 }
+
+                // This replacement is also revoked/expired, continue following the chain
+                logger.info({ userId: decoded.userId, depth: depth + 1, revoked: !!nextToken.revokedAt, expired: new Date() >= nextToken.expiresAt }, '[TOKEN REFRESH] Replacement also invalid, following chain...');
+                currentToken = nextToken;
             }
+
             throw new UnauthorizedError('Refresh token has been revoked');
         }
 
@@ -534,7 +575,7 @@ export const refreshAccessToken = async (db: Database, token: string, tenantSlug
         const newRefreshToken = generateRefreshToken(refreshPayload);
 
         const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 7);
+        expiresAt.setSeconds(expiresAt.getSeconds() + parseExpiry(config.jwt.refreshExpiry));
 
         await db.transaction(async (tx) => {
             await tx.update(refreshTokens)

@@ -63,6 +63,7 @@ const envSchema = z.object({
     SIGNNOW_API_KEY: z.string().optional(),
     SIGNNOW_EMAIL: z.string().email().optional(),
     SIGNNOW_API_URL: z.string().url().optional(),
+    SIGNNOW_WEBHOOK_SECRET: z.string().optional(),
 
 });
 
@@ -158,5 +159,6 @@ export const config = {
         apiKey: env.SIGNNOW_API_KEY,
         apiUrl: env.SIGNNOW_API_URL || 'https://api.signnow.com',
         email: env.SIGNNOW_EMAIL,
+        webhookSecret: env.SIGNNOW_WEBHOOK_SECRET,
     },
 } as const;

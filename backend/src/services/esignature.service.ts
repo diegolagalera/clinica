@@ -531,12 +531,14 @@ export const createSigningDocument = async (
             // Include tenantSlug in URL for direct DB resolution in multi-tenant setup
             if (requestOrigin) {
                 try {
+                    const { config } = await import('../config/env.js');
                     const slugParam = tenantSlug ? `?tenant=${encodeURIComponent(tenantSlug)}` : '';
                     const webhookUrl = `${requestOrigin}/api/v1/esignature/webhook/signnow${slugParam}`;
                     await signnowService.subscribeToWebhook(
                         signnowDocumentId,
                         webhookUrl,
-                        'document.complete'
+                        'document.complete',
+                        config.signnow.webhookSecret
                     );
                 } catch (webhookErr) {
                     console.warn('[ESignature] Webhook subscription failed (non-critical):', webhookErr);
@@ -978,6 +980,13 @@ export const handleWebhook = async (
         .where(eq(signingDocuments.id, doc.id));
 
     console.log(`[ESignature] Document ${doc.id} marked as SIGNED via webhook`);
+
+    // Send signed PDF to patient via email (fire-and-forget)
+    // Only for EMBEDDED signing — EMAIL signing is handled by SignNow directly
+    if (signedPdfStorageKey && doc.signingMethod === 'EMBEDDED') {
+        sendSignedDocumentToPatient(db, doc, signedPdfStorageKey, doc.clinicId, tenantSlug)
+            .catch(err => logger.error('[E-Signature] Failed to email signed document to patient (webhook)', { error: err.message, docId: doc.id }));
+    }
 
     // Push real-time update to frontend via WebSocket
     try {

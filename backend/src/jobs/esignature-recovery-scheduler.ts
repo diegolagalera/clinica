@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import type { Database } from '../db/index.js';
 import { signingDocuments } from '../db/schema.js';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, isNotNull, lt, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import * as storage from '../services/storage.service.js';
 import * as signnowService from '../services/signnow.service.js';
@@ -119,6 +119,79 @@ const recoverOrphanedPdfsForTenant = async (db: Database, tenantSlug: string): P
 };
 
 /**
+ * Expire documents that have passed their expiresAt date for a single tenant.
+ * Finds DRAFT/PENDING documents past their expiresAt, cancels invites in SignNow,
+ * deletes the SignNow document, and marks them as EXPIRED in the DB.
+ */
+const expireDocumentsForTenant = async (db: Database, tenantSlug: string): Promise<void> => {
+    try {
+        const now = new Date();
+
+        // Find documents that are DRAFT or PENDING and past their expiration
+        const expiredDocs = await db
+            .select({
+                id: signingDocuments.id,
+                signnowDocumentId: signingDocuments.signnowDocumentId,
+                status: signingDocuments.status,
+            })
+            .from(signingDocuments)
+            .where(
+                and(
+                    inArray(signingDocuments.status, ['DRAFT', 'PENDING']),
+                    isNotNull(signingDocuments.expiresAt),
+                    lt(signingDocuments.expiresAt, now)
+                )
+            )
+            .limit(50);
+
+        if (expiredDocs.length === 0) return;
+
+        logger.info(
+            { tenantSlug, count: expiredDocs.length },
+            `⏰ Found ${expiredDocs.length} expired signing documents — marking as EXPIRED`
+        );
+
+        let expired = 0;
+
+        for (const doc of expiredDocs) {
+            // Clean up in SignNow (best-effort)
+            if (doc.signnowDocumentId) {
+                try {
+                    if (doc.status === 'PENDING') {
+                        await signnowService.cancelInvites(doc.signnowDocumentId);
+                    }
+                    await signnowService.deleteDocument(doc.signnowDocumentId);
+                } catch (err: any) {
+                    // Non-critical — document might already be gone
+                    logger.debug(
+                        { tenantSlug, documentId: doc.id, error: err.message },
+                        'SignNow cleanup warning during expiration'
+                    );
+                }
+            }
+
+            // Mark as EXPIRED in DB
+            await db
+                .update(signingDocuments)
+                .set({
+                    status: 'EXPIRED',
+                    updatedAt: new Date(),
+                })
+                .where(eq(signingDocuments.id, doc.id));
+
+            expired++;
+        }
+
+        logger.info(
+            { tenantSlug, expired, total: expiredDocs.length },
+            `⏰ Document expiration complete for tenant ${tenantSlug}`
+        );
+    } catch (err: any) {
+        logger.error({ err, tenantSlug }, 'Fatal error during document expiration for tenant');
+    }
+};
+
+/**
  * Run PDF recovery across all active tenants.
  */
 export const processSignedPdfRecovery = async (): Promise<void> => {
@@ -127,7 +200,7 @@ export const processSignedPdfRecovery = async (): Promise<void> => {
         return;
     }
 
-    logger.info('📄 Starting signed PDF recovery across all tenants...');
+    logger.info('📄 Starting e-signature maintenance across all tenants...');
 
     try {
         const activeTenants = await centralDb.query.tenants.findMany({
@@ -137,18 +210,21 @@ export const processSignedPdfRecovery = async (): Promise<void> => {
         for (const tenant of activeTenants) {
             try {
                 const db = await tenantManager.getConnection(tenant.slug);
+                // 1. Recover orphaned signed PDFs
                 await recoverOrphanedPdfsForTenant(db, tenant.slug);
+                // 2. Expire documents past their expiresAt date
+                await expireDocumentsForTenant(db, tenant.slug);
             } catch (error: any) {
                 logger.error(
                     { tenantSlug: tenant.slug, error: error.message },
-                    'Failed to process PDF recovery for tenant'
+                    'Failed to process e-signature maintenance for tenant'
                 );
             }
         }
 
-        logger.info('📄 Signed PDF recovery complete');
+        logger.info('📄 E-signature maintenance complete');
     } catch (err: any) {
-        logger.error({ err }, 'Fatal error during signed PDF recovery');
+        logger.error({ err }, 'Fatal error during e-signature maintenance');
     }
 };
 

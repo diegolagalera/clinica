@@ -353,10 +353,49 @@ export const emailSignedDocuments = asyncHandler(async (req: AuthenticatedReques
 
 /**
  * POST /esignature/webhook/signnow
- * SignNow webhook callback (public endpoint, no auth required)
+ * SignNow webhook callback (public endpoint, no auth required).
  * Receives document completion events from SignNow.
+ * 
+ * Security: When SIGNNOW_WEBHOOK_SECRET is set, verifies the HMAC-SHA256
+ * signature in the X-SignNow-Signature header to ensure the request
+ * actually comes from SignNow.
  */
 export const handleWebhook = asyncHandler(async (req: Request, res: Response) => {
+    // ─── HMAC Signature Verification ─────────────────────────────────────
+    const webhookSecret = config.signnow.webhookSecret;
+    if (webhookSecret) {
+        const { createHmac } = await import('crypto');
+        const signatureHeader = req.headers['x-signnow-signature'] as string | undefined;
+
+        if (!signatureHeader) {
+            console.warn('[ESignature Webhook] Rejected: missing X-SignNow-Signature header');
+            res.status(401).json({ error: 'Missing webhook signature' });
+            return;
+        }
+
+        // Compute HMAC-SHA256 of the raw body
+        const rawBody = JSON.stringify(req.body);
+        const expectedSignature = createHmac('sha256', webhookSecret)
+            .update(rawBody)
+            .digest('hex');
+
+        // Constant-time comparison to prevent timing attacks
+        const { timingSafeEqual } = await import('crypto');
+        const sigBuffer = Buffer.from(signatureHeader, 'hex');
+        const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+
+        if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+            console.warn('[ESignature Webhook] Rejected: invalid signature');
+            res.status(401).json({ error: 'Invalid webhook signature' });
+            return;
+        }
+
+        console.log('[ESignature Webhook] Signature verified ✓');
+    } else {
+        console.warn('[ESignature Webhook] No SIGNNOW_WEBHOOK_SECRET configured — skipping signature verification');
+    }
+
+    // ─── Process Webhook Payload ─────────────────────────────────────────
     const payload = req.body;
 
     // Extract document_id from the webhook payload

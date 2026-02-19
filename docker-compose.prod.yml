@@ -46,37 +46,6 @@ services:
     networks:
       - internal
 
-  minio:
-    image: minio/minio:latest
-    container_name: cuspia_minio
-    restart: always
-    environment:
-      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    ports:
-      - "9001:9001"
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - internal
-
-  minio-init:
-    image: minio/mc:latest
-    container_name: cuspia_minio_init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c " mc alias set myminio http://minio:9000 ${MINIO_USER:-minioadmin} ${MINIO_PASSWORD}; mc mb --ignore-existing myminio/cuspia; exit 0; "
-    networks:
-      - internal
-
   # ==========================================
   # APPLICATION
   # ==========================================
@@ -92,8 +61,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_healthy
     environment:
       NODE_ENV: production
       TZ: Europe/Madrid
@@ -101,11 +68,11 @@ services:
       DATABASE_URL: postgresql://${DB_USER:-cuspia}:${DB_PASSWORD}@postgres:5432/dental_erp
       CENTRAL_DATABASE_URL: postgresql://${DB_USER:-cuspia}:${DB_PASSWORD}@postgres:5432/cuspia_central
       REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${MINIO_USER:-minioadmin}
-      S3_SECRET_KEY: ${MINIO_PASSWORD}
+      S3_ENDPOINT: https://${S3_LOCATION:-nbg1}.your-objectstorage.com
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET: cuspia
-      S3_REGION: us-east-1
+      S3_REGION: ${S3_LOCATION:-nbg1}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       FRONTEND_URL: ${FRONTEND_URL}
@@ -187,7 +154,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  minio_data:
 
 
 networks:

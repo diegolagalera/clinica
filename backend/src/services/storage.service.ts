@@ -8,6 +8,7 @@ import {
     HeadBucketCommand,
     ListObjectsV2Command,
     DeleteObjectsCommand,
+    DeleteBucketCommand,
 } from '@aws-sdk/client-s3';
 import { config } from '../config/env.js';
 import { logger } from '../utils/logger.js';
@@ -22,33 +23,16 @@ const s3Client = new S3Client({
         accessKeyId: config.s3.accessKey,
         secretAccessKey: config.s3.secretKey,
     },
-    forcePathStyle: true, // Required for MinIO
+    forcePathStyle: true, // Required for S3-compatible providers (MinIO, Hetzner Object Storage)
 });
 
-/** Legacy default bucket — used as fallback when no tenant slug is provided */
-const DEFAULT_BUCKET = config.s3.bucket;
-
-// ─── Bucket Naming ────────────────────────────────────────────────────────────
-
 /**
- * Convert a tenant slug to a valid S3 bucket name.
- * S3 bucket names: lowercase, 3-63 chars, no underscores, only hyphens.
- * Example: "mi-clinica" → "cuspia-mi-clinica"
+ * Single shared bucket for all tenants.
+ * Tenant isolation is achieved via key prefixes: {tenantSlug}/{clinicId}/{category}/...
  */
-export const getTenantBucket = (tenantSlug: string): string => {
-    return `cuspia-${tenantSlug}`;
-};
+const BUCKET = config.s3.bucket;
 
-/**
- * Resolve the bucket to use. If a tenantSlug is provided, use the tenant bucket.
- * Otherwise fall back to the default bucket for backward compatibility.
- */
-const resolveBucket = (tenantSlug?: string): string => {
-    if (tenantSlug) return getTenantBucket(tenantSlug);
-    return DEFAULT_BUCKET;
-};
-
-// ─── Key Builder ──────────────────────────────────────────────────────────────
+// ─── Key Helpers ──────────────────────────────────────────────────────────────
 
 export type StorageCategory =
     | 'radiographs'
@@ -60,7 +44,7 @@ export type StorageCategory =
 /**
  * Build a consistent S3 object key with tenant isolation.
  * Format: {clinicId}/{category}/{...rest}
- * Note: orgId prefix is no longer needed since each tenant has its own bucket.
+ * Note: The tenant slug prefix is added automatically by the core storage functions.
  */
 export const buildKey = (
     _orgId: string, // kept for backward compatibility but no longer used in key
@@ -71,69 +55,63 @@ export const buildKey = (
     return [clinicId, category, ...parts].join('/');
 };
 
+/**
+ * Resolve the full S3 key by prepending the tenant slug prefix.
+ * This ensures tenant isolation within the single shared bucket.
+ * If no tenantSlug is provided, the key is used as-is (backward compatibility).
+ */
+const resolveKey = (key: string, tenantSlug?: string): string => {
+    if (tenantSlug) return `${tenantSlug}/${key}`;
+    return key;
+};
+
 // ─── Bucket Lifecycle ─────────────────────────────────────────────────────────
 
 /**
- * Ensure a tenant bucket exists. Creates it if it doesn't.
+ * Ensure the shared bucket exists. Creates it if it doesn't.
  * Safe to call multiple times (idempotent).
+ * With Hetzner Object Storage, the bucket can also be created via the web console.
  */
-export const ensureBucketExists = async (tenantSlug: string): Promise<void> => {
-    const bucket = getTenantBucket(tenantSlug);
-
+export const ensureBucketExists = async (_tenantSlug: string): Promise<void> => {
     try {
-        // Check if bucket already exists
-        await s3Client.send(new HeadBucketCommand({ Bucket: bucket }));
-        logger.debug({ bucket }, 'Bucket already exists');
+        await s3Client.send(new HeadBucketCommand({ Bucket: BUCKET }));
+        logger.debug({ bucket: BUCKET }, 'Shared bucket already exists');
         return;
     } catch (err: any) {
-        // 404 / NotFound means we need to create it
         if (err.$metadata?.httpStatusCode !== 404 && err.name !== 'NotFound') {
-            logger.error({ bucket, err }, 'Unexpected error checking bucket existence');
+            logger.error({ bucket: BUCKET, err }, 'Unexpected error checking bucket existence');
             throw err;
         }
     }
 
-    // Create the bucket
     try {
-        await s3Client.send(new CreateBucketCommand({ Bucket: bucket }));
-        logger.info({ bucket, tenantSlug }, '✅ Tenant bucket created');
+        await s3Client.send(new CreateBucketCommand({ Bucket: BUCKET }));
+        logger.info({ bucket: BUCKET }, '✅ Shared bucket created');
     } catch (err: any) {
-        // BucketAlreadyOwnedByYou = race condition, another process created it
         if (err.name === 'BucketAlreadyOwnedByYou' || err.name === 'BucketAlreadyExists') {
-            logger.debug({ bucket }, 'Bucket was created by another process (race condition — safe)');
+            logger.debug({ bucket: BUCKET }, 'Bucket was created by another process (race condition — safe)');
             return;
         }
-        logger.error({ bucket, tenantSlug, err }, '❌ Failed to create tenant bucket');
+        logger.error({ bucket: BUCKET, err }, '❌ Failed to create shared bucket');
         throw err;
     }
 };
 
 /**
- * Delete a tenant bucket and ALL its contents.
+ * Delete ALL data for a tenant within the shared bucket.
+ * Removes all objects with the tenant slug prefix.
  * Used when a tenant is being fully removed.
  */
 export const deleteBucketWithContents = async (tenantSlug: string): Promise<void> => {
-    const bucket = getTenantBucket(tenantSlug);
-
-    // Step 1: Check if the bucket exists
-    try {
-        await s3Client.send(new HeadBucketCommand({ Bucket: bucket }));
-    } catch (err: any) {
-        if (err.$metadata?.httpStatusCode === 404 || err.name === 'NotFound') {
-            logger.warn({ bucket, tenantSlug }, 'Bucket does not exist — nothing to delete');
-            return;
-        }
-        throw err;
-    }
-
-    // Step 2: Delete all objects in the bucket (S3 requires empty bucket for deletion)
+    const prefix = `${tenantSlug}/`;
     let continuationToken: string | undefined;
     let totalDeleted = 0;
 
     do {
         const listResponse = await s3Client.send(
             new ListObjectsV2Command({
-                Bucket: bucket,
+                Bucket: BUCKET,
+                Prefix: prefix,
                 ContinuationToken: continuationToken,
                 MaxKeys: 1000,
             })
@@ -143,7 +121,7 @@ export const deleteBucketWithContents = async (tenantSlug: string): Promise<void
         if (objects && objects.length > 0) {
             await s3Client.send(
                 new DeleteObjectsCommand({
-                    Bucket: bucket,
+                    Bucket: BUCKET,
                     Delete: {
                         Objects: objects.map((obj) => ({ Key: obj.Key! })),
                         Quiet: true,
@@ -158,30 +136,18 @@ export const deleteBucketWithContents = async (tenantSlug: string): Promise<void
             : undefined;
     } while (continuationToken);
 
-    logger.info({ bucket, totalDeleted }, 'All objects deleted from bucket');
-
-    // Step 3: Delete the empty bucket
-    try {
-        await s3Client.send(
-            new DeleteObjectsCommand({
-                Bucket: bucket,
-                Delete: { Objects: [], Quiet: true },
-            })
-        );
-    } catch {
-        // Ignore — just ensuring no stragglers
-    }
-
-    // Actually delete the bucket itself
-    const { DeleteBucketCommand } = await import('@aws-sdk/client-s3');
-    await s3Client.send(new DeleteBucketCommand({ Bucket: bucket }));
-    logger.info({ bucket, tenantSlug }, '✅ Tenant bucket deleted');
+    logger.info({ tenantSlug, totalDeleted }, '✅ Tenant data deleted from shared bucket');
 };
+
+// ─── Legacy Export (backward compatibility) ───────────────────────────────────
+
+/** @deprecated Use the shared BUCKET constant. Kept for any external consumers. */
+export const getTenantBucket = (_tenantSlug: string): string => BUCKET;
 
 // ─── Core Operations ──────────────────────────────────────────────────────────
 
 /**
- * Upload a file to MinIO/S3.
+ * Upload a file to S3.
  */
 export const uploadFile = async (
     key: string,
@@ -189,16 +155,16 @@ export const uploadFile = async (
     mimeType: string,
     tenantSlug?: string
 ): Promise<void> => {
-    const bucket = resolveBucket(tenantSlug);
+    const fullKey = resolveKey(key, tenantSlug);
     await s3Client.send(
         new PutObjectCommand({
-            Bucket: bucket,
-            Key: key,
+            Bucket: BUCKET,
+            Key: fullKey,
             Body: buffer,
             ContentType: mimeType,
         })
     );
-    logger.debug({ key, bucket, size: buffer.length }, 'File uploaded to S3');
+    logger.debug({ key: fullKey, bucket: BUCKET, size: buffer.length }, 'File uploaded to S3');
 };
 
 /**
@@ -208,11 +174,11 @@ export const getFileStream = async (
     key: string,
     tenantSlug?: string
 ): Promise<{ stream: Readable; contentType: string; contentLength: number }> => {
-    const bucket = resolveBucket(tenantSlug);
+    const fullKey = resolveKey(key, tenantSlug);
     const response = await s3Client.send(
         new GetObjectCommand({
-            Bucket: bucket,
-            Key: key,
+            Bucket: BUCKET,
+            Key: fullKey,
         })
     );
 
@@ -227,11 +193,11 @@ export const getFileStream = async (
  * Get a file as a Buffer (for in-memory processing, e.g. AI analysis).
  */
 export const getFileBuffer = async (key: string, tenantSlug?: string): Promise<Buffer> => {
-    const bucket = resolveBucket(tenantSlug);
+    const fullKey = resolveKey(key, tenantSlug);
     const response = await s3Client.send(
         new GetObjectCommand({
-            Bucket: bucket,
-            Key: key,
+            Bucket: BUCKET,
+            Key: fullKey,
         })
     );
 
@@ -244,33 +210,33 @@ export const getFileBuffer = async (key: string, tenantSlug?: string): Promise<B
 };
 
 /**
- * Delete a file from MinIO/S3.
+ * Delete a file from S3.
  */
 export const deleteFile = async (key: string, tenantSlug?: string): Promise<void> => {
-    const bucket = resolveBucket(tenantSlug);
+    const fullKey = resolveKey(key, tenantSlug);
     try {
         await s3Client.send(
             new DeleteObjectCommand({
-                Bucket: bucket,
-                Key: key,
+                Bucket: BUCKET,
+                Key: fullKey,
             })
         );
-        logger.debug({ key, bucket }, 'File deleted from S3');
+        logger.debug({ key: fullKey, bucket: BUCKET }, 'File deleted from S3');
     } catch (err) {
-        logger.warn({ key, err }, 'Failed to delete file from S3');
+        logger.warn({ key: fullKey, err }, 'Failed to delete file from S3');
     }
 };
 
 /**
- * Check if a file exists in MinIO/S3.
+ * Check if a file exists in S3.
  */
 export const fileExists = async (key: string, tenantSlug?: string): Promise<boolean> => {
-    const bucket = resolveBucket(tenantSlug);
+    const fullKey = resolveKey(key, tenantSlug);
     try {
         await s3Client.send(
             new HeadObjectCommand({
-                Bucket: bucket,
-                Key: key,
+                Bucket: BUCKET,
+                Key: fullKey,
             })
         );
         return true;

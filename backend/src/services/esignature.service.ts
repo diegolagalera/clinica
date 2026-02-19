@@ -667,31 +667,17 @@ export const checkAndUpdateStatus = async (
     const snStatus = await signnowService.getDocumentStatus(doc.signnowDocumentId);
 
     if (snStatus.signed) {
-        // Download signed PDF with retry (3 attempts, exponential backoff)
-        const signedPdfStorageKey = await downloadAndStoreSignedPdf(
-            doc.signnowDocumentId,
-            doc.id,
-            clinicId,
-            tenantSlug
-        );
-
-        // Update DB
+        // Lightweight: only update status in DB for immediate frontend feedback.
+        // PDF download + email are handled exclusively by the webhook handler
+        // (or by the recovery scheduler as fallback).
         await db
             .update(signingDocuments)
             .set({
                 status: 'SIGNED',
                 signedAt: new Date(),
-                signedPdfStorageKey,
                 updatedAt: new Date(),
             })
             .where(eq(signingDocuments.id, signingDocumentId));
-
-        // Send signed PDF to patient via email (fire-and-forget)
-        // Only for EMBEDDED signing — EMAIL signing is handled by SignNow
-        if (signedPdfStorageKey && doc.signingMethod === 'EMBEDDED') {
-            sendSignedDocumentToPatient(db, doc, signedPdfStorageKey, clinicId, tenantSlug)
-                .catch(err => logger.error('[E-Signature] Failed to email signed document to patient', { error: err.message, docId: doc.id }));
-        }
 
         return { status: 'SIGNED', signed: true };
     }
@@ -967,7 +953,10 @@ export const handleWebhook = async (
 
     if (!doc) return false; // Not in this tenant
 
-    if (doc.status === 'SIGNED') return true; // Already processed
+    // Already fully processed (PDF downloaded + stored)? Skip.
+    // Note: status may be 'SIGNED' from checkAndUpdateStatus (lightweight) but
+    // signedPdfStorageKey will only exist after webhook downloads the PDF.
+    if (doc.status === 'SIGNED' && doc.signedPdfStorageKey) return true;
 
     // Download signed PDF with retry (3 attempts, exponential backoff)
     const signedPdfStorageKey = await downloadAndStoreSignedPdf(

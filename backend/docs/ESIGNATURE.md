@@ -40,7 +40,7 @@ El módulo permite a las clínicas:
 | Almacenamiento | MinIO/S3 (por tenant) |
 | Base de datos | PostgreSQL + Drizzle ORM |
 | Tiempo real | WebSocket (Socket.IO) + Iframe load detection |
-| Scheduler | node-cron (recuperación PDFs) |
+| Scheduler | node-cron (recuperación PDFs + expiración documentos) |
 | Frontend | Vue 3 (`<script setup>`) |
 
 ---
@@ -355,7 +355,7 @@ sequenceDiagram
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `POST` | `/esignature/webhook/signnow` | Callback de webhooks de SignNow |
+| `POST` | `/esignature/webhook/signnow` | Callback de webhooks de SignNow (verificado con HMAC) |
 | `GET` | `/esignature/templates/editor-callback` | Redirect desde editor embebido SignNow |
 
 ### Rutas Protegidas (requieren auth + staff + tenant)
@@ -388,6 +388,7 @@ sequenceDiagram
 | `GET` | `/esignature/documents/:id/signing-url` | URL para firma embebida (iframe) |
 | `GET` | `/esignature/documents/:id/status` | Comprobar estado de firma |
 | `GET` | `/esignature/documents/:id/download` | Descargar PDF firmado |
+| `POST` | `/esignature/documents/email-signed` | Enviar documentos firmados por email al paciente |
 | `DELETE` | `/esignature/documents/:id` | Cancelar documento (DRAFT/PENDING) |
 
 ---
@@ -412,7 +413,7 @@ Capa de bajo nivel que encapsula todas las llamadas HTTP a la API de SignNow.
 | `prefillDocumentFields(documentId, fields)` | Pre-rellena campos de texto con datos |
 | `createEmbeddedInvite(documentId, email)` | Genera URL para firma en iframe |
 | `sendEmailInvite(documentId, email, ...)` | Envía invitación de firma por email |
-| `subscribeToWebhook(documentId, callbackUrl)` | Suscribe webhook para recibir notificaciones |
+| `subscribeToWebhook(documentId, callbackUrl, event, secretKey?)` | Suscribe webhook con verificación HMAC opcional |
 | `getDocumentStatus(documentId)` | Consulta estado de firma |
 | `downloadSignedDocument(documentId)` | Descarga el PDF firmado como Buffer |
 | `getEditorLink(documentId, redirectUri)` | URL para editor de campos visual |
@@ -442,7 +443,9 @@ Orquesta entre la BD, SignNow API y almacenamiento.
 | `checkAndUpdateStatus(db, docId, ctx)` | Check puntual del estado (con retry de PDF) |
 | `downloadSignedPdf(db, docId, ctx)` | Descarga PDF firmado desde MinIO |
 | `cancelSigningDocument(db, docId, ctx)` | Cancela doc (DRAFT/PENDING): revoca invites + elimina de SignNow + CANCELLED |
-| `handleWebhook(db, payload, tenantSlug)` | Procesa webhook: descarga PDF → actualiza BD → WebSocket |
+| `handleWebhook(db, payload, tenantSlug)` | Procesa webhook: descarga PDF → actualiza BD → email paciente → WebSocket |
+| `sendSignedDocumentToPatient(db, doc, key, ...)` | Envía PDF firmado por email al paciente (fire-and-forget) |
+| `emailSignedDocumentsToPatient(db, data, ctx)` | Envía múltiples documentos firmados por email (bulk) |
 
 ### Datos del Paciente Auto-Rellenables
 
@@ -611,6 +614,38 @@ Fichero: `esignature-recovery-scheduler.ts`
 > [!NOTE]
 > SignNow retiene los documentos firmados durante 30+ días, dando un amplio margen de recuperación.
 
+### Capa 3: Expiración Automática de Documentos Pendientes
+
+El scheduler también expira documentos que llevan demasiado tiempo sin firmar.
+
+| Parámetro | Valor | Descripción |
+|-----------|-------|--------------|
+| **Frecuencia** | Cada 30 minutos | Mismo cron que la recuperación |
+| **Query** | `status IN (DRAFT, PENDING) AND expires_at < NOW()` | Solo docs expirados |
+| **Máx. docs/tenant** | 50 | Previene sobrecarga |
+
+**Flujo por documento expirado:**
+1. Si `PENDING`: cancela invites en SignNow
+2. Borra el documento de SignNow (best-effort)
+3. Actualiza `status = 'EXPIRED'` en la BD
+
+### Protección contra Documentos Huérfanos en SignNow
+
+Si `createSigningDocument()` crea un documento en SignNow pero el INSERT en la BD falla, el documento quedaría huérfano en SignNow. Para evitarlo:
+
+```typescript
+try {
+    const [result] = await db.insert(signingDocuments).values({...}).returning();
+    return result!;
+} catch (dbErr) {
+    // Limpieza: borrar doc huérfano de SignNow
+    if (signnowDocumentId) {
+        await signnowService.deleteDocument(signnowDocumentId).catch(() => {});
+    }
+    throw dbErr;
+}
+```
+
 ---
 
 ## Multi-Tenancy
@@ -679,12 +714,28 @@ Si el webhook llega sin `?tenant=slug` (suscripciones antiguas):
 ```env
 # SignNow API Configuration
 SIGNNOW_API_KEY=tu_api_key_aquí
-SIGNNOW_BASE_URL=https://api.signnow.com     # Producción
-# SIGNNOW_BASE_URL=https://api-eval.signnow.com  # Sandbox/Testing
+SIGNNOW_API_URL=https://api.signnow.com     # Producción
+# SIGNNOW_API_URL=https://api-eval.signnow.com  # Sandbox/Testing
+SIGNNOW_EMAIL=tu_email_signnow
+SIGNNOW_WEBHOOK_SECRET=secreto_para_verificar_webhooks   # HMAC-SHA256
 ```
 
 > [!CAUTION]
-> La `SIGNNOW_API_KEY` es un secreto. No commitear en el repositorio. Configurar en variables de entorno del servidor.
+> `SIGNNOW_API_KEY` y `SIGNNOW_WEBHOOK_SECRET` son secretos. No commitear en el repositorio. Configurar en variables de entorno del servidor.
+
+### Seguridad del Webhook
+
+Cuando `SIGNNOW_WEBHOOK_SECRET` está configurado:
+
+1. **Al suscribir el webhook**, se envía `secret_key` a SignNow
+2. **SignNow firma cada callback** con HMAC-SHA256 en el header `X-SignNow-Signature`
+3. **El backend verifica** la firma antes de procesar el payload
+4. Requests con firma inválida o ausente → `401 Unauthorized`
+
+Si `SIGNNOW_WEBHOOK_SECRET` **no está configurado** (dev local), la verificación se salta con un warning en los logs.
+
+> [!IMPORTANT]
+> Los webhooks suscritos **antes** de configurar el secret no envían firma. Solo los documentos creados después tendrán verificación HMAC.
 
 ---
 
@@ -728,6 +779,12 @@ WHERE status = 'SIGNED' AND signed_pdf_storage_key IS NULL;
 
 El upload de plantillas acepta: `application/pdf`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`. Máximo 20MB.
 
+### Webhook rechazado con 401
+
+1. **Verificar `SIGNNOW_WEBHOOK_SECRET`**: El valor debe coincidir entre `.env` y la variable de entorno en producción.
+2. **Webhooks antiguos**: Los webhooks suscritos antes de configurar el secret no incluyen firma HMAC. Crear nuevos documentos para que se suscriban con el secret.
+3. **Verificar logs**: Buscar `[ESignature Webhook] Rejected:` para ver si es firma ausente o inválida.
+
 ---
 
-*Última actualización: 18 de febrero de 2026*
+*Última actualización: 19 de febrero de 2026*

@@ -44,7 +44,11 @@ jobs:
             echo "🔄 Restarting services..."
             docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 
-            echo "🗄️  Running migrations..."
+            echo "🗄️  Running central DB migration..."
+            docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T backend \
+              npx drizzle-kit push --config=drizzle-central.config.ts || true
+
+            echo "🗄️  Running tenant migrations..."
             docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T backend \
               node dist/scripts/migrate-all-tenants.js || true
 

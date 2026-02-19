@@ -10,6 +10,11 @@ export interface EmailOptions {
     subject: string;
     html: string;
     from?: string;
+    attachments?: Array<{
+        filename: string;
+        content: Buffer | string;
+        contentType?: string;
+    }>;
 }
 
 export interface SmtpConfig {
@@ -159,6 +164,7 @@ export const sendEmail = async (
             to: options.to,
             subject: options.subject,
             html: options.html,
+            ...(options.attachments ? { attachments: options.attachments } : {}),
         });
 
         logger.info(`Email sent successfully to ${options.to}, messageId: ${result.messageId}`);

@@ -28,7 +28,7 @@ graph TB
             PG["🐘 PostgreSQL 16\n(pgvector)"]
             CPG["🐘 Central DB\n(postgres:16-alpine)"]
             RD["🔴 Redis 7"]
-            MN["📦 MinIO\n(S3 compatible)"]
+            HZ["📦 Hetzner Object Storage\n(S3 compatible)"]
             CB["🔒 Certbot\n(auto-renew)"]
         end
     end
@@ -41,7 +41,7 @@ graph TB
     BE --> PG
     BE --> CPG
     BE --> RD
-    BE --> MN
+    BE -->|"S3 API"| HZ
     CB -->|"renew certs"| NGINX
 
     style VPS fill:#1a1a2e,color:#fff
@@ -101,7 +101,7 @@ graph TB
             PG["🐘 cuspia_db\nPostgreSQL 16 + pgvector\nPuerto interno: 5432\nVolumen: postgres_data"]
             CPG["🐘 cuspia_central_db\nPostgreSQL 16 Alpine\nPuerto interno: 5432\nVolumen: postgres_central_data"]
             RD["🔴 cuspia_redis\nRedis 7 Alpine\nPuerto interno: 6379\nVolumen: redis_data"]
-            MN["📦 cuspia_minio\nMinIO (S3)\nPuertos: 9000/9001\nVolumen: minio_data"]
+            HZ["📦 Hetzner Object Storage\nS3 (nbg1.your-objectstorage.com)\nBucket: cuspia"]
         end
 
         subgraph App["📱 Aplicación"]
@@ -120,7 +120,7 @@ graph TB
     BE -->|DATABASE_URL| PG
     BE -->|CENTRAL_DATABASE_URL| CPG
     BE -->|REDIS_URL| RD
-    BE -->|S3_ENDPOINT| MN
+    BE -->|"S3_ENDPOINT"| HZ
     CB -->|cert volumes| NX
 
     style Infra fill:#1b2838,color:#fff
@@ -135,7 +135,7 @@ graph TB
 | `cuspia_db` | `pgvector/pgvector:pg16` | DB principal de tenants | `pg_isready` cada 10s |
 | `cuspia_central_db` | `postgres:16-alpine` | DB central (tenants, superadmins, global_users) | `pg_isready` cada 10s |
 | `cuspia_redis` | `redis:7-alpine` | Caché, sesiones, colas | `redis-cli ping` cada 10s |
-| `cuspia_minio` | `minio/minio:latest` | Almacenamiento S3 (radiografías, media) | `curl /minio/health/live` cada 30s |
+| Hetzner Object Storage | S3 API (nbg1) | Almacenamiento S3 (radiografías, media) | Gestionado por Hetzner |
 | `cuspia_backend` | Custom (Node 20 Alpine) | API REST + WebSocket + Schedulers | `wget /api/v1/health` cada 30s |
 | `cuspia_frontend` | Custom (Nginx Alpine) | SPA Vue 3 | - |
 | `cuspia_nginx` | `nginx:alpine` | Reverse proxy + SSL + Rate limiting | - |
@@ -472,8 +472,9 @@ Usa `.env.prod.example` como template:
 | `DB_USER` | `cuspia` | Usuario PostgreSQL |
 | `DB_PASSWORD` | `***` | Contraseña PostgreSQL |
 | `REDIS_PASSWORD` | `***` | Contraseña Redis |
-| `MINIO_USER` | `minioadmin` | Usuario MinIO |
-| `MINIO_PASSWORD` | `***` | Contraseña MinIO |
+| `S3_ACCESS_KEY` | `***` | Access key de Hetzner Object Storage |
+| `S3_SECRET_KEY` | `***` | Secret key de Hetzner Object Storage |
+| `S3_LOCATION` | `nbg1` | Región de Hetzner Object Storage |
 | `JWT_ACCESS_SECRET` | `***` | Secret para access tokens |
 | `JWT_REFRESH_SECRET` | `***` | Secret para refresh tokens |
 | `FRONTEND_URL` | `https://app.cuspia.com` | URL del frontend |
@@ -580,4 +581,4 @@ graph TD
 
 ---
 
-*Última actualización: 15 de Febrero de 2026*
+*Última actualización: 19 de Febrero de 2026*

@@ -96,7 +96,7 @@ JWT NO contiene tenantSlug → Consulta centralDb.superadmins
 ## 3. Imágenes de Stock
 
 ### Problema
-Las etiquetas `<img>` del navegador no envían headers de autenticación. El endpoint de imágenes necesita saber de qué tenant cargar la imagen (bucket de MinIO).
+Las etiquetas `<img>` del navegador no envían headers de autenticación. El endpoint de imágenes necesita saber de qué tenant cargar la imagen (prefijo S3).
 
 ### Solución: Query Parameter `?tenant=slug`
 
@@ -115,7 +115,7 @@ function stockImageUrl(itemId) {
 **Backend:**
 ```
 ?tenant=mi-clinica → tenantManager.getConnection('mi-clinica')
-→ Busca el item en la DB del tenant → Resuelve bucket de MinIO
+→ Busca el item en la DB del tenant → Resuelve prefijo S3 del tenant
 → Devuelve la imagen con Cache-Control headers
 ```
 

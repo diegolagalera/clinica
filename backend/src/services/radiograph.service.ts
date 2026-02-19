@@ -70,7 +70,7 @@ export const createRadiograph = async (db: Database,
     const filename = `${uniqueId}${fileExtension}`;
     const storageKey = storage.buildKey(orgId, input.clinicId, 'radiographs', filename);
 
-    // Upload to MinIO
+    // Upload to S3
     await storage.uploadFile(storageKey, input.file.buffer, input.file.mimetype, tenantSlug);
 
     // Create radiograph record
@@ -291,7 +291,7 @@ export const retryAiAnalysis = async (db: Database,
         aiResult = updatedResult!;
     }
 
-    // Read file from MinIO and start analysis
+    // Read file from S3 and start analysis
     const fileBuffer = await storage.getFileBuffer(radiograph.storageKey, tenantSlug);
     processAiAnalysis(db, radiographId, fileBuffer, radiograph.mimeType, radiograph.clinicId).catch((err) => {
         logger.error('AI analysis failed:', err);
@@ -339,7 +339,7 @@ export const deleteRadiograph = async (db: Database,
         throw new NotFoundError('Radiografía no encontrada');
     }
 
-    // Delete file from MinIO
+    // Delete file from S3
     await storage.deleteFile(existing.storageKey, tenantSlug);
 
     // Delete from database (cascade will delete AI result)

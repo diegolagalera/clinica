@@ -119,15 +119,15 @@ app.use((req, _res, next) => {
 });
 
 // ============================================================================
-// MEDIA SERVING (from MinIO/S3)
+// MEDIA SERVING (from S3)
 // ============================================================================
 // NOTE: No auth middleware here — <img>, <audio>, <video> tags cannot send
 // Authorization headers. This matches the stock image pattern (see stock.routes.ts).
-// Security: MinIO bucket is private + S3 keys contain non-guessable UUIDs.
+// Security: S3 bucket is private + S3 keys contain non-guessable UUIDs.
 
 import * as storage from './services/storage.service.js';
 
-// Generic media endpoint: streams any file from MinIO by its storage key
+// Generic media endpoint: streams any file from S3 by its storage key
 app.get('/api/v1/media/*', async (req, res): Promise<void> => {
     try {
         // Extract the full key from the URL path after /api/v1/media/
@@ -171,7 +171,7 @@ app.get('/api/v1/media/*', async (req, res): Promise<void> => {
             res.status(404).json({ error: 'File not found' });
             return;
         }
-        logger.error({ err, url: req.url }, 'Error serving media from MinIO');
+        logger.error({ err, url: req.url }, 'Error serving media from S3');
         res.status(500).json({ error: 'Error serving file' });
     }
 });
@@ -216,7 +216,7 @@ const start = async () => {
             // Start message & media cleanup scheduler
             startCleanupScheduler();
 
-            // Start signed PDF recovery scheduler (re-downloads from SignNow if MinIO upload failed)
+            // Start signed PDF recovery scheduler (re-downloads from SignNow if S3 upload failed)
             startSignedPdfRecoveryScheduler();
 
             // Start auth token cleanup scheduler (purges expired/revoked tokens daily)

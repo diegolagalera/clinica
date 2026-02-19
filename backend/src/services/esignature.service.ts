@@ -20,7 +20,7 @@ import { logger } from '../utils/logger.js';
 import { BadRequestError, NotFoundError, AppError } from '../utils/errors.js';
 
 /**
- * Helper: Download signed PDF from SignNow and upload to MinIO with retry.
+ * Helper: Download signed PDF from SignNow and upload to S3 with retry.
  * Retries up to 3 times with exponential backoff (2s, 4s, 8s).
  * Returns the storage key on success, or null if all retries fail.
  */
@@ -721,7 +721,7 @@ const sendSignedDocumentToPatient = async (
         const patientName = [patient.firstName, patient.lastName].filter(Boolean).join(' ') || 'Paciente';
         const documentName = doc.name || 'Documento';
 
-        // 3. Download signed PDF from MinIO
+        // 3. Download signed PDF from S3
         const pdfBuffer = await storage.getFileBuffer(signedPdfStorageKey, tenantSlug);
 
         // 4. Build professional email
@@ -1004,7 +1004,7 @@ export const handleWebhook = async (
 
 /**
  * Email multiple signed documents to a patient in ONE email.
- * Downloads all PDFs from MinIO and attaches them.
+ * Downloads all PDFs from S3 and attaches them.
  */
 export const emailSignedDocumentsToPatient = async (
     db: Database,
@@ -1058,7 +1058,7 @@ export const emailSignedDocumentsToPatient = async (
     const clinicName = clinic?.name || 'La Clínica';
     const patientName = [patient.firstName, patient.lastName].filter(Boolean).join(' ') || 'Paciente';
 
-    // 4. Download all PDFs from MinIO
+    // 4. Download all PDFs from S3
     const attachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
     for (const doc of docs) {
         if (!doc.signedPdfStorageKey) continue;

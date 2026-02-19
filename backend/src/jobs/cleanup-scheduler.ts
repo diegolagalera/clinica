@@ -16,7 +16,7 @@ const MIN_MESSAGES_TO_KEEP = 100;
  * Rules:
  *  - Delete messages older than RETENTION_MONTHS
  *  - BUT always keep the last MIN_MESSAGES_TO_KEEP messages per conversation
- *  - Delete associated media files from MinIO for removed messages
+ *  - Delete associated media files from S3 for removed messages
  */
 const processCleanupForTenant = async (db: Database, tenantSlug: string) => {
     const cutoffDate = new Date();
@@ -62,7 +62,7 @@ const processCleanupForTenant = async (db: Database, tenantSlug: string) => {
                 // Messages must be BOTH older than 2 months AND outside the top 100
                 const effectiveCutoff = keepBoundary > cutoffDate ? keepBoundary : cutoffDate;
 
-                // Find messages to delete that have media files (so we can remove files from MinIO)
+                // Find messages to delete that have media files (so we can remove files from S3)
                 const mediaMessages = await db
                     .select({
                         id: chatMessages.id,
@@ -77,14 +77,14 @@ const processCleanupForTenant = async (db: Database, tenantSlug: string) => {
                         )
                     );
 
-                // Delete media files from MinIO
+                // Delete media files from S3
                 for (const msg of mediaMessages) {
                     if (msg.mediaUrl) {
                         try {
                             await storage.deleteFile(msg.mediaUrl, tenantSlug);
                             totalFilesDeleted++;
                         } catch (err: any) {
-                            logger.warn({ err, mediaUrl: msg.mediaUrl }, 'Failed to delete media file from MinIO');
+                            logger.warn({ err, mediaUrl: msg.mediaUrl }, 'Failed to delete media file from S3');
                             totalFileErrors++;
                         }
                     }

@@ -110,7 +110,7 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
 
         logger.info({ tenantId: tenant!.id, slug: input.slug }, 'Tenant registered in central DB');
 
-        // Step 2.5: Create tenant MinIO bucket
+        // Step 2.5: Ensure S3 storage is ready for tenant
         try {
             await storage.ensureBucketExists(input.slug);
             logger.info({ slug: input.slug }, 'Tenant storage bucket created');

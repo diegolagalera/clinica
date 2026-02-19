@@ -117,7 +117,7 @@ export const createPrescription = async (
             clinic,
         });
 
-        // 4. Upload to MinIO
+        // 4. Upload to S3
         const storageKey = `prescriptions/${prescription.id}.pdf`;
         await storage.uploadFile(storageKey, pdfBuffer, 'application/pdf', tenantSlug);
 

@@ -446,7 +446,7 @@ export const uploadItemImage = asyncHandler(async (req: AuthenticatedRequest, re
         await storage.deleteFile(item.imageUrl, req.user?.tenantSlug);
     }
 
-    // Upload to MinIO
+    // Upload to S3
     await storage.uploadFile(storageKey, req.file.buffer, req.file.mimetype, req.user?.tenantSlug);
 
     // Update item with S3 key
@@ -525,7 +525,7 @@ export const getItemImage = asyncHandler(async (req: AuthenticatedRequest, res: 
         throw new NotFoundError('Image not found');
     }
 
-    // Stream from the tenant's MinIO bucket
+    // Stream from the tenant's S3 storage
     const { stream, contentType } = await storage.getFileStream(item.imageUrl, tenantSlug);
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -618,7 +618,7 @@ export const generateAndSaveItemImage = asyncHandler(async (req: AuthenticatedRe
         await storage.deleteFile(item.imageUrl, req.user?.tenantSlug);
     }
 
-    // Upload to MinIO
+    // Upload to S3
     await storage.uploadFile(storageKey, imageBuffer, 'image/png', req.user?.tenantSlug);
 
     // Update item

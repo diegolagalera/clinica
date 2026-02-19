@@ -22,7 +22,7 @@ const envSchema = z.object({
     JWT_ACCESS_EXPIRY: z.string().default('15m'),
     JWT_REFRESH_EXPIRY: z.string().default('7d'),
 
-    // S3 / MinIO
+    // S3 (Hetzner Object Storage)
     S3_ENDPOINT: z.string().url(),
     S3_ACCESS_KEY: z.string(),
     S3_SECRET_KEY: z.string(),

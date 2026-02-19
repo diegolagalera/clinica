@@ -232,7 +232,7 @@ const getBackendUrl = (mediaPath: string) => {
     const base = apiUrl.replace('/api/v1', '')
     return `${base}${mediaPath}`
   }
-  // MinIO key → serve via /api/v1/media/{key}?t={tenantSlug}
+  // S3 key → serve via /api/v1/media/{key}?t={tenantSlug}
   const apiUrl = import.meta.env.VITE_API_URL || '/api/v1'
   const base = apiUrl.replace('/api/v1', '')
   const slug = getTenantSlug()

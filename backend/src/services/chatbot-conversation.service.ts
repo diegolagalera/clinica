@@ -817,7 +817,7 @@ export class ChatbotConversationService {
 
         await storage.uploadFile(storageKey, buffer, mimeType, tenantSlug);
 
-        logger.info({ storageKey, size: buffer.length, mimeType }, 'Media file saved to MinIO');
+        logger.info({ storageKey, size: buffer.length, mimeType }, 'Media file saved to S3');
         return storageKey;
     }
 

@@ -33,12 +33,12 @@ async function cleanup() {
         console.log('⚠️  No tenant found in central DB');
     }
 
-    // Delete MinIO bucket and all its contents
+    // Delete all tenant data from S3 (by prefix)
     try {
         await storage.deleteBucketWithContents(slug);
-        console.log(`✅ Deleted MinIO bucket "cuspia-${slug}"`);
+        console.log(`✅ Deleted S3 data for tenant "${slug}"`);
     } catch (err) {
-        console.warn(`⚠️  Could not delete MinIO bucket: ${err}`);
+        console.warn(`⚠️  Could not delete S3 tenant data: ${err}`);
     }
 
     // Drop the database

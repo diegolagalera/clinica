@@ -11,7 +11,7 @@
 - [ x] PostgreSQL principal accesible en puerto 5432
 - [x ] PostgreSQL central accesible en puerto 5433
 - [x ] Redis accesible en puerto 6379
-- [ x] MinIO accesible en puerto 9000 (API) y 9001 (consola)
+- [ x] S3 storage configured (Hetzner Object Storage / MinIO for local)
 - [ x] `npm run dev` (backend) arranca sin errores
 - [ x] `npm run dev` (frontend) arranca sin errores
 
@@ -29,8 +29,8 @@
 - [ x] Provisionar Tenant B (ej: `otra-clinica`)
 - [ x] Verificar que se creó la DB `cuspia_mi_clinica`
 - [ x] Verificar que se creó la DB `cuspia_otra_clinica`
-- [ x] Verificar que se creó el bucket MinIO `cuspia-mi-clinica`
-- [ x] Verificar que se creó el bucket MinIO `cuspia-otra-clinica`
+- [ x] Verificar que el prefijo S3 `mi-clinica/` se crea al subir archivos
+- [ x] Verificar que el prefijo S3 `otra-clinica/` se crea al subir archivos
 - [ x] Verificar registros en tabla `tenants` (central)
 - [ x] Verificar registros en tabla `global_users` (central)
 
@@ -38,7 +38,7 @@
 - [ x] `cleanup-tenant.ts --slug <slug>` elimina tenant de DB central
 - [ x] Elimina entradas de `global_users`
 - [ x] Elimina el tenant de `tenants`
-- [ x] Elimina el bucket MinIO y su contenido
+- [ x] Elimina los archivos S3 del tenant (por prefijo)
 - [ x] Elimina la base de datos del tenant
 
 ### Migraciones
@@ -48,7 +48,7 @@
 
 ### Aislamiento de Datos
 - [ ] Datos del Tenant A NO son visibles desde Tenant B
-- [ ] Archivos del Tenant A NO accesibles desde bucket del Tenant B
+- [ ] Archivos del Tenant A NO accesibles con prefijo del Tenant B
 - [ ] Un usuario del Tenant A NO puede autenticarse en Tenant B (a menos que exista en ambos)
 
 ---
@@ -218,7 +218,7 @@
 - [ ] Subir radiografía (imagen)
 - [ ] Ver radiografía en detalle
 - [ ] Eliminar radiografía
-- [ ] Imagen se guarda en bucket MinIO del tenant correcto
+- [ ] Imagen se guarda en S3 con el prefijo del tenant correcto
 
 ### Análisis IA (GPT-4 Vision)
 - [ ] Botón de análisis IA (trigger manual)
@@ -274,7 +274,7 @@
 - [ ] Recibir mensaje de paciente (webhook)
 - [ ] Enviar mensaje de texto a paciente
 - [ ] Enviar imagen/documento desde interfaz
-- [ ] Media se guarda en bucket MinIO del tenant
+- [ ] Media se guarda en S3 con prefijo del tenant
 - [ ] Media se sirve correctamente desde `/api/v1/media/*`
 
 ### Chatbot IA

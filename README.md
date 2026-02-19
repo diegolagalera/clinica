@@ -19,7 +19,7 @@ docker-compose up -d
 This starts:
 - PostgreSQL 16 with pgvector (localhost:5432)
 - Redis 7 (localhost:6379)
-- MinIO S3 (localhost:9000, console: localhost:9001)
+- Hetzner Object Storage (S3-compatible)
 - MailHog (SMTP: localhost:1025, UI: localhost:8025)
 
 ### 2. Setup Backend
@@ -44,7 +44,7 @@ npm run dev        # Start dev server on :5173
 
 - Frontend: http://localhost:5173
 - API: http://localhost:3000/api/v1
-- MinIO Console: http://localhost:9001 (minioadmin/minioadmin)
+- S3 Storage: Hetzner Object Storage (nbg1.your-objectstorage.com)
 - MailHog: http://localhost:8025
 
 ## 📁 Project Structure
@@ -90,7 +90,7 @@ npm run dev        # Start dev server on :5173
 - **RBAC**: Role-based access control with middleware
 - **JWT Auth**: Access + Refresh tokens with rotation
 - **2FA**: TOTP-based for ADMIN/SUPERADMIN
-- **S3 Storage**: Radiographs and documents in MinIO/S3
+- **S3 Storage**: Radiographs and documents in Hetzner Object Storage
 - **AI Ready**: pgvector for embeddings, AI analysis endpoints
 
 ## 📋 Development Status

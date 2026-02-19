@@ -11,7 +11,7 @@ import { tenantManager } from '../db/tenant-manager.js';
 
 /**
  * Maximum number of documents to recover in a single scheduler run per tenant.
- * Prevents overloading SignNow API or MinIO if many documents are orphaned.
+ * Prevents overloading SignNow API or S3 if many documents are orphaned.
  */
 const MAX_RECOVERY_PER_RUN = 20;
 
@@ -28,8 +28,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * Recover orphaned signed PDFs for a single tenant.
- * Finds documents that are marked SIGNED but have no PDF stored in MinIO,
- * re-downloads them from SignNow, and uploads to MinIO.
+ * Finds documents that are marked SIGNED but have no PDF stored in S3,
+ * re-downloads them from SignNow, and uploads to S3.
  */
 const recoverOrphanedPdfsForTenant = async (db: Database, tenantSlug: string): Promise<void> => {
     try {
@@ -71,7 +71,7 @@ const recoverOrphanedPdfsForTenant = async (db: Database, tenantSlug: string): P
                 // Download signed PDF from SignNow
                 const pdfBuffer = await signnowService.downloadSignedDocument(doc.signnowDocumentId);
 
-                // Upload to MinIO
+                // Upload to S3
                 const key = storage.buildKey(
                     '',
                     doc.clinicId,

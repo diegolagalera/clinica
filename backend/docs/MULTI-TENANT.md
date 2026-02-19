@@ -99,7 +99,7 @@ npm run tenant:migrate -- \
 Crea una empresa nueva desde cero. Es el comando que usarás **cada vez que un nuevo cliente contrate Cuspia**. Hace todo automáticamente:
 
 1. Registra la empresa en la DB central
-2. **Crea el bucket MinIO** (`cuspia-{slug}`) para almacenar archivos
+2. **Verifica que el bucket S3 compartido existe** (`cuspia` / `cuspia-develop`)
 3. Crea una nueva base de datos PostgreSQL
 4. Crea todas las tablas en esa base de datos
 5. Mete los datos iniciales (seed)
@@ -230,37 +230,45 @@ npx tsx src/scripts/cleanup-tenant.ts --slug nombre-empresa
 Esto elimina:
 1. El registro del tenant en la DB central
 2. Sus entradas en `global_users`
-3. El **bucket MinIO** y todos sus archivos
+3. Todos los **archivos del tenant en S3** (por prefijo `{slug}/`)
 4. La **base de datos** del tenant
 
 ---
 
-## 7️⃣ Almacenamiento de Archivos (MinIO)
+## 7️⃣ Almacenamiento de Archivos (Hetzner Object Storage)
 
-### Estrategia: Un Bucket por Tenant
+### Estrategia: Bucket Único con Prefijos por Tenant
 
-Cada empresa tiene su propio bucket en MinIO con el formato `cuspia-{slug}`:
+Todos los tenants comparten un solo bucket S3 (`cuspia`), con aislamiento por prefijo de key:
 
-| Empresa | Slug | Bucket MinIO |
+| Empresa | Slug | Prefijo S3 |
 |---|---|---|
-| Vitaldent | `vitaldent` | `cuspia-vitaldent` |
-| Clínica Madrid | `clinica-madrid` | `cuspia-clinica-madrid` |
+| Vitaldent | `vitaldent` | `cuspia/vitaldent/...` |
+| Clínica Madrid | `clinica-madrid` | `cuspia/clinica-madrid/...` |
 
 ### ¿Qué se almacena?
 - 📷 **Radiografías** y análisis AI
 - 📦 **Imágenes de stock** (productos)
 - 💬 **Media de WhatsApp** (fotos, audios, documentos)
+- ✍️ **Documentos firmados** (e-signature)
 
-### ¿Cómo se resuelve el bucket?
+### Formato del Key
+```
+{tenantSlug}/{clinicId}/{category}/{filename}
+```
+Ejemplo: `vitaldent/762c742d-.../radiographs/foto.jpg`
+
+### ¿Cómo se resuelve el tenant?
 | Contexto | Método |
 |---|---|
-| Rutas autenticadas (radiografías, stock, chat) | JWT → `tenantSlug` |
-| Webhook de WhatsApp (Meta) | Reverse lookup del DB connection |
+| Rutas autenticadas (radiografías, stock, chat) | JWT → `tenantSlug` → prefijo en key |
+| Webhook de WhatsApp (Meta) | Reverse lookup → `tenantSlug` |
 | Ruta de media `/api/v1/media/*` | Query param `?t=slug` o JWT |
 
 ### Ciclo de vida
-- **Se crea automáticamente** al provisionar un tenant
-- **Se elimina automáticamente** al limpiar un tenant (incluyendo todos los archivos)
+- **El bucket se crea una vez** (manualmente o en primer provisioning)
+- **Los archivos del tenant se crean automáticamente** con el prefijo `{slug}/`
+- **Al eliminar un tenant**, se borran todos los objetos con prefijo `{slug}/`
 
 ---
 
@@ -356,7 +364,7 @@ Sí, con el comando de cleanup:
 ```bash
 npx tsx src/scripts/cleanup-tenant.ts --slug "nombre-empresa"
 ```
-Esto elimina: DB central → `global_users` → bucket MinIO → base de datos.
+Esto elimina: DB central → `global_users` → datos S3 del tenant → base de datos.
 
 ### ¿Qué nombre de DB se crea para cada empresa?
 Se genera automáticamente: `cuspia_` + el slug con guiones reemplazados por underscores. Ejemplo: slug `vitaldent` → DB `cuspia_vitaldent`.
@@ -369,4 +377,5 @@ npx tsx src/scripts/migrate-all-tenants.ts
 ```
 
 ### ¿Dónde se guardan los archivos de cada empresa?
-Cada empresa tiene su propio bucket en MinIO: `cuspia-{slug}`. Se crea automáticamente al provisionar y se borra al eliminar la empresa.
+Todos los archivos se guardan en un **bucket S3 compartido** (`cuspia`) en Hetzner Object Storage. Cada empresa tiene su propio prefijo: `{slug}/`. Al eliminar una empresa, se borran todos los objetos con ese prefijo.
+```

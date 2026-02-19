@@ -591,7 +591,12 @@ onMounted(async () => {
                 class="p-4 border border-surface-200 rounded-xl space-y-2"
               >
                 <div class="flex items-center justify-between">
-                  <p class="text-sm font-medium text-surface-900">{{ mapping.label || mapping.signnowFieldName }}</p>
+                  <div>
+                    <p class="text-sm font-medium text-surface-900">{{ mapping.signnowFieldName }}</p>
+                    <p v-if="mapping.patientDataKey" class="text-xs text-primary-600 mt-0.5">
+                      → {{ patientDataKeys.find(k => k.key === mapping.patientDataKey)?.label || mapping.patientDataKey }}
+                    </p>
+                  </div>
                   <span class="text-xs px-2 py-0.5 rounded bg-surface-100 text-surface-500">Campo de texto</span>
                 </div>
                 <select

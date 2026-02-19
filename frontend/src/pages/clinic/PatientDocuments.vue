@@ -547,7 +547,7 @@ onUnmounted(() => {
       <div
         v-for="doc in documents"
         :key="doc.id"
-        class="card p-4 hover:shadow-md transition-shadow"
+        class="card p-4 hover:shadow-md transition-shadow !overflow-visible"
       >
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-4 min-w-0">
@@ -599,44 +599,72 @@ onUnmounted(() => {
             <!-- Actions -->
             <div class="flex items-center gap-1">
               <!-- Open for signing (DRAFT/PENDING embedded only) -->
-              <button
+              <div
                 v-if="(doc.status === 'DRAFT' || doc.status === 'PENDING') && doc.signingMethod === 'EMBEDDED'"
-                @click="openSigning(doc.id)"
-                class="p-2 text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
-                title="Abrir para firmar"
+                class="relative group"
               >
-                <PencilSquareIcon class="w-4 h-4" />
-              </button>
+                <button
+                  @click="openSigning(doc.id)"
+                  class="p-2 text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                >
+                  <PencilSquareIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full right-0 mb-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Abrir para firmar
+                  <div class="absolute -bottom-1 right-3 w-2 h-2 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
 
               <!-- Refresh status (PENDING) -->
-              <button
+              <div
                 v-if="doc.status === 'PENDING'"
-                @click="refreshDocumentStatus(doc.id)"
-                class="p-2 text-surface-500 hover:bg-surface-100 rounded-lg transition-colors"
-                title="Comprobar estado"
+                class="relative group"
               >
-                <ArrowPathIcon class="w-4 h-4" />
-              </button>
+                <button
+                  @click="refreshDocumentStatus(doc.id)"
+                  class="p-2 text-surface-500 hover:bg-surface-100 rounded-lg transition-colors"
+                >
+                  <ArrowPathIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full right-0 mb-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Comprobar estado
+                  <div class="absolute -bottom-1 right-3 w-2 h-2 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
 
               <!-- Cancel (DRAFT/PENDING only) -->
-              <button
+              <div
                 v-if="doc.status === 'DRAFT' || doc.status === 'PENDING'"
-                @click="openCancelModal(doc.id, doc.name)"
-                class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                title="Cancelar documento"
+                class="relative group"
               >
-                <TrashIcon class="w-4 h-4" />
-              </button>
+                <button
+                  @click="openCancelModal(doc.id, doc.name)"
+                  class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  <TrashIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full right-0 mb-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Cancelar documento
+                  <div class="absolute -bottom-1 right-3 w-2 h-2 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
 
               <!-- Download (SIGNED) -->
-              <button
+              <div
                 v-if="doc.status === 'SIGNED'"
-                @click="downloadPdf(doc.id, doc.name)"
-                class="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                title="Descargar PDF firmado"
+                class="relative group"
               >
-                <ArrowDownTrayIcon class="w-4 h-4" />
-              </button>
+                <button
+                  @click="downloadPdf(doc.id, doc.name)"
+                  class="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                >
+                  <ArrowDownTrayIcon class="w-4 h-4" />
+                </button>
+                <div class="absolute bottom-full right-0 mb-2 px-3 py-1.5 bg-surface-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none whitespace-nowrap">
+                  Descargar PDF firmado
+                  <div class="absolute -bottom-1 right-3 w-2 h-2 bg-surface-800 rotate-45 rounded-sm"></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

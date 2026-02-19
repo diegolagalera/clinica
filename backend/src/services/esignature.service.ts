@@ -489,7 +489,7 @@ export const createSigningDocument = async (
 
             // Pre-fill patient data using field mappings from the template
             const fieldMappings = (template.fieldMappings || []) as FieldMapping[];
-            console.log(`[ESignature] Field mappings from DB (${fieldMappings.length}):`, JSON.stringify(fieldMappings));
+            console.debug(`[ESignature] Field mappings from DB: ${fieldMappings.length} mappings`);
             if (fieldMappings.length > 0) {
                 const prefillFields: Array<{ field_name: string; prefilled_text: string }> = [];
 
@@ -507,7 +507,7 @@ export const createSigningDocument = async (
                     }
                 }
 
-                console.log(`[ESignature] Prefill fields to send (${prefillFields.length}):`, JSON.stringify(prefillFields));
+                console.debug(`[ESignature] Prefill fields to send: ${prefillFields.length} fields`);
                 if (prefillFields.length > 0) {
                     await signnowService.prefillDocumentFields(doc.id, prefillFields);
                 }
@@ -551,24 +551,33 @@ export const createSigningDocument = async (
         }
     }
 
-    // Save to DB
-    const [result] = await db
-        .insert(signingDocuments)
-        .values({
-            clinicId,
-            patientId,
-            templateId,
-            name: template.name,
-            signnowDocumentId,
-            status: signingMethod === 'EMAIL' ? 'PENDING' : 'DRAFT',
-            signingMethod: signingMethod as any,
-            sentById,
-            emailSentTo,
-            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-        })
-        .returning();
+    // Save to DB (with rollback if insert fails)
+    try {
+        const [result] = await db
+            .insert(signingDocuments)
+            .values({
+                clinicId,
+                patientId,
+                templateId,
+                name: template.name,
+                signnowDocumentId,
+                status: signingMethod === 'EMAIL' ? 'PENDING' : 'DRAFT',
+                signingMethod: signingMethod as any,
+                sentById,
+                emailSentTo,
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+            })
+            .returning();
 
-    return result!;
+        return result!;
+    } catch (dbErr) {
+        // Clean up orphaned SignNow document if DB insert fails
+        if (signnowDocumentId) {
+            logger.warn({ signnowDocumentId }, '[ESignature] DB insert failed — cleaning up orphaned SignNow document');
+            await signnowService.deleteDocument(signnowDocumentId).catch(() => { });
+        }
+        throw dbErr;
+    }
 };
 
 /**
@@ -608,7 +617,7 @@ export const getEmbeddedSigningUrl = async (
         .where(eq(patients.id, doc.patientId))
         .limit(1);
 
-    const signerEmail = patient?.email || 'signer@clinic.local';
+    const signerEmail = patient?.email || `patient-${doc.patientId}@noreply.local`;
 
     const url = await signnowService.createEmbeddedInvite(doc.signnowDocumentId, signerEmail);
 
@@ -1161,7 +1170,7 @@ export const emailSignedDocumentsToPatient = async (
 </html>`;
 
     // 6. Send
-    const docNames = docs.map(d => d.name || 'Documento').join(', ');
+
     const subject = attachments.length === 1
         ? `📄 Documento firmado: ${docs[0]!.name || 'Documento'} — ${clinicName}`
         : `📄 ${attachments.length} documentos firmados — ${clinicName}`;

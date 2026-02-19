@@ -92,12 +92,7 @@ export const getDocumentRoles = async (
     const data = (await response.json()) as Record<string, unknown>;
 
     // Debug: log roles-related keys
-    console.log('[SignNow] Document roles lookup:', {
-        hasRoles: Array.isArray(data.roles),
-        rolesCount: Array.isArray(data.roles) ? (data.roles as unknown[]).length : 0,
-        hasRoutingDetails: Array.isArray(data.routing_details),
-        routingDetailsCount: Array.isArray(data.routing_details) ? (data.routing_details as unknown[]).length : 0,
-    });
+    console.debug(`[SignNow] Document roles lookup: roles=${Array.isArray(data.roles) ? (data.roles as unknown[]).length : 0}, routing=${Array.isArray(data.routing_details) ? (data.routing_details as unknown[]).length : 0}`);
 
     // Try 'roles' first, then 'routing_details'
     const roles = (data.roles || []) as SignNowRole[];
@@ -106,7 +101,7 @@ export const getDocumentRoles = async (
     // Fall back to routing_details (SignNow v2 API structure)
     const routingDetails = (data.routing_details || []) as Array<Record<string, unknown>>;
     if (routingDetails.length > 0) {
-        console.log('[SignNow] routing_details[0]:', JSON.stringify(routingDetails[0], null, 2));
+
         return routingDetails.map(rd => ({
             unique_id: String(rd.unique_id || rd.id || ''),
             name: String(rd.name || rd.role_name || 'Signer'),
@@ -168,7 +163,7 @@ export const getDocumentFields = async (
         // name = API name (for prefill), label = display name (for UI)
         const apiName = String(attrs.name || attrs.label || f.name || `field_${f.id}`);
         const displayLabel = String(attrs.label || attrs.name || f.label || `field_${f.id}`);
-        console.log(`[SignNow] Field extracted: id=${f.id}, apiName="${apiName}", label="${displayLabel}"`);
+
         fields.push({
             id: String(f.id || ''),
             name: apiName,
@@ -209,7 +204,7 @@ export const getDocumentFields = async (
         });
     }
 
-    console.log(`[SignNow] Found ${fields.length} fields in document ${documentId}`);
+    console.debug(`[SignNow] Found ${fields.length} fields in document ${documentId}`);
     return fields;
 };
 
@@ -379,7 +374,7 @@ export const prefillDocumentFields = async (
             prefilled_text: f.prefilled_text,
         })),
     };
-    console.log(`[SignNow] Prefill request for doc ${documentId}:`, JSON.stringify(requestBody, null, 2));
+    console.debug(`[SignNow] Prefill request for doc ${documentId}: ${fields.length} fields`);
 
     const response = await fetch(`${getApiUrl()}/v2/documents/${documentId}/prefill-texts`, {
         method: 'PUT',
@@ -396,8 +391,7 @@ export const prefillDocumentFields = async (
         // Prefill is best-effort — log but don't throw
         console.warn(`[SignNow] Prefill failed for document ${documentId}, continuing...`);
     } else {
-        const responseText = await response.text();
-        console.log(`[SignNow] Prefilled ${fields.length} fields on document ${documentId}. Response:`, responseText);
+        console.debug(`[SignNow] Prefilled ${fields.length} fields on document ${documentId}`);
     }
 };
 
@@ -431,7 +425,7 @@ export const createEmbeddedInvite = async (
     }
 
     const roleId = roles[0]!.unique_id;
-    console.log(`[SignNow] Using role_id: ${roleId} for signer: ${signerEmail}`);
+    console.debug(`[SignNow] Using role_id: ${roleId} for embedded invite`);
 
     // Step 2: Cancel any existing embedded invites (they cause 400 if one already exists)
     try {
@@ -470,7 +464,7 @@ export const createEmbeddedInvite = async (
     }
 
     const inviteRaw = await inviteResponse.json();
-    console.log('[SignNow] Embedded invite response:', JSON.stringify(inviteRaw, null, 2));
+    console.debug('[SignNow] Embedded invite created');
 
     // Extract invite ID — handle different response formats
     let inviteId: string | undefined;
@@ -526,7 +520,7 @@ export const createEmbeddedInvite = async (
     }
 
     const linkRaw = await linkResponse.json();
-    console.log('[SignNow] Signing link response:', JSON.stringify(linkRaw, null, 2));
+    console.debug('[SignNow] Signing link generated');
 
     // Extract link — handle different response formats
     const linkAny = linkRaw as Record<string, unknown>;
@@ -568,7 +562,7 @@ export const sendEmailInvite = async (
 
     const roleId = roles[0]!.unique_id;
     const roleName = roles[0]!.name || 'Signer 1';
-    console.log(`[SignNow] Email invite using role_id: ${roleId}, role: ${roleName}, from: ${senderEmail}, to: ${signerEmail}`);
+    console.debug(`[SignNow] Email invite: role=${roleName}, to=${signerEmail}`);
 
     const response = await fetch(`${getApiUrl()}/document/${documentId}/invite`, {
         method: 'POST',

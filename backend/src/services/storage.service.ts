@@ -39,7 +39,8 @@ export type StorageCategory =
     | 'stock-images'
     | 'whatsapp-media'
     | 'chatbot-knowledge'
-    | 'esignature';
+    | 'esignature'
+    | 'prescriptions';
 
 /**
  * Build a consistent S3 object key with tenant isolation.

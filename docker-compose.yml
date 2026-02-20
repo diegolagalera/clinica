@@ -1,5 +1,5 @@
 services:
-  # PostgreSQL with pgvector extension
+  # PostgreSQL with pgvector extension (hosts both tenant DBs and central DB)
   postgres:
     image: pgvector/pgvector:pg16
     container_name: dental_erp_db
@@ -12,24 +12,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # PostgreSQL Central DB (multi-tenant routing)
-  postgres-central:
-    image: postgres:16-alpine
-    container_name: cuspia_central_db
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: cuspia_central
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_central_data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
@@ -52,7 +34,4 @@ services:
 
 volumes:
   postgres_data:
-  postgres_central_data:
   redis_data:
-
-

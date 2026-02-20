@@ -118,7 +118,7 @@ export const createPrescription = async (
         });
 
         // 4. Upload to S3
-        const storageKey = `prescriptions/${prescription.id}.pdf`;
+        const storageKey = storage.buildKey('', data.clinicId, 'prescriptions', `${prescription.id}.pdf`);
         await storage.uploadFile(storageKey, pdfBuffer, 'application/pdf', tenantSlug);
 
         // 5. Update prescription with storage key
